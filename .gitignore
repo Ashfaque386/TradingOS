@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Data lake (large, not committed)
+data/
+*.parquet
+*.duckdb
+
+# Test / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# IDE
+.vscode/
+.idea/
+
+# Node (frontend, added in Phase 4)
+node_modules/
+.next/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local logs (e.g. scripts/windows/run_daily_shadow_mode.ps1's scheduled-task output)
+logs/

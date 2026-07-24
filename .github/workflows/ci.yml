@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-type-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app image
+        run: docker compose build app
+
+      - name: Start dependencies
+        run: docker compose up -d postgres qdrant redis
+
+      - name: Wait for Postgres
+        run: |
+          until docker compose exec -T postgres pg_isready -U tradingos; do sleep 2; done
+
+      - name: Ruff lint
+        run: docker compose run --rm app ruff check src tests
+
+      - name: Black format check
+        run: docker compose run --rm app black --check src tests
+
+      - name: mypy strict
+        run: docker compose run --rm app mypy src
+
+      - name: Alembic migrations apply cleanly
+        run: docker compose run --rm app alembic upgrade head
+
+      - name: Pytest
+        run: docker compose run --rm app pytest --cov=src --cov-report=xml
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

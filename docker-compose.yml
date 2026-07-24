@@ -1,0 +1,196 @@
+services:
+  app:
+    build: .
+    image: tradingos-app:latest
+    container_name: tradingos-app
+    # Without this, a Docker Desktop backend crash (frequent on this machine -- see the
+    # host-memory note on the `frontend` service below) silently leaves `app` and `frontend`
+    # dead while postgres/qdrant/redis/temporal auto-recover, because those four already had
+    # this policy and these two didn't. Matches the other four services.
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      vault:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+      TEMPORAL_ADDRESS: temporal:7233
+      DATA_LAKE_ROOT: /app/data/lake
+      # LLM inference (Phase 2+) uses the locally-installed Ollama on the host, not a cloud API key.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Local dev Vault (see the `vault` service below) -- src/core/vault.py falls back to .env
+      # Settings if this is unreachable, so it's here but not a hard startup dependency.
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-only-root-token
+    ports:
+      # Host port moved off the default 8000: another unrelated project on this machine
+      # (dataops_backend / ai_data_automation-backend) already binds host 0.0.0.0:8000,
+      # which fails `docker compose up` with "port is already allocated". The container's
+      # internal port stays 8000 -- only the host-side mapping changed.
+      - "8001:8000"
+    volumes:
+      - .:/app
+      - data_lake:/app/data/lake
+    # --reload-dir src: without it, uvicorn's file watcher recursively inotify-watches the
+    # ENTIRE bind-mounted /app tree (.git, data/lake parquet files, __pycache__, .pytest_cache,
+    # htmlcov, ...) -- thousands of files. After a Docker Desktop / WSL2 restart this reliably
+    # crashed the container with "WatchfilesRustInternalError: Cannot allocate memory (os error
+    # 12)" (inotify instance/watch limits exhausted), even though no port was actually in
+    # conflict. Restricting the watch to `src` (the only directory that actually changes at
+    # dev-reload time) fixes it.
+    command:
+      [
+        "uvicorn",
+        "src.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "src",
+      ]
+
+  # `image:` names below are given an explicit `tradingos-` prefix (matching `tradingos-app`)
+  # via a trivial one-line `FROM <upstream>` build, so `docker images` reads consistently
+  # instead of mixing bare upstream names (postgres:16-alpine, qdrant/qdrant, ...) with the
+  # locally-built app image. The build is a single cached FROM layer -- effectively free.
+  postgres:
+    image: tradingos-postgres:16-alpine
+    build:
+      dockerfile_inline: "FROM postgres:16-alpine"
+    container_name: tradingos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tradingos
+      POSTGRES_PASSWORD: tradingos_dev_password
+      POSTGRES_DB: tradingos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradingos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: tradingos-qdrant:latest
+    build:
+      dockerfile_inline: "FROM qdrant/qdrant:latest"
+    container_name: tradingos-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  redis:
+    image: tradingos-redis:7-alpine
+    build:
+      dockerfile_inline: "FROM redis:7-alpine"
+    container_name: tradingos-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Real, single-node Temporal server (`temporal server start-dev`): in-memory persistence
+  # (no --db-filename -- the mounted-volume SQLite path hit a container permission/OOM error
+  # opening the file, and dev-server data doesn't need to survive a restart anyway) + Web UI.
+  # Chosen over a distributed/Kubernetes-backed Temporal cluster per the Phase 3 E3.3 decision
+  # -- sufficient for a single-node Monte Carlo workflow (Phase_3_Low_Level_Design.md §7).
+  temporal:
+    image: tradingos-temporal:latest
+    build:
+      dockerfile_inline: "FROM temporalio/temporal:latest"
+    container_name: tradingos-temporal
+    restart: unless-stopped
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--port", "7233", "--ui-port", "8233"]
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+
+  # Local dev Vault (Phase 4 E4.1 exit criterion: "Wire Vault-issued short-lived tokens for
+  # broker API key retrieval"). `-dev` mode: in-memory storage, auto-unsealed, fixed root token
+  # -- safe for local development only, never how a real Vault deployment would run. See
+  # src/core/vault.py's module docstring for what's deliberately NOT built here: a real storage
+  # backend, auto-unseal, TLS, the Transit engine (JWT signing keys, SEC-011), and key rotation
+  # (SEC-011 90-day rotation) -- this stands up real Vault infrastructure and a real client
+  # against it, but with dev-mode's own well-documented simplifications, matching the same
+  # "real but reduced" pattern as this session's JWT auth MVP.
+  vault:
+    image: tradingos-vault:latest
+    build:
+      dockerfile_inline: "FROM hashicorp/vault:latest"
+    container_name: tradingos-vault
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-only-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"
+
+  # Next.js dashboard (Phase 4 E4.3, Phase_7_Frontend_Architecture.md). Port 3000 confirmed
+  # free against every other project running on this machine.
+  frontend:
+    build: ./frontend
+    image: tradingos-frontend:latest
+    container_name: tradingos-frontend
+    # This host has only ~11.8GB RAM shared across containers from several unrelated projects
+    # (trading_v2's Kafka/ClickHouse/Grafana stack, dataops_*, trading_bot) -- under memory
+    # pressure Docker Desktop's backend periodically crashes and silently restarts every
+    # container. Without a restart policy, `app`/`frontend` stayed dead afterward while
+    # everything else self-healed. This isn't a fix for the crashes themselves (that needs
+    # freeing host RAM -- stop unrelated projects' containers when not using them), just for
+    # the stack failing to come back up on its own once Docker recovers.
+    restart: unless-stopped
+    environment:
+      # Read by the BROWSER (Next.js only exposes NEXT_PUBLIC_* vars client-side), so this must
+      # be the host-exposed port (8001), not the in-network "app:8000" hostname -- the browser
+      # runs outside the docker network entirely.
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      # node_modules as its own named volume, shadowing the bind mount above: installing
+      # directly into a Windows-bind-mounted node_modules hits `ENOTEMPTY` on npm's atomic
+      # rename-based install process (confirmed empirically, reproducible across multiple
+      # packages) -- keeping node_modules entirely inside the Linux container/volume side-steps
+      # it permanently. Source-only bind mount above still gives Next.js hot-reload on save.
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      app:
+        condition: service_started
+
+volumes:
+  postgres_data:
+    name: tradingos_app_postgres_data
+  qdrant_data:
+    name: tradingos_app_qdrant_data
+  redis_data:
+    name: tradingos_app_redis_data
+  data_lake:
+    name: tradingos_app_data_lake
+  frontend_node_modules:
+    name: tradingos_app_frontend_node_modules

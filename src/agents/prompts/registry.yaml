@@ -1,0 +1,36 @@
+ceo_agent:
+  prompt_id: PMPT-001
+  active_version: 1
+market_analyst_agent:
+  prompt_id: PMPT-002
+  active_version: 1
+strategy_generator_agent:
+  prompt_id: PMPT-003
+  active_version: 1
+python_code_generator_agent:
+  prompt_id: PMPT-004
+  active_version: 2
+python_validator_agent:
+  prompt_id: PMPT-005
+  active_version: 1
+memory_agent:
+  prompt_id: PMPT-009
+  active_version: 1
+ceo_agent_chat:
+  prompt_id: PMPT-026
+  active_version: 1
+ceo_agent_task:
+  prompt_id: PMPT-027
+  active_version: 1
+market_analyst_agent_task:
+  prompt_id: PMPT-028
+  active_version: 1
+strategy_generator_agent_task:
+  prompt_id: PMPT-029
+  active_version: 1
+python_code_generator_agent_task:
+  prompt_id: PMPT-030
+  active_version: 1
+memory_agent_task:
+  prompt_id: PMPT-031
+  active_version: 1

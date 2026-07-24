@@ -1,0 +1,50 @@
+# Task-type -> ordered fallback chain of (provider, model) pairs (Phase 2 E2.2).
+# Edit this file to change which model handles a task type, reorder providers, or add a new
+# fallback entry -- no code change or restart needed; src/agents/llm_router.py reads it fresh
+# on every complete() call, same pattern as src/agents/prompts/registry.yaml.
+#
+# `ollama` needs no key and is deliberately kept as a last-resort entry in every chain so a
+# call always has somewhere to land in dev, even before any cloud provider key is configured.
+coding:
+  - provider: anthropic
+    model: claude-3-7-sonnet-20250219
+  - provider: deepseek
+    model: deepseek-reasoner
+  - provider: opencode
+    model: claude-opus-4-8
+  - provider: ollama
+    model: deepseek-r1:latest
+orchestration:
+  - provider: openai
+    model: gpt-4o
+  - provider: opencode
+    model: gpt-5.4-nano
+  - provider: ollama
+    model: deepseek-r1:latest
+sentiment:
+  - provider: ollama
+    model: deepseek-r1:latest
+  - provider: huggingface
+    model: meta-llama/Llama-3.3-70B-Instruct
+  - provider: gemini
+    model: gemini-1.5-flash
+research:
+  - provider: openai
+    model: gpt-4o
+  - provider: anthropic
+    model: claude-3-7-sonnet-20250219
+  - provider: gemini
+    model: gemini-1.5-pro
+  - provider: opencode
+    model: gpt-5.4-nano
+  - provider: ollama
+    model: deepseek-r1:latest
+chat:
+  - provider: openai
+    model: gpt-4o
+  - provider: anthropic
+    model: claude-3-7-sonnet-20250219
+  - provider: opencode
+    model: gpt-5.4-nano
+  - provider: ollama
+    model: deepseek-r1:latest
