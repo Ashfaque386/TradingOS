@@ -91,12 +91,30 @@ class IntegrationsStatusResponse(BaseModel):
 def get_integrations_status() -> IntegrationsStatusResponse:
     s = get_settings()
     llm_providers = [
-        ProviderStatus(name="OpenAI", configured=bool(s.openai_api_key), masked_hint=_mask(s.openai_api_key)),
-        ProviderStatus(name="Anthropic (Claude)", configured=bool(s.anthropic_api_key), masked_hint=_mask(s.anthropic_api_key)),
-        ProviderStatus(name="DeepSeek", configured=bool(s.deepseek_api_key), masked_hint=_mask(s.deepseek_api_key)),
-        ProviderStatus(name="Gemini", configured=bool(s.gemini_api_key), masked_hint=_mask(s.gemini_api_key)),
-        ProviderStatus(name="HuggingFace", configured=bool(s.hf_token), masked_hint=_mask(s.hf_token)),
-        ProviderStatus(name="OpenCode Zen", configured=bool(s.opencode_api_key), masked_hint=_mask(s.opencode_api_key)),
+        ProviderStatus(
+            name="OpenAI", configured=bool(s.openai_api_key), masked_hint=_mask(s.openai_api_key)
+        ),
+        ProviderStatus(
+            name="Anthropic (Claude)",
+            configured=bool(s.anthropic_api_key),
+            masked_hint=_mask(s.anthropic_api_key),
+        ),
+        ProviderStatus(
+            name="DeepSeek",
+            configured=bool(s.deepseek_api_key),
+            masked_hint=_mask(s.deepseek_api_key),
+        ),
+        ProviderStatus(
+            name="Gemini", configured=bool(s.gemini_api_key), masked_hint=_mask(s.gemini_api_key)
+        ),
+        ProviderStatus(
+            name="HuggingFace", configured=bool(s.hf_token), masked_hint=_mask(s.hf_token)
+        ),
+        ProviderStatus(
+            name="OpenCode Zen",
+            configured=bool(s.opencode_api_key),
+            masked_hint=_mask(s.opencode_api_key),
+        ),
         ProviderStatus(name="Ollama", configured=True, masked_hint=s.ollama_base_url),
     ]
     brokers = [
@@ -141,7 +159,7 @@ class UpdateNotificationChannel(BaseModel):
 def _to_summary(channel: NotificationChannel) -> NotificationChannelSummary:
     return NotificationChannelSummary(
         id=channel.id,
-        channel_type=channel.channel_type,  # type: ignore[arg-type]
+        channel_type=channel.channel_type,
         external_handle=channel.external_handle,
         is_verified=channel.is_verified,
         preferences=channel.preferences,
@@ -168,11 +186,9 @@ def list_notification_channels() -> list[NotificationChannelSummary]:
         return [_to_summary(c) for c in channels]
 
 
-@router.post(
-    "/notification-channels", response_model=NotificationChannelSummary, status_code=201
-)
+@router.post("/notification-channels", response_model=NotificationChannelSummary, status_code=201)
 def create_notification_channel(
-    body: CreateNotificationChannel, _user=Depends(_can_manage_channels)
+    body: CreateNotificationChannel, _user: User = Depends(_can_manage_channels)
 ) -> NotificationChannelSummary:
     user_id = _first_user_id()
     unknown = set(body.alert_levels) - set(ALERT_LEVELS)
@@ -195,7 +211,9 @@ def create_notification_channel(
 
 @router.patch("/notification-channels/{channel_id}", response_model=NotificationChannelSummary)
 def update_notification_channel(
-    channel_id: uuid.UUID, body: UpdateNotificationChannel, _user=Depends(_can_manage_channels)
+    channel_id: uuid.UUID,
+    body: UpdateNotificationChannel,
+    _user: User = Depends(_can_manage_channels),
 ) -> NotificationChannelSummary:
     with get_session() as session:
         channel = session.get(NotificationChannel, channel_id)
@@ -218,7 +236,9 @@ def update_notification_channel(
 
 
 @router.delete("/notification-channels/{channel_id}", status_code=204)
-def delete_notification_channel(channel_id: uuid.UUID, _user=Depends(_can_manage_channels)) -> None:
+def delete_notification_channel(
+    channel_id: uuid.UUID, _user: User = Depends(_can_manage_channels)
+) -> None:
     with get_session() as session:
         channel = session.get(NotificationChannel, channel_id)
         if channel is None:

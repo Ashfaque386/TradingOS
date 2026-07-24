@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.brokers.base import OrderRequest, OrderType, ProductType, Side, Validity
+from src.brokers.base import BrokerAdapter, OrderRequest, OrderType, ProductType, Side, Validity
 from src.brokers.factory import NoBrokerConfigured, build_upstox_adapter, build_zerodha_adapter
 from src.brokers.shadow_mode import ShadowModeAdapter
 from src.core.db import get_session
@@ -47,7 +47,7 @@ class AttemptResponse(BaseModel):
     attempted_at: datetime
 
 
-def _build_adapter(broker: BrokerName):
+def _build_adapter(broker: BrokerName) -> BrokerAdapter:
     if broker == "zerodha":
         return build_zerodha_adapter()
     return build_upstox_adapter()
@@ -119,7 +119,8 @@ def status() -> ShadowModeStatus:
     as real as however many days this has actually been run for. A brand-new deployment
     honestly reports 0, not a fabricated number working toward 5."""
     with get_session() as session:
-        rows = list(session.scalars(select(ShadowModeAttempt).order_by(ShadowModeAttempt.attempted_at)))
+        stmt = select(ShadowModeAttempt).order_by(ShadowModeAttempt.attempted_at)
+        rows = list(session.scalars(stmt))
 
     daily = compute_daily_summary(rows)
     consecutive = consecutive_clean_days(daily)
@@ -128,6 +129,7 @@ def status() -> ShadowModeStatus:
         consecutive_clean_days=consecutive,
         go_live_gate_met=consecutive >= 5,
         daily_summary=[
-            DailySummary(date=d.date, attempts=d.attempts, errors=d.errors, clean=d.clean) for d in daily
+            DailySummary(date=d.date, attempts=d.attempts, errors=d.errors, clean=d.clean)
+            for d in daily
         ],
     )

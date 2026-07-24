@@ -20,10 +20,17 @@ def test_graph_topology_reflects_the_real_compiled_graph():
     assert response.status_code == 200
     body = response.json()
     node_ids = {n["id"] for n in body["nodes"]}
-    assert {"ceo_agent", "market_analyst", "strategy_generator", "python_code_generator",
-            "python_validator", "await_backtesting"} <= node_ids
+    assert {
+        "ceo_agent",
+        "market_analyst",
+        "strategy_generator",
+        "python_code_generator",
+        "python_validator",
+        "await_backtesting",
+    } <= node_ids
     retry_edges = [
-        e for e in body["edges"]
+        e
+        for e in body["edges"]
         if e["source"] == "python_validator" and e["target"] == "python_code_generator"
     ]
     assert retry_edges and retry_edges[0]["conditional"] is True
@@ -40,8 +47,13 @@ def test_prompts_list_matches_the_real_registry_file():
     response = client.get("/api/v1/agents/prompts")
     assert response.status_code == 200
     slugs = {p["agent_slug"] for p in response.json()}
-    assert {"ceo_agent", "market_analyst_agent", "strategy_generator_agent",
-            "python_code_generator_agent", "python_validator_agent"} <= slugs
+    assert {
+        "ceo_agent",
+        "market_analyst_agent",
+        "strategy_generator_agent",
+        "python_code_generator_agent",
+        "python_validator_agent",
+    } <= slugs
 
 
 def test_prompt_version_hot_swap_is_real_and_reversible():

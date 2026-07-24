@@ -77,7 +77,8 @@ def replay_ledger(
                 )
             )
             pos.net_quantity += signed_qty
-            if pos.net_quantity != 0 and (pos.net_quantity > 0) != (pos.net_quantity - signed_qty > 0):
+            reversed_through_zero = (pos.net_quantity > 0) != (pos.net_quantity - signed_qty > 0)
+            if pos.net_quantity != 0 and reversed_through_zero:
                 # Reversed through zero into the opposite side -- the remainder opens a new
                 # position at this fill's price.
                 pos.average_cost = fill_price

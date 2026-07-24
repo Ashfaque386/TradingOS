@@ -16,19 +16,21 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
+from src.api.main import app
 from src.core.db import get_session
 from src.models.account import Account
 from src.models.paper_trading import PaperTrade
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
 from src.models.user import User
-from src.api.main import app
 
 client = TestClient(app)
 
 _STRATEGY_CODE = "def generate_signals(data):\n    return data"
 
 
-def _seed_strategy_with_backtest(*, win_rate: float | None) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+def _seed_strategy_with_backtest(
+    *, win_rate: float | None
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     user_id, account_id, strategy_id, version_id = (
         uuid.uuid4(),
         uuid.uuid4(),
@@ -98,10 +100,14 @@ def _seed_strategy_with_backtest(*, win_rate: float | None) -> tuple[uuid.UUID, 
     return user_id, account_id, strategy_id, version_id
 
 
-def _cleanup(user_id: uuid.UUID, account_id: uuid.UUID, strategy_id: uuid.UUID, version_id: uuid.UUID) -> None:
+def _cleanup(
+    user_id: uuid.UUID, account_id: uuid.UUID, strategy_id: uuid.UUID, version_id: uuid.UUID
+) -> None:
     with get_session() as session:
         session.query(PaperTrade).filter(PaperTrade.strategy_id == strategy_id).delete()
-        session.query(BacktestResult).filter(BacktestResult.strategy_version_id == version_id).delete()
+        session.query(BacktestResult).filter(
+            BacktestResult.strategy_version_id == version_id
+        ).delete()
         session.query(StrategyVersion).filter(StrategyVersion.id == version_id).delete()
         session.query(Strategy).filter(Strategy.id == strategy_id).delete()
         session.query(Account).filter(Account.id == account_id).delete()
@@ -109,9 +115,7 @@ def _cleanup(user_id: uuid.UUID, account_id: uuid.UUID, strategy_id: uuid.UUID, 
         session.commit()
 
 
-def _seed_round_trip_trades(
-    *, strategy_id: uuid.UUID, win_count: int, loss_count: int
-) -> None:
+def _seed_round_trip_trades(*, strategy_id: uuid.UUID, win_count: int, loss_count: int) -> None:
     """win_count + loss_count round trips (2 PaperTrade rows each), spread across the last 25
     days so the calendar-span condition (>=21 days) is also satisfied by the same fixture."""
     total = win_count + loss_count

@@ -20,7 +20,7 @@ avoids passlib's broken shim entirely.
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import bcrypt
 from jose import JWTError, jwt
@@ -70,7 +70,7 @@ def create_access_token(*, user_id: str, role: str) -> str:
         "iat": now,
         "exp": now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES),
     }
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return cast(str, jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm))
 
 
 class InvalidTokenError(Exception):
@@ -82,6 +82,7 @@ class InvalidTokenError(Exception):
 def decode_access_token(token: str) -> dict[str, Any]:
     settings = get_settings()
     try:
-        return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        decoded = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        return cast(dict[str, Any], decoded)
     except JWTError as exc:
         raise InvalidTokenError(str(exc)) from exc

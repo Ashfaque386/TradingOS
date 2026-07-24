@@ -45,7 +45,9 @@ def test_two_hashes_of_the_same_password_differ_real_random_salt():
 
 
 def test_a_real_token_round_trips_with_its_claims_intact():
-    token = create_access_token(user_id="11111111-1111-1111-1111-111111111111", role="SystemAdministrator")
+    token = create_access_token(
+        user_id="11111111-1111-1111-1111-111111111111", role="SystemAdministrator"
+    )
     payload = decode_access_token(token)
     assert payload["sub"] == "11111111-1111-1111-1111-111111111111"
     assert payload["role"] == "SystemAdministrator"

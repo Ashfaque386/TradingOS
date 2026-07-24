@@ -31,7 +31,9 @@ def simulate_fill(*, side: Side, quantity: int, depth: list[DepthLevel]) -> Fill
     if quantity <= 0:
         raise ValueError(f"quantity must be positive, got {quantity}")
     if not depth:
-        return FillResult(filled_quantity=0, average_fill_price=None, slippage_bps=None, fully_filled=False)
+        return FillResult(
+            filled_quantity=0, average_fill_price=None, slippage_bps=None, fully_filled=False
+        )
 
     touch_price: float | None = None  # the first genuinely quoted level -- the "fair" price
     # before market impact. NOT blindly depth[0]: a thin book (e.g. no bid interest) is reported
@@ -55,7 +57,9 @@ def simulate_fill(*, side: Side, quantity: int, depth: list[DepthLevel]) -> Fill
         remaining -= take
 
     if filled == 0 or touch_price is None:
-        return FillResult(filled_quantity=0, average_fill_price=None, slippage_bps=None, fully_filled=False)
+        return FillResult(
+            filled_quantity=0, average_fill_price=None, slippage_bps=None, fully_filled=False
+        )
 
     average_fill_price = total_cost / filled
     # Slippage is always reported as a market-impact *cost*, regardless of side: paying more than
@@ -68,6 +72,7 @@ def simulate_fill(*, side: Side, quantity: int, depth: list[DepthLevel]) -> Fill
     return FillResult(
         filled_quantity=filled,
         average_fill_price=average_fill_price,
-        slippage_bps=max(slippage_bps, 0.0),  # depth is sorted best-to-worst; never negative in practice
+        # depth is sorted best-to-worst; never negative in practice
+        slippage_bps=max(slippage_bps, 0.0),
         fully_filled=filled == quantity,
     )

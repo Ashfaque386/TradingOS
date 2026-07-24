@@ -22,6 +22,7 @@ the full real number is visible rather than hidden.
 """
 
 import asyncio
+import contextlib
 import time
 from datetime import UTC, datetime
 
@@ -152,10 +153,9 @@ async def test_nfr02_dispatch_latency_against_a_real_upstox_sandbox_order():
                     await asyncio.sleep(PACING_SECONDS_BETWEEN_ORDERS)
         finally:
             for order_id in placed_order_ids:
-                try:
+                # noqa: BLE001 -- best-effort sandbox cleanup, not the assertion under test
+                with contextlib.suppress(Exception):
                     await real_adapter.cancel_order(order_id)
-                except Exception:  # noqa: BLE001 -- best-effort sandbox cleanup, not the assertion under test
-                    pass
                 await asyncio.sleep(PACING_SECONDS_BETWEEN_ORDERS)
 
     assert len(wrapper.entry_times) == len(tick_starts)

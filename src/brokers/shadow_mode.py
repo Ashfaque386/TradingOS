@@ -67,10 +67,13 @@ class ShadowModeAdapter:
         if isinstance(self._broker, KiteConnectAdapter):
             return self._attempt_via_local_validation_only(order, start)
         raise UnsupportedBrokerError(
-            f"Shadow Mode has no defined behavior for broker adapter type {type(self._broker).__name__}"
+            "Shadow Mode has no defined behavior for broker adapter type "
+            f"{type(self._broker).__name__}"
         )
 
-    async def _attempt_via_real_sandbox(self, order: OrderRequest, start: float) -> ShadowAttemptResult:
+    async def _attempt_via_real_sandbox(
+        self, order: OrderRequest, start: float
+    ) -> ShadowAttemptResult:
         payload = {
             "quantity": order.quantity,
             "instrument_token": order.symbol,
@@ -89,7 +92,9 @@ class ShadowModeAdapter:
                 latency_ms=(time.monotonic() - start) * 1000,
                 used_real_sandbox=True,
             )
-        except Exception as exc:  # noqa: BLE001 - any failure here is exactly what Shadow Mode exists to catch
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - any failure here is exactly what Shadow Mode exists to catch
             return ShadowAttemptResult(
                 broker=self._broker_name,
                 outcome="Error",
@@ -102,7 +107,8 @@ class ShadowModeAdapter:
     def _attempt_via_local_validation_only(
         self, order: OrderRequest, start: float
     ) -> ShadowAttemptResult:
-        assert isinstance(self._broker, KiteConnectAdapter)  # narrows the type for build_order_payload
+        # narrows the type for build_order_payload
+        assert isinstance(self._broker, KiteConnectAdapter)
         try:
             payload = self._broker.build_order_payload(order)
             return ShadowAttemptResult(

@@ -93,7 +93,9 @@ def run_real_backtest(
     contract both take a single price series), so this deliberately doesn't invent it here."""
     if not universe:
         return RealBacktestOutcome(
-            passed=False, error="strategy has an empty universe -- nothing to backtest", symbol_used=""
+            passed=False,
+            error="strategy has an empty universe -- nothing to backtest",
+            symbol_used="",
         )
     symbol = universe[0]
 
@@ -119,7 +121,10 @@ def run_real_backtest(
 
     if not result.passed:
         return RealBacktestOutcome(
-            passed=False, error=result.error, symbol_used=symbol, duration_seconds=result.duration_seconds
+            passed=False,
+            error=result.error,
+            symbol_used=symbol,
+            duration_seconds=result.duration_seconds,
         )
 
     summary = result.portfolio_summary or {}
@@ -133,7 +138,9 @@ def run_real_backtest(
     )
 
 
-def write_equity_curve_parquet(outcome: RealBacktestOutcome, *, backtest_result_id: str) -> Path | None:
+def write_equity_curve_parquet(
+    outcome: RealBacktestOutcome, *, backtest_result_id: str
+) -> Path | None:
     """Persists the equity curve to the data lake's equity_curves/ area (sibling to ohlcv_daily/,
     same DataLake root) so BacktestResult.equity_curve_path points at a real, readable file --
     that column existed but nothing ever set it (see agents.py's module docstring for the same

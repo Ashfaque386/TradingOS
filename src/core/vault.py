@@ -29,10 +29,11 @@ on a piece of optional local infrastructure.
 """
 
 import logging
+from typing import cast
 
 import hvac
 
-from src.core.config import get_settings
+from src.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ _KV_MOUNT = "secret"
 _BROKER_CREDENTIALS_PREFIX = "broker-credentials"
 
 
-def _client(settings) -> hvac.Client | None:
+def _client(settings: Settings) -> hvac.Client | None:
     if not settings.vault_addr or not settings.vault_token:
         return None
     client = hvac.Client(url=settings.vault_addr, token=settings.vault_token)
@@ -53,7 +54,9 @@ def _client(settings) -> hvac.Client | None:
     return client
 
 
-def write_broker_credentials(broker: str, credentials: dict[str, str], *, settings=None) -> bool:
+def write_broker_credentials(
+    broker: str, credentials: dict[str, str], *, settings: Settings | None = None
+) -> bool:
     """Returns True on a real successful write, False if Vault is unreachable or the write
     failed -- never raises for either case, so a missing/down dev Vault can't take anything
     else down with it.
@@ -78,7 +81,9 @@ def write_broker_credentials(broker: str, credentials: dict[str, str], *, settin
         return False
 
 
-def read_broker_credentials(broker: str, *, settings=None) -> dict[str, str] | None:
+def read_broker_credentials(
+    broker: str, *, settings: Settings | None = None
+) -> dict[str, str] | None:
     """Returns the stored credentials dict, or `None` if Vault is unreachable or nothing has
     been written yet for this broker -- callers (src/brokers/factory.py) fall back to `Settings`
     in either case, indistinguishably. See `write_broker_credentials` on the `settings` param."""
@@ -91,7 +96,7 @@ def read_broker_credentials(broker: str, *, settings=None) -> dict[str, str] | N
             path=f"{_BROKER_CREDENTIALS_PREFIX}/{broker}",
             raise_on_deleted_version=True,
         )
-        return response["data"]["data"]
+        return cast(dict[str, str], response["data"]["data"])
     except hvac.exceptions.InvalidPath:
         return None
     except Exception as exc:  # noqa: BLE001

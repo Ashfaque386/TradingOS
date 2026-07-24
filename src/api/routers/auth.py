@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from src.api.deps import get_current_user
 from src.core.db import get_session
@@ -40,13 +40,13 @@ def login(body: LoginRequest) -> LoginResponse:
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
             )
         if not user.is_active:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is inactive"
+            )
 
         # Use the DB's own clock (func.now()) rather than Python's, and update via a targeted
         # statement instead of mutating the detached-after-commit ORM object.
-        session.execute(
-            User.__table__.update().where(User.id == user.id).values(last_login_at=func.now())
-        )
+        session.execute(update(User).where(User.id == user.id).values(last_login_at=func.now()))
         session.commit()
 
         token = create_access_token(user_id=str(user.id), role=user.role)
@@ -62,4 +62,6 @@ class CurrentUserResponse(BaseModel):
 
 @router.get("/me", response_model=CurrentUserResponse)
 def me(user: User = Depends(get_current_user)) -> CurrentUserResponse:
-    return CurrentUserResponse(id=user.id, email=user.email, full_name=user.full_name, role=user.role)
+    return CurrentUserResponse(
+        id=user.id, email=user.email, full_name=user.full_name, role=user.role
+    )

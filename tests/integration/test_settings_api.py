@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.core.db import get_session
 from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
-from src.models.user import NotificationChannel, User
+from src.models.user import NotificationChannel
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
@@ -24,7 +24,8 @@ def test_integrations_status_never_leaks_a_raw_secret():
 
     for provider in body["llm_providers"] + body["brokers"]:
         hint = provider["masked_hint"]
-        if hint and provider["name"] != "Ollama":  # Ollama's "hint" is just its base URL, not a secret
+        # Ollama's "hint" is just its base URL, not a secret
+        if hint and provider["name"] != "Ollama":
             assert hint.startswith("••••")
             assert len(hint) <= 8  # "••••" + at most 4 real trailing chars, never the full key
 

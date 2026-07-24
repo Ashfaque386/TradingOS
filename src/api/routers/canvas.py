@@ -109,5 +109,7 @@ def get_canvas_state() -> CanvasStateResponse:
             )
 
         return CanvasStateResponse(
-            latest_code=latest_code, latest_backtest=latest_backtest, latest_agent_activity=latest_activity
+            latest_code=latest_code,
+            latest_backtest=latest_backtest,
+            latest_agent_activity=latest_activity,
         )

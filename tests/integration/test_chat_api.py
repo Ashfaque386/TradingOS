@@ -46,7 +46,9 @@ def test_send_message_persists_and_returns_a_pending_assistant_row():
         assert list_response.status_code == 200
         messages = list_response.json()
 
-        user_messages = [m for m in messages if m["role"] == "user" and m["content"] == unique_marker]
+        user_messages = [
+            m for m in messages if m["role"] == "user" and m["content"] == unique_marker
+        ]
         assert len(user_messages) == 1
         user_id = uuid.UUID(user_messages[0]["id"])
 

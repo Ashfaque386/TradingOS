@@ -44,9 +44,7 @@ def test_login_with_correct_credentials_returns_a_real_usable_token():
         assert body["role"] == ROLE_SYSTEM_ADMINISTRATOR
         assert body["user_id"] == str(user_id)
 
-        me_response = client.get(
-            "/api/v1/auth/me", headers=auth_header(body["access_token"])
-        )
+        me_response = client.get("/api/v1/auth/me", headers=auth_header(body["access_token"]))
         assert me_response.status_code == 200
         assert me_response.json()["email"] == email
     finally:
@@ -130,7 +128,11 @@ def test_admin_can_create_a_new_user_with_a_hashed_password_never_returned():
     try:
         response = client.post(
             "/api/v1/users",
-            json={"email": new_email, "password": "a-new-password-123", "role": ROLE_PORTFOLIO_MANAGER},
+            json={
+                "email": new_email,
+                "password": "a-new-password-123",
+                "role": ROLE_PORTFOLIO_MANAGER,
+            },
             headers=auth_header(admin_token),
         )
         assert response.status_code == 201

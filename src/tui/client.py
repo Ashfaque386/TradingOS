@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import websockets
@@ -37,17 +37,17 @@ class TUIClient:
     async def health(self) -> dict[str, Any]:
         response = await self._http.get("/health")
         response.raise_for_status()
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     async def kill_switch_status(self) -> dict[str, Any]:
         response = await self._http.get("/api/v1/system/kill-switch/status")
         response.raise_for_status()
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     async def risk_metrics(self) -> dict[str, Any]:
         response = await self._http.get("/api/v1/portfolio/risk-metrics")
         response.raise_for_status()
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     async def recent_runs(self) -> list[dict[str, Any]]:
         response = await self._http.get("/api/v1/agents/runs")

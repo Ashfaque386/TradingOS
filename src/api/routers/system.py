@@ -15,6 +15,7 @@ from src.api.deps import require_role
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.engine.risk import kill_switch_service
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
@@ -47,7 +48,7 @@ class KillSwitchResetResponse(BaseModel):
 
 @router.post("/kill-switch", response_model=KillSwitchTripResponse)
 def trip_kill_switch(
-    body: KillSwitchTripRequest, _user=Depends(_can_trigger_kill_switch)
+    body: KillSwitchTripRequest, _user: User = Depends(_can_trigger_kill_switch)
 ) -> KillSwitchTripResponse:
     """API-084: EMERGENCY STOP -- cancels all open orders, liquidates all positions."""
     with get_session() as session:
@@ -65,7 +66,7 @@ def kill_switch_status() -> KillSwitchStatusResponse:
 
 @router.post("/kill-switch/reset", response_model=KillSwitchResetResponse)
 def reset_kill_switch(
-    body: KillSwitchResetRequest, _user=Depends(_can_trigger_kill_switch)
+    body: KillSwitchResetRequest, _user: User = Depends(_can_trigger_kill_switch)
 ) -> KillSwitchResetResponse:
     """API-086: re-arm the system after manual review post-trip."""
     if not body.confirmation:

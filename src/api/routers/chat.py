@@ -24,7 +24,7 @@ whole reply, matching the fallback-on-failure pattern used throughout src/agents
 
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -175,5 +175,7 @@ def send_message(body: SendMessageRequest) -> ChatMessageResponse:
     ).start()
 
     with get_session() as session:
-        assistant_message = session.get(ChatMessage, assistant_id)
-        return _to_response(assistant_message)
+        assistant_row = session.get(ChatMessage, assistant_id)
+        if assistant_row is None:
+            raise HTTPException(status_code=500, detail="Assistant message row vanished")
+        return _to_response(assistant_row)

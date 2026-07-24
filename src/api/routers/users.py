@@ -41,7 +41,9 @@ def list_users() -> list[UserResponse]:
     with get_session() as session:
         users = session.scalars(select(User).order_by(User.created_at))
         return [
-            UserResponse(id=u.id, email=u.email, full_name=u.full_name, role=u.role, is_active=u.is_active)
+            UserResponse(
+                id=u.id, email=u.email, full_name=u.full_name, role=u.role, is_active=u.is_active
+            )
             for u in users
         ]
 
@@ -56,7 +58,9 @@ def create_user(body: CreateUserRequest) -> UserResponse:
     with get_session() as session:
         existing = session.scalars(select(User).where(User.email == body.email)).first()
         if existing is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
+            )
 
         user = User(
             email=body.email,
@@ -68,5 +72,9 @@ def create_user(body: CreateUserRequest) -> UserResponse:
         session.commit()
         session.refresh(user)
         return UserResponse(
-            id=user.id, email=user.email, full_name=user.full_name, role=user.role, is_active=user.is_active
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role,
+            is_active=user.is_active,
         )

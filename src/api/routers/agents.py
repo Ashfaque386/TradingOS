@@ -115,7 +115,10 @@ def _summarize_node_output(node_name: str, output: dict[str, Any]) -> str:
         return f"Market context: confidence={context.confidence_score:.2f}, {context.macro_outlook}"
     strategy = output.get("strategy_logic")
     if strategy is not None:
-        return f"Proposed strategy: {strategy.hypothesis} (confidence={strategy.confidence_score:.2f})"
+        return (
+            f"Proposed strategy: {strategy.hypothesis} "
+            f"(confidence={strategy.confidence_score:.2f})"
+        )
     code = output.get("python_code")
     if code is not None:
         return f"Generated strategy code v{code.version_no} ({len(code.code)} chars)"
@@ -184,26 +187,29 @@ def _persist_strategy_progress(
         )
         session.add(version)
         session.flush()
-        strategy = session.get(Strategy, tracking.strategy_id)
-        if strategy is not None:
-            strategy.current_version_id = version.id
-            strategy.status = "Coding"
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is not None:
+            strategy_row.current_version_id = version.id
+            strategy_row.status = "Coding"
         return
 
     if node_name == "python_validator" and "validation_result" in output:
-        strategy = session.get(Strategy, tracking.strategy_id)
-        if strategy is None or strategy.current_version_id is None:
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is None or strategy_row.current_version_id is None:
             return
         if output["validation_result"].status != "Pass":
-            return  # a retry produces a new StrategyVersion via the branch above; nothing to do here
-        version = session.get(StrategyVersion, strategy.current_version_id)
-        if version is None:
+            # a retry produces a new StrategyVersion via the branch above; nothing to do here
+            return
+        version_row = session.get(StrategyVersion, strategy_row.current_version_id)
+        if version_row is None:
             return
         # Real sandbox re-validation + .py persistence via the tested Phase 3 pipeline (writes
         # {data_lake_root.parent}/strategies/{version_id}.py and updates
         # StrategyVersion.validation_status itself) -- reused rather than re-implemented here.
-        run_strategy_factory_pipeline(version.python_code, strategy_version_id=str(version.id))
-        strategy.status = "Backtesting"
+        run_strategy_factory_pipeline(
+            version_row.python_code, strategy_version_id=str(version_row.id)
+        )
+        strategy_row.status = "Backtesting"
 
 
 def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:

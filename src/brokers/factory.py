@@ -92,5 +92,7 @@ def build_upstox_adapter(settings: Settings | None = None) -> UpstoxAdapter:
     settings = settings or get_settings()
     creds = _upstox_credentials(settings)
     if creds is None:
-        raise NoBrokerConfigured("Upstox is not configured (checked Vault, then UPSTOX_ACCESS_TOKEN)")
+        raise NoBrokerConfigured(
+            "Upstox is not configured (checked Vault, then UPSTOX_ACCESS_TOKEN)"
+        )
     return UpstoxAdapter(access_token=creds[0], use_sandbox=creds[1])

@@ -10,7 +10,8 @@ definition this module implements.
 
 A strategy clears the gate only when ALL FOUR conditions hold at once:
   1. Trade count               >= MIN_TRADE_COUNT              -- statistical floor
-  2. Calendar span              >= MIN_CALENDAR_DAYS             -- >=1 monthly F&O expiry cycle, weekend/overnight gaps
+  2. Calendar span              >= MIN_CALENDAR_DAYS             -- >=1 monthly F&O expiry
+     cycle, weekend/overnight gaps
   3. Shadow Mode clean streak   >= MIN_CLEAN_DAYS consecutive days, zero broker API errors
   4. Live win rate within WIN_RATE_DIVERGENCE_TOLERANCE of the strategy's latest backtested win rate
 
@@ -94,7 +95,10 @@ def _performance_divergence_condition(
         return GateCondition(
             label=label,
             met=False,
-            detail="No realized (closed) paper trades yet -- nothing to compare against the backtest",
+            detail=(
+                "No realized (closed) paper trades yet -- nothing to compare against "
+                "the backtest"
+            ),
         )
     live_win_rate = sum(1 for c in closes if c.pnl > 0) / len(closes)
 

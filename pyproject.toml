@@ -94,6 +94,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection system requires `Depends(...)` as an argument default --
+# it's a DI sentinel evaluated once per request by FastAPI itself, not a mutable-default bug.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]
+
 [tool.black]
 line-length = 100
 target-version = ["py312"]
@@ -109,6 +114,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "vectorbt.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "hvac.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "jose.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

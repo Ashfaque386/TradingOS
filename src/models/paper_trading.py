@@ -32,8 +32,10 @@ class PaperTrade(Base, UUIDPKMixin, TimestampMixin):
     side: Mapped[str] = mapped_column(String(4), nullable=False)  # BUY | SELL
     requested_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     filled_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    reference_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)  # LTP at signal time
-    fill_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)  # depth-weighted average
+    # LTP at signal time
+    reference_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    # depth-weighted average
+    fill_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     slippage_bps: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
     # The real depth levels actually walked to compute fill_price -- kept for audit/replay, not
     # a summary a human is expected to read directly.

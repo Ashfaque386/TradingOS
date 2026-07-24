@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.brokers.base import Margin, Position
+from src.brokers.base import BrokerAdapter, Margin, Position
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.db import get_session
 from src.models.strategy import BacktestResult, Strategy
@@ -69,7 +69,7 @@ class AllocationResponse(BaseModel):
     strategy_data_available: bool
 
 
-def _get_broker() -> object:
+def _get_broker() -> BrokerAdapter:
     try:
         return build_broker()
     except NoBrokerConfigured as exc:
@@ -94,14 +94,14 @@ def _pct_of_daily_limit(total_pnl: float, daily_limit: float | None) -> float | 
 async def list_positions() -> list[Position]:
     """API-057."""
     broker = _get_broker()
-    return await broker.get_positions()  # type: ignore[attr-defined]
+    return await broker.get_positions()
 
 
 @router.get("/portfolio/margin", response_model=Margin)
 async def portfolio_margin() -> Margin:
     """API-059."""
     broker = _get_broker()
-    return await broker.get_margin()  # type: ignore[attr-defined]
+    return await broker.get_margin()
 
 
 @router.get("/portfolio/pnl", response_model=PnLResponse)
@@ -109,7 +109,7 @@ async def portfolio_pnl() -> PnLResponse:
     """API-060 (realized/unrealized totals; per-trade STT/GST breakdown lives on Trade rows,
     DB-009, not summarized here)."""
     broker = _get_broker()
-    positions = await broker.get_positions()  # type: ignore[attr-defined]
+    positions = await broker.get_positions()
     unrealized = sum(p.unrealized_pnl for p in positions)
     realized = sum(p.realized_pnl for p in positions)
     total = unrealized + realized
@@ -130,7 +130,7 @@ async def portfolio_pnl() -> PnLResponse:
 @router.get("/portfolio/risk-metrics", response_model=RiskMetricsResponse)
 async def portfolio_risk_metrics() -> RiskMetricsResponse:
     broker = _get_broker()
-    positions = await broker.get_positions()  # type: ignore[attr-defined]
+    positions = await broker.get_positions()
     daily_pnl = sum(p.unrealized_pnl + p.realized_pnl for p in positions)
 
     with get_session() as session:
@@ -172,7 +172,7 @@ async def portfolio_risk_metrics() -> RiskMetricsResponse:
 @router.get("/portfolio/allocation", response_model=AllocationResponse)
 async def portfolio_allocation() -> AllocationResponse:
     broker = _get_broker()
-    positions = await broker.get_positions()  # type: ignore[attr-defined]
+    positions = await broker.get_positions()
     valued = [
         (p.symbol, abs(p.net_quantity) * (p.last_price or p.average_price or 0.0))
         for p in positions

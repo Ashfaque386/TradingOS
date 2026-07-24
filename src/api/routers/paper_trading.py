@@ -89,9 +89,7 @@ async def execute(body: ExecuteRequest) -> PaperTradeResponse:
         # Zerodha and Upstox tokens expire every trading day with no refresh token, a
         # documented constraint, not something this endpoint can paper over). 502: the failure
         # is upstream, not a bad request from our own caller.
-        raise HTTPException(
-            status_code=502, detail=f"Broker quote request failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=502, detail=f"Broker quote request failed: {exc}") from exc
     return _to_response(trade)
 
 

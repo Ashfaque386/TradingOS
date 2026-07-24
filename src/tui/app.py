@@ -12,6 +12,7 @@ Run inside the same container as the FastAPI process (`docker compose exec app p
 src.tui.app`), matching this project's Docker-only development rule.
 """
 
+import contextlib
 from datetime import datetime
 
 from textual.app import App, ComposeResult
@@ -147,10 +148,8 @@ class TradingOSTUI(App[None]):
             panel.daily_pnl = None
             panel.pct_of_limit = None
 
-        try:
+        with contextlib.suppress(Exception):  # noqa: BLE001
             runs_panel.runs = await self.client.recent_runs()
-        except Exception:  # noqa: BLE001
-            pass
 
     async def consume_agent_logs(self) -> None:
         log = self.query_one("#log-panel", RichLog)

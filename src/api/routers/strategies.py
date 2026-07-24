@@ -38,7 +38,6 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from src.api.deps import require_role
 from src.core.config import get_settings
@@ -51,6 +50,7 @@ from src.engine.sandbox.backtest_runner import (
     write_equity_curve_parquet,
 )
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 
@@ -234,8 +234,15 @@ class BacktestJobStatusResponse(BaseModel):
     backtest_result_id: uuid.UUID | None
 
 
-def _run_backtest_job(*, job_id: str, strategy_id: uuid.UUID, version: StrategyVersionSummary,
-                       universe: list[str], date_from: date, date_to: date) -> None:
+def _run_backtest_job(
+    *,
+    job_id: str,
+    strategy_id: uuid.UUID,
+    version: StrategyVersionSummary,
+    universe: list[str],
+    date_from: date,
+    date_to: date,
+) -> None:
     outcome: RealBacktestOutcome = run_real_backtest(
         # python_code isn't on StrategyVersionSummary; re-fetched by id below to keep this
         # thread's DB access self-contained rather than passing a detached ORM object across
@@ -387,7 +394,7 @@ class PromoteRequest(BaseModel):
 
 @router.post("/{strategy_id}/promote", response_model=StrategySummary)
 def promote_strategy(
-    strategy_id: uuid.UUID, body: PromoteRequest, _user=Depends(_can_promote)
+    strategy_id: uuid.UUID, body: PromoteRequest, _user: User = Depends(_can_promote)
 ) -> StrategySummary:
     with get_session() as session:
         strategy = session.get(Strategy, strategy_id)

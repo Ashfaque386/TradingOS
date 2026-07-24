@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-
 from fastapi.testclient import TestClient
 
 from src.api.main import app

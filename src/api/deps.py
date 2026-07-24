@@ -3,6 +3,7 @@ docstring for what this does and doesn't cover relative to the full Phase_12 des
 """
 
 import uuid
+from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -43,10 +44,11 @@ def get_current_user(
         return user
 
 
-def require_role(*allowed_roles: str):
-    """Dependency factory: `Depends(require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER))`.
-    Plain-code role check, not the OPA/Casbin policy engine Phase_12 SEC-017 calls for -- deferred,
-    documented in src/core/security.py's module docstring."""
+def require_role(*allowed_roles: str) -> Callable[..., User]:
+    """Dependency factory:
+    `Depends(require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER))`.
+    Plain-code role check, not the OPA/Casbin policy engine Phase_12 SEC-017 calls for --
+    deferred, documented in src/core/security.py's module docstring."""
 
     def _check(user: User = Depends(get_current_user)) -> User:
         if user.role not in allowed_roles:
