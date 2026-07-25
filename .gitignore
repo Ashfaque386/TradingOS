@@ -7,8 +7,16 @@ venv/
 .env.*
 !.env.example
 
-# Data lake (large, not committed)
-data/
+# Data lake (large, not committed). Anchored to the repo root (`/data/`, not `data/`) --
+# an unanchored `data/` pattern also matched `src/data/`, the real source-code package
+# (datalake/, features/, ingest/), silently excluding it from every commit since the first one.
+# Confirmed via `git check-ignore -v` / `git ls-tree`: those files existed on disk (visible to
+# the bind-mounted local dev container) but were never actually tracked by git, so a real
+# GitHub Actions checkout never had them -- the true cause of a mypy "Cannot find implementation
+# or library stub for module named src.data.datalake.query" failure that never reproduced
+# locally, discovered only by comparing checked-file counts between a local mypy run (122 files)
+# and the real CI log (110 files).
+/data/
 *.parquet
 *.duckdb
 
