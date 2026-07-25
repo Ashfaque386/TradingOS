@@ -14,6 +14,11 @@ from src.core.config import Settings
 
 
 def _settings(**overrides) -> Settings:
+    """`vault_addr=None` by default: `is_configured`/`_litellm_kwargs` now check Vault first
+    (REL-002 E2.2), so without this these "unit" tests would silently depend on whatever this
+    dev machine's real Vault happens to have stored for LLM provider keys — the exact same
+    live-Vault test-isolation risk already caught and fixed for test_broker_factory.py."""
+    overrides.setdefault("vault_addr", None)
     return Settings(_env_file=None, **overrides)
 
 

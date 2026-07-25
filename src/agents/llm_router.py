@@ -2,10 +2,15 @@
 
 Routes each call by task type through an ordered fallback chain of (provider, model) pairs,
 per the tech research report's "Multi-LLM Routing via LiteLLM" recommendation. A provider with
-no configured key is skipped, not treated as a failure — see Settings in src/core/config.py for
-the optional per-provider key fields. Which model handles which task type lives in
-routing.yaml (loaded fresh per call, see load_routing_table()), not in this file — edit that
-file to change routing without a code change or restart.
+no configured key is skipped, not treated as a failure. Which model handles which task type
+lives in routing.yaml (loaded fresh per call, see load_routing_table()), not in this file —
+edit that file to change routing without a code change or restart.
+
+Each provider's API key is resolved Vault-first, falling back to `.env`-sourced Settings
+(REL-002 E2.2 gap closure, 2026-07-25) — the same precedence already used for broker credentials
+(src/brokers/factory.py, src/core/vault.py). `resolve_api_key()` is the single place that does
+this; `is_configured()` and `_litellm_kwargs()` both go through it rather than reading Settings
+fields directly.
 """
 
 import os
@@ -17,6 +22,7 @@ import litellm
 import structlog
 import yaml
 
+from src.core import vault
 from src.core.config import Settings, get_settings
 
 logger = structlog.get_logger(__name__)
@@ -74,10 +80,8 @@ class NoProviderAvailableError(RuntimeError):
     pass
 
 
-def is_configured(provider: str, settings: Settings) -> bool:
-    if provider == "ollama":
-        return True
-    key_field = {
+def _settings_api_key(provider: str, settings: Settings) -> str | None:
+    return {
         "openai": settings.openai_api_key,
         "anthropic": settings.anthropic_api_key,
         "deepseek": settings.deepseek_api_key,
@@ -85,27 +89,44 @@ def is_configured(provider: str, settings: Settings) -> bool:
         "huggingface": settings.hf_token,
         "opencode": settings.opencode_api_key,
     }[provider]
-    return bool(key_field)
+
+
+def resolve_api_key(provider: str, settings: Settings) -> str | None:
+    """Vault-first, falling back to `.env`-sourced Settings — same precedence as broker
+    credentials (src/brokers/factory.py). `provider="ollama"` never has a key (returns None)."""
+    if provider == "ollama":
+        return None
+    stored = vault.read_llm_provider_key(provider, settings=settings)
+    if stored:
+        return stored
+    return _settings_api_key(provider, settings)
+
+
+def is_configured(provider: str, settings: Settings) -> bool:
+    if provider == "ollama":
+        return True
+    return bool(resolve_api_key(provider, settings))
 
 
 def _litellm_kwargs(pm: ProviderModel, settings: Settings) -> dict[str, Any]:
     if pm.provider == "ollama":
         return {"model": f"ollama/{pm.model}", "api_base": settings.ollama_base_url}
+    api_key = resolve_api_key(pm.provider, settings)
     if pm.provider == "openai":
-        return {"model": f"openai/{pm.model}", "api_key": settings.openai_api_key}
+        return {"model": f"openai/{pm.model}", "api_key": api_key}
     if pm.provider == "anthropic":
-        return {"model": f"anthropic/{pm.model}", "api_key": settings.anthropic_api_key}
+        return {"model": f"anthropic/{pm.model}", "api_key": api_key}
     if pm.provider == "deepseek":
-        return {"model": f"deepseek/{pm.model}", "api_key": settings.deepseek_api_key}
+        return {"model": f"deepseek/{pm.model}", "api_key": api_key}
     if pm.provider == "gemini":
-        return {"model": f"gemini/{pm.model}", "api_key": settings.gemini_api_key}
+        return {"model": f"gemini/{pm.model}", "api_key": api_key}
     if pm.provider == "huggingface":
-        return {"model": f"huggingface/{pm.model}", "api_key": settings.hf_token}
+        return {"model": f"huggingface/{pm.model}", "api_key": api_key}
     if pm.provider == "opencode":
         return {
             "model": f"openai/{pm.model}",
             "api_base": OPENCODE_ZEN_BASE_URL,
-            "api_key": settings.opencode_api_key,
+            "api_key": api_key,
         }
     raise ValueError(f"unknown provider: {pm.provider}")
 

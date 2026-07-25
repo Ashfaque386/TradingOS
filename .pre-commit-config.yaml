@@ -1,0 +1,33 @@
+# REL-001 E1.1 exit criterion: Ruff + Black + mypy --strict enforced at commit time, not just
+# manually/in CI. Every hook shells out to the real `app` Docker image (`docker compose run --rm
+# app <tool>`) instead of installing ruff/black/mypy on the host -- this project's Docker-only
+# rule applies to the actual checks, not to `pre-commit` itself (a thin git-hook orchestrator
+# that has to run on the host by definition, the same way `git` itself does).
+#
+# Requires `docker compose up -d postgres qdrant redis` already running (same assumption every
+# other script in this repo makes -- scripts/run_daily_shadow_mode.py, scripts/backup_data_lake.py
+# -- since `docker compose run --rm app` waits on the `app` service's `depends_on` health checks).
+#
+# Install once per clone: `pip install pre-commit && pre-commit install` (host Python -- this is
+# the one real exception to "no local Python" in this project, matching pre-commit's own nature).
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: Ruff lint (docker compose run --rm app ruff check src tests)
+        entry: docker compose run --rm app ruff check src tests
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: black
+        name: Black format check (docker compose run --rm app black --check src tests)
+        entry: docker compose run --rm app black --check src tests
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: mypy
+        name: mypy --strict (docker compose run --rm app mypy src)
+        entry: docker compose run --rm app mypy src
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 
+from src.agents.llm_router import resolve_api_key
 from src.brokers.factory import build_upstox_adapter, build_zerodha_adapter
 from src.brokers.kite_connect_adapter import KiteConnectAdapter
 from src.brokers.upstox_adapter import UpstoxAdapter
@@ -106,3 +107,68 @@ def test_broker_factory_falls_back_to_env_settings_when_vault_has_nothing_for_th
     except Exception as exc:  # noqa: BLE001 -- honest skip if Upstox isn't configured at all here
         pytest.skip(f"Upstox not configured in this environment: {exc}")
     assert isinstance(adapter, UpstoxAdapter)
+
+
+# --- LLM provider keys (REL-002 E2.2 gap closure) -- same real Vault, same precedence pattern --
+
+
+def test_llm_provider_key_write_then_read_round_trips_against_the_real_dev_vault():
+    provider = f"test-provider-{uuid.uuid4().hex[:8]}"
+    settings = _dev_vault_settings()
+
+    ok = vault.write_llm_provider_key(provider, "real-round-trip-key", settings=settings)
+    assert ok is True
+
+    assert vault.read_llm_provider_key(provider, settings=settings) == "real-round-trip-key"
+
+
+def test_reading_an_llm_provider_never_written_returns_none_not_an_error():
+    settings = _dev_vault_settings()
+    never_written = f"nonexistent-provider-{uuid.uuid4().hex[:8]}"
+
+    assert vault.read_llm_provider_key(never_written, settings=settings) is None
+
+
+def test_an_unreachable_vault_fails_open_for_llm_keys_too():
+    unreachable = Settings(vault_addr="http://vault-does-not-exist.invalid:8200", vault_token="x")
+
+    assert vault.read_llm_provider_key("openai", settings=unreachable) is None
+    assert vault.write_llm_provider_key("openai", "x", settings=unreachable) is False
+
+
+def test_llm_router_prefers_a_real_vault_stored_key_over_env_settings():
+    """Proves the actual retrieval path end-to-end, mirroring
+    test_broker_factory_prefers_a_real_vault_stored_credential_over_env_settings: write a
+    distinguishable key to the real Vault, then confirm resolve_api_key() picks it up over a
+    conflicting .env-style value in Settings."""
+    provider = "anthropic"
+    settings = _dev_vault_settings(anthropic_api_key="env-key-should-lose")
+
+    marker_key = f"vault-wins-{uuid.uuid4().hex[:8]}"
+    ok = vault.write_llm_provider_key(provider, marker_key, settings=settings)
+    assert ok is True
+
+    try:
+        assert resolve_api_key(provider, settings) == marker_key
+    finally:
+        # Best-effort cleanup: restore the real env-sourced key if there is one, otherwise
+        # DELETE the marker rather than leaving it behind -- if the real .env has no Anthropic
+        # key, a leftover fake one here would make is_configured("anthropic", ...) lie to the
+        # real app afterwards (reporting "configured" against a key that was never real).
+        real_settings = get_settings()
+        if real_settings.anthropic_api_key:
+            vault.write_llm_provider_key(
+                provider, real_settings.anthropic_api_key, settings=settings
+            )
+        else:
+            vault.delete_llm_provider_key(provider, settings=settings)
+
+
+def test_llm_router_falls_back_to_env_settings_when_vault_has_nothing_for_this_provider():
+    """A real provider name (gemini) that this test never writes to Vault -- resolve_api_key
+    must fall back to the .env-sourced Settings value rather than returning None."""
+    provider = "gemini"
+    settings = _dev_vault_settings(gemini_api_key="env-key-should-be-used")
+
+    assert vault.read_llm_provider_key(provider, settings=settings) is None
+    assert resolve_api_key(provider, settings) == "env-key-should-be-used"
