@@ -94,6 +94,17 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.isort]
+# Explicit, not auto-detected: this project imports its own code as `from src.xxx import yyy`
+# (keeping the `src.` prefix), not the bare-package style ruff's src-layout auto-detection
+# assumes. Without this, ruff auto-adds `src/` itself as an extra source root alongside the
+# project root, which made whether `src.*` imports count as first-party or third-party depend
+# on environment-specific auto-detection -- confirmed as the real cause of a CI-only Ruff
+# failure (I001) that never reproduced in the local dev container: `ruff check --show-settings`
+# revealed `linter.src = ["/app", "/app/src"]` locally, an ambiguous resolution GitHub Actions'
+# fresh checkout resolved differently. Declaring `src` as first-party removes the ambiguity.
+known-first-party = ["src"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection system requires `Depends(...)` as an argument default --
 # it's a DI sentinel evaluated once per request by FastAPI itself, not a mutable-default bug.
