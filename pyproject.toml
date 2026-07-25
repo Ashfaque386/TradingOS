@@ -118,6 +118,18 @@ target-version = ["py312"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+# `mypy src` resolves the files passed on the command line by walking the file system, but
+# resolves *imports found inside those files* (e.g. `from src.data.datalake.query import ...`)
+# by checking where a real Python import would find them -- which, for this project's editable
+# install (`pip install -e ".[dev]"`, see Dockerfile), goes through the generated
+# `_editable_impl_tradingos.pth` finder in site-packages, not the local `/app/src` tree
+# directly. That resolution proved environment-dependent: a real GitHub Actions run failed with
+# "Cannot find implementation or library stub for module named src.data.datalake.query" for
+# imports that resolved fine in the local dev container. Setting mypy_path to the project root
+# plus explicit_package_bases makes mypy resolve `src.*` imports directly from the local file
+# tree every time, regardless of the installed editable package's own resolution mechanism.
+mypy_path = "."
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = "yfinance.*"
