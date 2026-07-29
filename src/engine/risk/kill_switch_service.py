@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.audit import write_audit_entry
 from src.engine.risk.kill_switch import DEFAULT_KILL_SWITCH_THRESHOLD, MaxDrawdownKillSwitch
 from src.models.trading import Order, PortfolioPosition
 
@@ -49,7 +50,9 @@ def get_status() -> dict[str, str | None]:
     }
 
 
-def trip(session: Session, *, reason: str) -> KillSwitchTripResult:
+def trip(
+    session: Session, *, reason: str, actor_id: str = "kill_switch_service"
+) -> KillSwitchTripResult:
     """EMERGENCY STOP (API-084): cancels every open order and flattens every open position.
     Deliberately independent of Redis or any other non-Postgres infrastructure -- a safety-
     critical stop must not be able to fail because a cache or pub/sub broker is down."""
@@ -69,6 +72,18 @@ def trip(session: Session, *, reason: str) -> KillSwitchTripResult:
     for position in open_positions:
         position.net_quantity = 0
 
+    write_audit_entry(
+        session,
+        actor_type="Human" if actor_id != "kill_switch_service" else "System",
+        actor_id=actor_id,
+        action="KILL_SWITCH_TRIPPED",
+        entity_type="KillSwitch",
+        after_state={
+            "reason": reason,
+            "cancelled_orders": len(open_orders),
+            "liquidated_positions": len(open_positions),
+        },
+    )
     session.commit()
 
     return KillSwitchTripResult(
@@ -78,9 +93,18 @@ def trip(session: Session, *, reason: str) -> KillSwitchTripResult:
     )
 
 
-def reset() -> None:
+def reset(session: Session, *, actor_id: str = "kill_switch_service") -> None:
     """SA-only re-arm after manual review (API-086)."""
     global _tripped_at, _trip_reason
     _kill_switch.reset()
     _tripped_at = None
     _trip_reason = None
+
+    write_audit_entry(
+        session,
+        actor_type="Human" if actor_id != "kill_switch_service" else "System",
+        actor_id=actor_id,
+        action="KILL_SWITCH_RESET",
+        entity_type="KillSwitch",
+    )
+    session.commit()

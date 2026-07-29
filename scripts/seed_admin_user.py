@@ -2,7 +2,8 @@
 create a user at all before src/api/routers/users.py existed, and that router itself requires an
 existing SystemAdministrator to call -- a chicken-and-egg problem an open unauthenticated
 "create the first user" endpoint would solve unsafely. This script is the intended bootstrap
-path instead: run once per environment via `docker exec tradingos-app python scripts/seed_admin_user.py`.
+path instead: run once per environment via
+`docker exec tradingos-app python scripts/seed_admin_user.py`.
 
 Idempotent: re-running with the same email updates the existing row's password/role rather than
 erroring or creating a duplicate (the `users.email` column has a UNIQUE constraint).

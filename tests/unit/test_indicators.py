@@ -3,7 +3,15 @@ from datetime import date, timedelta
 import polars as pl
 import pytest
 
-from src.data.features.indicators import atr, bollinger_bands, ema, rsi, sma, with_indicators
+from src.data.features.indicators import (
+    atr,
+    bollinger_bands,
+    ema,
+    macd,
+    rsi,
+    sma,
+    with_indicators,
+)
 
 
 def _ohlcv(closes: list[float]) -> pl.DataFrame:
@@ -59,6 +67,20 @@ def test_bollinger_bands_upper_above_lower():
     upper, mid, lower = bollinger_bands(df, window=20)
     last_upper, last_mid, last_lower = upper[-1], mid[-1], lower[-1]
     assert last_upper >= last_mid >= last_lower
+
+
+def test_macd_line_is_positive_when_strictly_increasing():
+    df = _ohlcv([10 + i for i in range(60)])
+    macd_line, signal_line, histogram = macd(df)
+    assert macd_line[-1] > 0
+    assert histogram.len() == df.height
+    assert signal_line.len() == df.height
+
+
+def test_macd_line_is_negative_when_strictly_decreasing():
+    df = _ohlcv([100 - i for i in range(60)])
+    macd_line, _signal_line, _histogram = macd(df)
+    assert macd_line[-1] < 0
 
 
 def test_with_indicators_appends_all_expected_columns():

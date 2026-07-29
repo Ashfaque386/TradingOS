@@ -28,7 +28,7 @@ _FALLBACK_DIRECTIVE = ResearchDirective(
 )
 
 
-def ceo_agent_node(state: TradingOSGraphState) -> dict[str, ResearchDirective]:
+def ceo_agent_node(state: TradingOSGraphState) -> dict[str, object]:
     system_prompt = get_active_prompt(PROMPT_SLUG)
     user_prompt = get_active_prompt(TASK_PROMPT_SLUG).format(
         schema=ResearchDirective.model_json_schema()
@@ -47,4 +47,7 @@ def ceo_agent_node(state: TradingOSGraphState) -> dict[str, ResearchDirective]:
         logger.warning("ceo_agent_fallback", error=str(exc))
         directive = _FALLBACK_DIRECTIVE
 
-    return {"research_directive": directive}
+    # Resets the Backtest_Loop's rejection counter on every CEO entry -- a no-op at a genuine
+    # cold start (already 0), and the "fresh cycle with loosened constraints" the escalation
+    # rule (REL-005 E5.2) promises when re-entered after 5 consecutive strategy rejections.
+    return {"research_directive": directive, "strategy_rejection_count": 0}

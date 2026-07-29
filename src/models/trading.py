@@ -86,6 +86,6 @@ class RiskLimit(Base, UUIDPKMixin, TimestampMixin):
     max_sector_exposure_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))
     max_drawdown_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))
     set_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     effective_from: Mapped[datetime]

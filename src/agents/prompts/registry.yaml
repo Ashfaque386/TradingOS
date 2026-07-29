@@ -34,3 +34,45 @@ python_code_generator_agent_task:
 memory_agent_task:
   prompt_id: PMPT-031
   active_version: 1
+evaluator_agent:
+  prompt_id: PMPT-032
+  active_version: 1
+evaluator_agent_task:
+  prompt_id: PMPT-033
+  active_version: 1
+risk_manager_agent:
+  prompt_id: PMPT-034
+  active_version: 1
+risk_manager_agent_task:
+  prompt_id: PMPT-035
+  active_version: 1
+deployment_agent:
+  prompt_id: PMPT-036
+  active_version: 1
+deployment_agent_task:
+  prompt_id: PMPT-037
+  active_version: 1
+compliance_agent:
+  prompt_id: PMPT-038
+  active_version: 1
+compliance_agent_task:
+  prompt_id: PMPT-039
+  active_version: 1
+ml_agent:
+  prompt_id: PMPT-017
+  active_version: 1
+ml_agent_task:
+  prompt_id: PMPT-040
+  active_version: 1
+rl_agent:
+  prompt_id: PMPT-018
+  active_version: 1
+rl_agent_task:
+  prompt_id: PMPT-041
+  active_version: 1
+model_evaluator_agent:
+  prompt_id: PMPT-019
+  active_version: 1
+model_evaluator_agent_task:
+  prompt_id: PMPT-042
+  active_version: 1

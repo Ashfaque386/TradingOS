@@ -25,6 +25,10 @@ class Settings(BaseSettings):
 
     data_lake_root: Path = Path("/app/data/lake")
 
+    # DEPRECATED as of REL-007 E7.2: JWTs are now signed/verified via Vault's Transit engine
+    # (src/core/vault_transit.py), not this static secret. Nothing reads these two fields
+    # anymore -- kept only as a historical record of the pre-Transit scheme, deliberately not
+    # wired up as a fallback (see src/core/security.py's module docstring for why).
     jwt_secret_key: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
 
@@ -55,11 +59,11 @@ class Settings(BaseSettings):
     langsmith_project: str = "tradingos"
 
     # Embedding provider for the Qdrant RAG pipeline (Phase 2 E2.4 — see src/memory/embeddings.py).
-    # A settings toggle, not a hardcoded choice: switching to huggingface/openai/gemini once
-    # that provider's key is configured (and billing/quota allows it) is a `.env` change.
+    # A settings toggle, not a hardcoded choice: switching to huggingface/local/openai/gemini
+    # once that provider's key is configured (and billing/quota allows it) is a `.env` change.
     # Each provider has a different vector dimension — changing this requires re-running
     # src/memory/collections.py's bootstrap with recreate_if_dim_mismatch=True.
-    embedding_provider: Literal["ollama", "huggingface", "openai", "gemini"] = "ollama"
+    embedding_provider: Literal["ollama", "huggingface", "local", "openai", "gemini"] = "ollama"
 
     # Broker adapters (Phase 4 E4.1 — see src/brokers/). Upstox uses OAuth2: api_key/api_secret
     # are the app's Client ID/Secret from the developer portal; access_token is obtained via a
@@ -104,6 +108,26 @@ class Settings(BaseSettings):
     # Risk Register: "Prometheus alerts if WebSocket latency > 100ms. If triggered, the system
     # pauses live trading until synced.").
     ws_latency_pause_threshold_seconds: float = 0.1
+
+    # REL-007 E7.7 (webhook signature verification, SEC-025..028). Vault-first (see
+    # src/core/vault.py::read_webhook_secret), same fail-open .env fallback pattern as broker
+    # credentials/LLM provider keys above -- these are optional so app startup never fails just
+    # because no bot is registered yet in this dev environment.
+    telegram_webhook_secret: str | None = None
+    discord_public_key: str | None = None
+    whatsapp_app_secret: str | None = None
+    whatsapp_verify_token: str | None = None
+
+    # REL-007 E7.6 (TLS, SEC-023/024). Gates src/agents/scheduler.py's APScheduler so the
+    # sibling `app-tls` compose service (same image, HTTPS-only) doesn't double-fire the daily
+    # research cycle alongside the primary `app` service.
+    run_scheduler: bool = True
+
+    # REL-008 (MLflow tracking server -- see docker-compose.yml's `mlflow` service). A separate
+    # Postgres *database* (not a schema in `tradingos`) is its backend store, and the existing
+    # `data_lake` named volume doubles as its artifact root (no object storage exists in this dev
+    # stack) -- see scripts/setup_mlflow_database.py for the one-time DB-creation step.
+    mlflow_tracking_uri: str = "http://mlflow:5000"
 
 
 @lru_cache

@@ -20,6 +20,10 @@ venv/
 *.parquet
 *.duckdb
 
+# REL-007 E7.6: self-signed dev TLS CA + server cert/key, generated locally by
+# scripts/generate_dev_tls_cert.py -- private key material must never be committed.
+/certs/
+
 # Test / coverage
 .pytest_cache/
 .mypy_cache/

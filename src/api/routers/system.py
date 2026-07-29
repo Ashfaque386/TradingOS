@@ -12,16 +12,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.api.deps import require_role
+from src.core import vault_transit
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
+from src.core.vault_transit import VaultTransitUnavailableError
 from src.engine.risk import kill_switch_service
 from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 _can_trigger_kill_switch = require_role(
-    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
 )
+_can_rotate_jwt_key = require_role(ROLE_SYSTEM_ADMINISTRATOR, audit_denials=True)
 
 
 class KillSwitchTripRequest(BaseModel):
@@ -52,7 +55,7 @@ def trip_kill_switch(
 ) -> KillSwitchTripResponse:
     """API-084: EMERGENCY STOP -- cancels all open orders, liquidates all positions."""
     with get_session() as session:
-        result = kill_switch_service.trip(session, reason=body.reason)
+        result = kill_switch_service.trip(session, reason=body.reason, actor_id=_user.email)
     return KillSwitchTripResponse(
         status=result.status, liquidated_positions=result.liquidated_positions
     )
@@ -71,5 +74,26 @@ def reset_kill_switch(
     """API-086: re-arm the system after manual review post-trip."""
     if not body.confirmation:
         raise HTTPException(status_code=400, detail="Reset requires confirmation=true")
-    kill_switch_service.reset()
+    with get_session() as session:
+        kill_switch_service.reset(session, actor_id=_user.email)
     return KillSwitchResetResponse(status="ARMED")
+
+
+class JwtSigningKeyRotateResponse(BaseModel):
+    new_version: int
+
+
+@router.post("/jwt-signing-key/rotate", response_model=JwtSigningKeyRotateResponse)
+def rotate_jwt_signing_key(
+    _user: User = Depends(_can_rotate_jwt_key),
+) -> JwtSigningKeyRotateResponse:
+    """REL-007 E7.2 (SEC-011): rotates the Vault Transit JWT-signing key. Every access token
+    signed with a version below the new one stops verifying immediately (see
+    src/core/vault_transit.py's rotate_key() and src/core/security.py's decode_access_token()
+    for the mechanism) -- this is a genuine, real-time "log everyone out" action, restricted to
+    SystemAdministrator accordingly."""
+    try:
+        new_version = vault_transit.rotate_key()
+    except VaultTransitUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return JwtSigningKeyRotateResponse(new_version=new_version)

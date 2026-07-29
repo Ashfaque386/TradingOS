@@ -338,8 +338,45 @@ async function del(path: string): Promise<void> {
   }
 }
 
+// Explicit-token variant of post() -- used for the 3 MFA endpoints below, which authenticate
+// with a short-lived pending-MFA token (returned by /auth/login, not yet a real session), not
+// the module-level authToken a logged-in user's normal requests carry.
+async function postWithToken<T>(path: string, token: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+// REL-007 E7.1/E7.3: SystemAdministrator/PortfolioManager/RiskManager now require MFA, and a
+// real session includes a refresh_token alongside the access_token -- access_token/refresh_token
+// are null exactly when mfa_required is true (the credential was correct, but no real session
+// exists yet until /mfa/confirm or /mfa/verify succeeds).
 export interface LoginResponse {
+  access_token: string | null;
+  refresh_token: string | null;
+  token_type: string;
+  user_id: string;
+  role: Role;
+  mfa_required: boolean;
+  mfa_enrolled: boolean;
+  pending_token: string | null;
+}
+
+export interface MfaEnrollResponse {
+  secret_base32: string;
+  otpauth_uri: string;
+  backup_codes: string[];
+}
+
+export interface MfaSessionResponse {
   access_token: string;
+  refresh_token: string;
   token_type: string;
   user_id: string;
   role: Role;
@@ -356,6 +393,16 @@ export const api = {
   login: (email: string, password: string) =>
     post<LoginResponse>("/api/v1/auth/login", { email, password }),
   me: () => get<CurrentUser>("/api/v1/auth/me"),
+  logout: (refreshToken: string) => post<{ status: string }>("/api/v1/auth/logout", { refresh_token: refreshToken }),
+
+  mfaEnroll: (pendingToken: string) =>
+    postWithToken<MfaEnrollResponse>("/api/v1/auth/mfa/enroll", pendingToken),
+  mfaConfirm: (pendingToken: string, totpCode: string) =>
+    postWithToken<MfaSessionResponse>("/api/v1/auth/mfa/confirm", pendingToken, {
+      totp_code: totpCode,
+    }),
+  mfaVerify: (pendingToken: string, body: { totp_code?: string; backup_code?: string }) =>
+    postWithToken<MfaSessionResponse>("/api/v1/auth/mfa/verify", pendingToken, body),
 
   positions: () => get<Position[]>("/api/v1/positions"),
   margin: () => get<Margin>("/api/v1/portfolio/margin"),

@@ -32,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderResponse
+from src.core.audit import write_audit_entry
 from src.models.trading import Order as OrderModel
 from src.observability.tracing import get_tracer
 
@@ -158,22 +159,37 @@ class ExecutionAgent:
         latency_ms: float,
     ) -> None:
         now = datetime.now(UTC)
-        session.add(
-            OrderModel(
-                account_id=account_id,
-                strategy_id=strategy_id,
-                broker_order_id=response.broker_order_id,
-                symbol=response.symbol,
-                side=response.side,
-                order_type=response.order_type,
-                quantity=response.quantity,
-                limit_price=response.limit_price,
-                status=response.status,
-                requested_at=now,
-                acknowledged_at=None if response.status == "PENDING" else now,
-                latency_ms=int(latency_ms),
-                rejection_reason=response.rejection_reason,
-            )
+        order_row = OrderModel(
+            account_id=account_id,
+            strategy_id=strategy_id,
+            broker_order_id=response.broker_order_id,
+            symbol=response.symbol,
+            side=response.side,
+            order_type=response.order_type,
+            quantity=response.quantity,
+            limit_price=response.limit_price,
+            status=response.status,
+            requested_at=now,
+            acknowledged_at=None if response.status == "PENDING" else now,
+            latency_ms=int(latency_ms),
+            rejection_reason=response.rejection_reason,
+        )
+        session.add(order_row)
+        session.flush()
+        write_audit_entry(
+            session,
+            actor_type="System",
+            actor_id="execution_agent",
+            action="ORDER_PLACED",
+            entity_type="Order",
+            entity_id=order_row.id,
+            after_state={
+                "broker_order_id": response.broker_order_id,
+                "symbol": response.symbol,
+                "side": response.side,
+                "quantity": response.quantity,
+                "status": response.status,
+            },
         )
         session.commit()
 

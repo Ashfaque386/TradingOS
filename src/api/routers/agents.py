@@ -26,7 +26,7 @@ import json
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -37,14 +37,18 @@ from sqlalchemy.orm import Session
 
 from src.agents import prompt_registry
 from src.agents.graph import build_graph
+from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT_INITIAL_CAPITAL
 from src.agents.prompt_registry import PromptNotFoundError
 from src.agents.state import TradingOSGraphState
+from src.core.audit import write_audit_entry
+from src.core.config import get_settings
 from src.core.db import get_session
+from src.data.datalake.query import DataLake
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account
 from src.models.agent import AgentLog, AgentRun
-from src.models.strategy import Strategy, StrategyVersion
+from src.models.strategy import BacktestResult, Strategy, StrategyVersion
 
 # No Risk Manager Agent exists yet to set a real per-strategy drawdown limit (Phase 4 scope,
 # per Phase_14_Master_Development_Roadmap.md) -- mirrors kill_switch.py's
@@ -127,8 +131,30 @@ def _summarize_node_output(node_name: str, output: dict[str, Any]) -> str:
         if validation.status == "Pass":
             return "Validation passed"
         return f"Validation failed ({validation.severity}): {validation.feedback}"
-    if node_name == "await_backtesting":
-        return "Awaiting Phase 3 backtesting engine (not yet wired into the live graph)"
+    metrics = output.get("backtest_metrics")
+    if metrics is not None:
+        return (
+            f"Real backtest complete: Sharpe {metrics.sharpe_ratio:.2f}, "
+            f"MaxDD {metrics.max_drawdown:.2f}"
+        )
+    verdict = output.get("evaluation_verdict")
+    if verdict is not None:
+        if verdict.verdict == "PASS":
+            return "Evaluation PASSED -- advancing to Optimization"
+        return f"Evaluation FAILED: {'; '.join(verdict.failure_reasons)}"
+    optimization = output.get("optimization_result")
+    if optimization is not None:
+        robust = "robust" if optimization.passed else "not robust"
+        return f"Optimization {robust}: {optimization.notes}"
+    risk = output.get("risk_assessment")
+    if risk is not None:
+        return f"Risk decision: {risk.decision}"
+    deployment = output.get("deployment_recommendation")
+    if deployment is not None:
+        return (
+            f"Deployment recommendation: {deployment.recommended_status} -- "
+            f"{deployment.rationale}"
+        )
     return f"{node_name} completed with no new state fields"
 
 
@@ -140,10 +166,21 @@ class _StrategyTracking:
     strategy_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
     account_lookup_done: bool = False
+    # REL-005: the one BacktestResult row (DB-007) this thread's current strategy attempt is
+    # accumulating pipeline outcomes onto (evaluation/optimization/risk/deployment columns).
+    # Reassigned every time "backtesting" fires again -- each rejected-and-regenerated strategy
+    # in the Backtest_Loop gets its own real BacktestResult row, a real audit trail rather than
+    # overwriting history.
+    backtest_result_id: uuid.UUID | None = None
 
 
 def _persist_strategy_progress(
-    session: Session, *, node_name: str, output: dict[str, Any], tracking: _StrategyTracking
+    session: Session,
+    *,
+    node_name: str,
+    output: dict[str, Any],
+    tracking: _StrategyTracking,
+    agent_run_id: uuid.UUID,
 ) -> None:
     """Real persistence for DB-005/DB-006 (Strategy/StrategyVersion, src/models/strategy.py):
     before this, nothing in the codebase ever wrote a row to either table (confirmed by
@@ -210,6 +247,92 @@ def _persist_strategy_progress(
             version_row.python_code, strategy_version_id=str(version_row.id)
         )
         strategy_row.status = "Backtesting"
+        return
+
+    if node_name == "backtesting" and "backtest_metrics" in output:
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if (
+            strategy_row is None
+            or strategy_row.current_version_id is None
+            or not strategy_row.universe
+        ):
+            return
+        lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+        date_to = lake.latest_date(strategy_row.universe[0])
+        if date_to is None:
+            return
+        metrics = output["backtest_metrics"]
+        result = BacktestResult(
+            strategy_version_id=strategy_row.current_version_id,
+            agent_run_id=agent_run_id,
+            date_from=date_to - timedelta(days=DEFAULT_BACKTEST_LOOKBACK_DAYS),
+            date_to=date_to,
+            initial_capital=DEFAULT_INITIAL_CAPITAL,
+            sharpe_ratio=metrics.sharpe_ratio,
+            sortino_ratio=metrics.sortino_ratio,
+            calmar_ratio=metrics.calmar_ratio,
+            max_drawdown=metrics.max_drawdown,
+            cagr=metrics.cagr,
+            win_rate=metrics.win_rate,
+            profit_factor=metrics.profit_factor,
+            expectancy=metrics.expectancy,
+            total_trades=metrics.total_trades,
+        )
+        session.add(result)
+        session.flush()
+        tracking.backtest_result_id = result.id
+        return
+
+    if tracking.backtest_result_id is None:
+        return  # backtesting hasn't produced a row this cycle (or its lookups failed)
+
+    if node_name == "evaluator" and "evaluation_verdict" in output:
+        result_row = session.get(BacktestResult, tracking.backtest_result_id)
+        verdict = output["evaluation_verdict"]
+        if result_row is not None:
+            result_row.evaluation_verdict = verdict.verdict
+            result_row.evaluation_failure_reasons = verdict.failure_reasons or None
+        if verdict.verdict == "PASS":
+            strategy_row = session.get(Strategy, tracking.strategy_id)
+            if strategy_row is not None:
+                strategy_row.status = "Optimizing"
+        # FAIL: no status change -- the strategy stays "Backtesting" while the loop regenerates.
+        return
+
+    if node_name == "optimization" and "optimization_result" in output:
+        result_row = session.get(BacktestResult, tracking.backtest_result_id)
+        opt = output["optimization_result"]
+        if result_row is not None:
+            result_row.optimization_best_params = opt.best_params or None
+            result_row.optimization_robustness_score = opt.robustness_score
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is not None:
+            strategy_row.status = "RiskReview"
+        return
+
+    if node_name == "risk_manager" and "risk_assessment" in output:
+        result_row = session.get(BacktestResult, tracking.backtest_result_id)
+        risk = output["risk_assessment"]
+        if result_row is not None:
+            result_row.risk_assessment_passed = risk.decision != "Reject"
+            result_row.risk_assessment_notes = risk.narrative
+        return
+
+    if node_name == "deployment" and "deployment_recommendation" in output:
+        result_row = session.get(BacktestResult, tracking.backtest_result_id)
+        rec = output["deployment_recommendation"]
+        if result_row is not None:
+            result_row.deployment_recommendation = rec.recommended_status
+            result_row.deployment_rationale = rec.rationale
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is not None:
+            # "Live" is never written here or anywhere in this pipeline -- that transition is
+            # permanently reserved for the RBAC-gated /strategies/{id}/promote endpoint
+            # (Business Rule 3, human-in-the-loop).
+            strategy_row.status = (
+                "PaperTrading" if rec.recommended_status == "PaperTrading" else "Deprecated"
+            )
+        return
 
 
 def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
@@ -228,12 +351,13 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
                 now_wall = datetime.now(UTC)
                 summary = _summarize_node_output(node_name, output)
 
+                jsonable_output = {k: _jsonable(v) for k, v in output.items()}
                 with get_session() as session:
                     child = AgentRun(
                         graph_thread_id=thread_id,
                         agent_name=node_name,
                         parent_run_id=root_run_id,
-                        output_state={k: _jsonable(v) for k, v in output.items()},
+                        output_state=jsonable_output,
                         status="Completed",
                         started_at=checkpoint_wall,
                         ended_at=now_wall,
@@ -249,7 +373,21 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
                         )
                     )
                     _persist_strategy_progress(
-                        session, node_name=node_name, output=output, tracking=tracking
+                        session,
+                        node_name=node_name,
+                        output=output,
+                        tracking=tracking,
+                        agent_run_id=child.id,
+                    )
+                    write_audit_entry(
+                        session,
+                        actor_type="AI Agent",
+                        actor_id=node_name,
+                        action=f"GRAPH_NODE_{node_name.upper()}_COMPLETED",
+                        entity_type="AgentRun",
+                        entity_id=child.id,
+                        after_state=jsonable_output,
+                        prompt_snapshot=summary,
                     )
                     session.commit()
 
@@ -377,10 +515,19 @@ def _to_summary(run: AgentRun) -> AgentRunSummary:
 
 @router.get("/runs", response_model=list[AgentRunSummary])
 def list_runs() -> list[AgentRunSummary]:
+    """Root runs of the main strategy-generation graph specifically -- REL-008 added its own
+    separate root-level AgentRun rows for `/ml/models/train`/`/ml/rl/train` dispatches (also
+    `parent_run_id IS NULL`, since they're independent small graphs, not children of this one),
+    so `parent_run_id IS NULL` alone is no longer a correct proxy for "a TradingOSGraph run" --
+    this endpoint's own real contract (confirmed by its pre-existing test) is scoped to this
+    graph, not "every kind of root-level orchestration run" in the ledger."""
     with get_session() as session:
         roots = session.scalars(
             select(AgentRun)
-            .where(AgentRun.parent_run_id.is_(None))
+            .where(
+                AgentRun.parent_run_id.is_(None),
+                AgentRun.agent_name == GRAPH_ROOT_AGENT_NAME,
+            )
             .order_by(AgentRun.started_at.desc())
             .limit(20)
         )

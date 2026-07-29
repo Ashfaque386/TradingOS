@@ -24,11 +24,19 @@ dependencies = [
     "redis>=5.2",
     "httpx>=0.27",
     "structlog>=24.4",
-    "python-jose[cryptography]>=3.3",
+    # REL-007 E7.2: JWTs are now hand-built JWS (src/core/security.py) signed via Vault Transit
+    # (src/core/vault_transit.py), not python-jose -- that dependency is gone. `cryptography` is
+    # now a direct import (DER<->raw ECDSA signature conversion, local public-key verification),
+    # not just a transitive dep of the removed python-jose[cryptography] extra.
+    "cryptography>=43",
     # Not passlib[bcrypt]: passlib 1.7.4 (its last release) is broken against bcrypt>=4.1 (see
     # src/core/security.py's module docstring) -- calling the bcrypt package directly instead.
     "bcrypt>=4.1",
-    "hvac>=2.3",  # HashiCorp's official Vault client (src/core/vault.py)
+    "hvac>=2.3",  # HashiCorp's official Vault client (src/core/vault.py, src/core/vault_transit.py)
+    # REL-007 E7.1 (MFA, SEC-014): TOTP generation/verification.
+    "pyotp>=2.9",
+    # REL-007 E7.5 (SEC-017): policy-file RBAC, replacing scattered `if role ==` checks.
+    "casbin>=1.36",
     "yfinance>=0.2",
     "litellm>=1.52",
     "pyyaml>=6.0",
@@ -65,6 +73,45 @@ dependencies = [
     # WS).
     "textual>=0.85",
     "websockets>=13.0",
+    # REL-005 E5.6 (Scheduler Agent, AGT-025). In-process APScheduler, not a Temporal Schedule --
+    # the `temporal` compose service runs `start-dev` with in-memory persistence (no
+    # --db-filename), so a Temporal Schedule object would vanish on every container restart,
+    # which a simple daily cron trigger can't tolerate.
+    "apscheduler>=3.10",
+    # REL-005 live E2E verification (2026-07-25): a real, local "local" EMBEDDING_PROVIDER
+    # (src/memory/embeddings.py) -- HuggingFace's hosted Inference API rejects every embedding
+    # model for this free-tier account (isPro=false, canPay=false, an account gate confirmed
+    # earlier in Phase 2 E2.4 and re-confirmed here), and the local Ollama embedding call was
+    # unreliable on this machine. sentence-transformers runs the same all-MiniLM-L6-v2 model
+    # in-process on CPU -- no external API, no billing gate, no network dependency at all.
+    "sentence-transformers>=3.0",
+    # REL-008 (Machine Learning Platform). MLflow tracking-server client (docker-compose.yml's
+    # `mlflow` service) -- experiment tracking, metrics/params/artifacts, Staging/Production/
+    # Archived model registry.
+    "mlflow>=2.17",
+    # REL-008 E8.2: LightGBM tabular classification/regression training.
+    "lightgbm>=4.5",
+    # REL-008 E8.2 (TFT) / E8.4 (RL policy nets). Already installed transitively (via
+    # sentence-transformers) and already runs correctly in CPU-only mode on this host -- promoted
+    # to a direct, documented dependency now that this project's own code imports it.
+    "torch>=2.5",
+    # REL-008 E8.3: ONNX export + ONNX Runtime serving (Phase_5_Machine_Learning_Architecture.md
+    # §5, <10ms inference target / >50ms fallback trip-wire).
+    "onnx>=1.17",
+    "onnxruntime>=1.19",
+    # LightGBM->ONNX conversion path -- flagged as the one genuinely fragile dependency in this
+    # release (real history of breaking across LightGBM booster-format versions); the
+    # torch.onnx.export path (native, no third-party converter) is the fallback if it proves
+    # unworkable at implementation time.
+    "onnxmltools>=1.13",
+    # REL-008 E8.4: the RL environment (Gymnasium) + PPO/SAC training (stable-baselines3, used
+    # directly rather than via FinRL -- FinRL's own pins fight this project's newer pandas/numpy).
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    # REL-008 E8.5: Jensen-Shannon divergence for drift detection. Already installed transitively
+    # (via vectorbt/sentence-transformers) -- promoted to a direct, documented dependency now that
+    # this project's own code imports it.
+    "scipy>=1.14",
 ]
 
 [project.optional-dependencies]
@@ -144,7 +191,51 @@ module = "hvac.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "jose.*"
+module = "apscheduler.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pyotp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "casbin.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mlflow.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "lightgbm.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "onnx.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "onnxruntime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "onnxmltools.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "gymnasium.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "stable_baselines3.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "scipy.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

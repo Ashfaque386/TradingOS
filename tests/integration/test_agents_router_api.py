@@ -26,7 +26,11 @@ def test_graph_topology_reflects_the_real_compiled_graph():
         "strategy_generator",
         "python_code_generator",
         "python_validator",
-        "await_backtesting",
+        "backtesting",
+        "evaluator",
+        "optimization",
+        "risk_manager",
+        "deployment",
     } <= node_ids
     retry_edges = [
         e

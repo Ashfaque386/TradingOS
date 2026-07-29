@@ -23,6 +23,11 @@ client = TestClient(app)
 
 
 def test_login_with_correct_credentials_returns_a_real_usable_token():
+    # MFA enforcement is currently disabled for every role (src/core/security.py::
+    # MFA_MANDATORY_ROLES, turned off 2026-07-28 per explicit user request -- the real
+    # enroll/confirm/verify machinery is untouched and still separately tested in
+    # tests/integration/test_mfa_api.py). While disabled, login returns a real usable token
+    # directly for every role, same as REL-004's original baseline behavior.
     email = f"login-test-{uuid.uuid4()}@example.invalid"
     password = "a-real-password-123"
     user_id = uuid.uuid4()
@@ -43,6 +48,8 @@ def test_login_with_correct_credentials_returns_a_real_usable_token():
         body = response.json()
         assert body["role"] == ROLE_SYSTEM_ADMINISTRATOR
         assert body["user_id"] == str(user_id)
+        assert body["mfa_required"] is False
+        assert body["access_token"] is not None
 
         me_response = client.get("/api/v1/auth/me", headers=auth_header(body["access_token"]))
         assert me_response.status_code == 200

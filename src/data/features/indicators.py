@@ -45,6 +45,17 @@ def bollinger_bands(
     return upper, middle, lower
 
 
+def macd(
+    df: pl.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9, column: str = "close"
+) -> tuple[pl.Series, pl.Series, pl.Series]:
+    """Returns (macd_line, signal_line, histogram)."""
+    macd_line = ema(df, fast, column) - ema(df, slow, column)
+    signal_df = pl.DataFrame({column: macd_line})
+    signal_line = ema(signal_df, signal, column)
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
 def with_indicators(df: pl.DataFrame) -> pl.DataFrame:
     """Returns `df` with sma_20, ema_20, rsi_14, atr_14, bb_upper/mid/lower columns appended."""
     bb_upper, bb_mid, bb_lower = bollinger_bands(df)

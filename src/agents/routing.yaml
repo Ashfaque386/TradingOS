@@ -5,11 +5,21 @@
 #
 # `ollama` needs no key and is deliberately kept as a last-resort entry in every chain so a
 # call always has somewhere to land in dev, even before any cloud provider key is configured.
+#
+# 2026-07-25 (REL-005 live E2E verification): `huggingface` (meta-llama/Llama-3.3-70B-Instruct,
+# already real and verified working -- Phase 2 E2.2) was promoted ahead of `opencode` in every
+# chain below. `opencode`'s configured key has no payment method attached (real
+# AuthenticationError, not a code bug) and Ollama's local fallback was timing out at the full
+# 600s per call on this machine -- together these made a real end-to-end graph run take 10+
+# minutes per node just to fail through both. huggingface is free, real, and fast; kept as a
+# free alternative ahead of the paid/slow entries, which stay in the chain as further fallbacks.
 coding:
   - provider: anthropic
     model: claude-3-7-sonnet-20250219
   - provider: deepseek
     model: deepseek-reasoner
+  - provider: huggingface
+    model: meta-llama/Llama-3.3-70B-Instruct
   - provider: opencode
     model: claude-opus-4-8
   - provider: ollama
@@ -17,6 +27,8 @@ coding:
 orchestration:
   - provider: openai
     model: gpt-4o
+  - provider: huggingface
+    model: meta-llama/Llama-3.3-70B-Instruct
   - provider: opencode
     model: gpt-5.4-nano
   - provider: ollama
@@ -35,6 +47,8 @@ research:
     model: claude-3-7-sonnet-20250219
   - provider: gemini
     model: gemini-1.5-pro
+  - provider: huggingface
+    model: meta-llama/Llama-3.3-70B-Instruct
   - provider: opencode
     model: gpt-5.4-nano
   - provider: ollama
@@ -44,6 +58,8 @@ chat:
     model: gpt-4o
   - provider: anthropic
     model: claude-3-7-sonnet-20250219
+  - provider: huggingface
+    model: meta-llama/Llama-3.3-70B-Instruct
   - provider: opencode
     model: gpt-5.4-nano
   - provider: ollama

@@ -25,6 +25,7 @@ def test_ceo_agent_node_parses_valid_directive():
     assert result["research_directive"].market_regime == "Bullish"
     assert result["research_directive"].is_fallback_directive is False
     assert mock_complete.call_args.args[0] == "orchestration"
+    assert result["strategy_rejection_count"] == 0
 
 
 def test_ceo_agent_node_falls_back_on_llm_failure():
@@ -33,6 +34,16 @@ def test_ceo_agent_node_falls_back_on_llm_failure():
 
     assert result["research_directive"].is_fallback_directive is True
     assert result["research_directive"].market_regime == "Sideways"
+
+
+def test_ceo_agent_node_resets_rejection_count_on_escalated_reentry():
+    """The 5-consecutive-rejection escalation (REL-005 E5.2) re-enters here; a fresh cycle with
+    loosened constraints deserves a fresh 5-strikes budget, not an already-tripped counter."""
+    escalated_state = TradingOSGraphState(thread_id="t1", strategy_rejection_count=5)
+    with patch("src.agents.nodes.ceo.complete", side_effect=RuntimeError("LLM down")):
+        result = ceo_agent_node(escalated_state)
+
+    assert result["strategy_rejection_count"] == 0
 
 
 def test_ceo_agent_node_falls_back_on_malformed_json():

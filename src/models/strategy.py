@@ -1,8 +1,8 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin, UUIDPKMixin
@@ -86,3 +86,15 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     monte_carlo_p95_max_drawdown: Mapped[float | None] = mapped_column(Numeric(6, 3))
     recommendation: Mapped[str | None] = mapped_column(String(20))
     equity_curve_path: Mapped[str | None] = mapped_column(String(255))
+    # REL-005: extends this one row to carry the whole downstream pipeline's outcome for the
+    # run it belongs to (Evaluator/Optimization/RiskManager/Deployment) -- Phase_11's DB design
+    # doc has no dedicated tables for these, and one backtest_results row per run is already the
+    # natural anchor, so new tables weren't invented for them.
+    evaluation_verdict: Mapped[str | None] = mapped_column(String(10))
+    evaluation_failure_reasons: Mapped[list[str] | None] = mapped_column(JSONB)
+    optimization_best_params: Mapped[dict[str, float] | None] = mapped_column(JSONB)
+    optimization_robustness_score: Mapped[float | None] = mapped_column(Numeric(6, 3))
+    risk_assessment_passed: Mapped[bool | None] = mapped_column(Boolean)
+    risk_assessment_notes: Mapped[str | None] = mapped_column(Text)
+    deployment_recommendation: Mapped[str | None] = mapped_column(String(20))
+    deployment_rationale: Mapped[str | None] = mapped_column(Text)

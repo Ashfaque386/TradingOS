@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from src.api.deps import require_role
+from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
@@ -54,7 +55,7 @@ from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 
-_can_promote = require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER)
+_can_promote = require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, audit_denials=True)
 
 DEFAULT_BACKTEST_LOOKBACK_DAYS = 365
 DEFAULT_INITIAL_CAPITAL = 100_000.0
@@ -408,6 +409,17 @@ def promote_strategy(
             )
         if strategy.current_version_id is None:
             raise HTTPException(status_code=409, detail="Strategy has no code version yet")
+        old_status = strategy.status
         strategy.status = body.to_status
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="STRATEGY_PROMOTED",
+            entity_type="Strategy",
+            entity_id=strategy.id,
+            before_state={"status": old_status},
+            after_state={"status": body.to_status},
+        )
         session.commit()
         return _to_summary(strategy)

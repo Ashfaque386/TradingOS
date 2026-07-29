@@ -10,17 +10,22 @@ from src.models.base import Base
 from src.models.chat import ChatMessage
 from src.models.ml import MLModel
 from src.models.paper_trading import PaperTrade
+from src.models.refresh_token import RefreshToken
+from src.models.risk_limit_change_request import RiskLimitChangeRequest
 from src.models.shadow_mode import ShadowModeAttempt
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
 from src.models.trading import Order, PortfolioPosition, RiskLimit, Trade
-from src.models.user import NotificationChannel, User
+from src.models.user import MfaBackupCode, NotificationChannel, User
 from src.models.webhook import WebhookEvent
 
 __all__ = [
     "Base",
     "User",
     "NotificationChannel",
+    "MfaBackupCode",
+    "RefreshToken",
+    "RiskLimitChangeRequest",
     "Account",
     "BrokerCredential",
     "Strategy",

@@ -1,22 +1,14 @@
-"""src/core/security.py unit tests (Phase 4 exit-criteria gap: JWT auth). Covers the real
-password-hashing bug found and fixed this session (passlib 1.7.4 broken against bcrypt>=4.1 --
-see the module docstring) via a password right at bcrypt's 72-byte limit, and real JWT
-create/decode round-trips including expiry.
+"""src/core/security.py unit tests: password hashing only. JWT create/decode round-trips moved
+to tests/integration/test_vault_transit.py (REL-007 E7.2) -- they now sign/verify via a real
+Vault Transit key and can no longer run hermetically without live Vault.
+
+Covers the real password-hashing bug found and fixed earlier this session (passlib 1.7.4 broken
+against bcrypt>=4.1 -- see the module docstring) via a password right at bcrypt's 72-byte limit.
 """
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
-from jose import jwt
 
-from src.core.config import get_settings
-from src.core.security import (
-    InvalidTokenError,
-    create_access_token,
-    decode_access_token,
-    hash_password,
-    verify_password,
-)
+from src.core.security import hash_password, verify_password
 
 
 def test_a_correct_password_verifies_and_a_wrong_one_does_not():
@@ -42,35 +34,3 @@ def test_two_hashes_of_the_same_password_differ_real_random_salt():
     assert a != b
     assert verify_password("same-password", a)
     assert verify_password("same-password", b)
-
-
-def test_a_real_token_round_trips_with_its_claims_intact():
-    token = create_access_token(
-        user_id="11111111-1111-1111-1111-111111111111", role="SystemAdministrator"
-    )
-    payload = decode_access_token(token)
-    assert payload["sub"] == "11111111-1111-1111-1111-111111111111"
-    assert payload["role"] == "SystemAdministrator"
-
-
-def test_an_expired_token_is_rejected():
-    # Encodes directly with jose rather than create_access_token, so the token's `exp` claim can
-    # be set in the past without needing to fake the system clock.
-    settings = get_settings()
-    now = datetime.now(UTC)
-    payload = {
-        "sub": "11111111-1111-1111-1111-111111111111",
-        "role": "PortfolioManager",
-        "iat": now - timedelta(minutes=30),
-        "exp": now - timedelta(minutes=15),
-    }
-    expired_token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
-    with pytest.raises(InvalidTokenError):
-        decode_access_token(expired_token)
-
-
-def test_a_tampered_token_is_rejected():
-    token = create_access_token(user_id="11111111-1111-1111-1111-111111111111", role="RiskManager")
-    tampered = token[:-4] + ("A" * 4 if token[-4:] != "AAAA" else "BBBB")
-    with pytest.raises(InvalidTokenError):
-        decode_access_token(tampered)

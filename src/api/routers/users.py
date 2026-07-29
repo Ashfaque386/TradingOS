@@ -4,14 +4,17 @@ manages accounts; nothing in the matrix grants any other role user-creation righ
 """
 
 import uuid
+from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 
 from src.api.deps import require_role
 from src.core.db import get_session
 from src.core.security import ALL_ROLES, ROLE_SYSTEM_ADMINISTRATOR, hash_password
+from src.models.refresh_token import RefreshToken
 from src.models.user import User
 
 router = APIRouter(
@@ -78,3 +81,25 @@ def create_user(body: CreateUserRequest) -> UserResponse:
             role=user.role,
             is_active=user.is_active,
         )
+
+
+class RevokeSessionsResponse(BaseModel):
+    revoked_count: int
+
+
+@router.post("/{user_id}/revoke-sessions", response_model=RevokeSessionsResponse)
+def revoke_sessions(user_id: uuid.UUID) -> RevokeSessionsResponse:
+    """REL-007 E7.3: bulk-revokes every non-revoked refresh token across every rotation family
+    for a user -- real admin recovery action once refresh_tokens exists to act on (router-level
+    require_role above already restricts this whole router to SystemAdministrator)."""
+    with get_session() as session:
+        result = cast(
+            "CursorResult[Any]",
+            session.execute(
+                update(RefreshToken)
+                .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+                .values(revoked_at=datetime.now(UTC), revoked_reason="ADMIN_REVOKED")
+            ),
+        )
+        session.commit()
+        return RevokeSessionsResponse(revoked_count=result.rowcount)

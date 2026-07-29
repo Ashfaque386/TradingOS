@@ -42,3 +42,20 @@ class NotificationChannel(Base, UUIDPKMixin, TimestampMixin):
     preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
     user: Mapped["User"] = relationship(back_populates="notification_channels")
+
+
+class MfaBackupCode(Base, UUIDPKMixin, TimestampMixin):
+    """REL-007 E7.1 (SEC-014): one-time recovery codes for a user's TOTP factor, bcrypt-hashed
+    (never stored/returned in plaintext after enrollment). Durable in Postgres deliberately,
+    unlike the TOTP secret itself (Vault KV, secret/mfa-secrets/<user_id>) -- these are the real
+    recovery path when dev Vault's in-memory storage gets wiped and takes every enrolled user's
+    TOTP secret with it (see src/core/vault_transit.py's module docstring for the same
+    Vault-wipe consequence on JWT signing)."""
+
+    __tablename__ = "mfa_backup_codes"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    code_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    used_at: Mapped[datetime | None]

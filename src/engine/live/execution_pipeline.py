@@ -28,11 +28,15 @@ without changing this class.
 
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderResponse, OrderType, Side
+from src.core.audit import write_audit_entry
+from src.core.db import get_session
+from src.engine.risk.compliance_checker import evaluate_compliance
 from src.engine.risk.kill_switch import MaxDrawdownKillSwitch
+from src.engine.risk.naked_options_scanner import OptionLeg
 from src.engine.risk.ws_latency_guard import WebSocketLatencyGuard
 from src.observability.tracing import get_tracer
 
@@ -53,10 +57,54 @@ class TradeSignal:
     quantity: int
     order_type: OrderType = "MARKET"
     limit_price: float | None = None
+    # REL-006 E6.1: optional data for the Compliance Agent's pre-trade check
+    # (src/engine/risk/compliance_checker.py). Both default to None so every existing caller/
+    # test is unaffected -- a signal_generator that doesn't supply them simply gets an honestly
+    # unchecked circuit-filter/naked-options result, never a fabricated Pass.
+    reference_price: float | None = None
+    option_legs: list[OptionLeg] | None = None
 
 
 class RiskRejected(Exception):
     """Raised when a signal fails a hardcoded risk check and must not reach the broker."""
+
+
+def compliance_pre_trade_check(signal: TradeSignal) -> None:
+    """REL-006 E6.1 (AGT-020): a `PreTradeCheck`-shaped adapter around the deterministic
+    `evaluate_compliance()` core (src/engine/risk/compliance_checker.py), reused unmodified --
+    no compliance rule logic is duplicated here.
+
+    On `Block`, writes the real AuditLog entry itself, synchronously, before raising
+    `RiskRejected` -- a Block here means no Order row will ever exist for this signal (it never
+    reaches `self.broker.place_order`), so this AuditLog entry is the *only* persisted record of
+    the rejection. Pass this function in `LiveExecutionPipeline(pre_trade_checks=[...])` to wire
+    it in; `_run_risk_checks` already runs every `pre_trade_checks` entry before an
+    `OrderRequest` is even constructed, so a Block structurally cannot reach the broker."""
+    verdict = evaluate_compliance(
+        symbol=signal.symbol,
+        quantity=signal.quantity,
+        reference_price=signal.reference_price,
+        limit_price=signal.limit_price,
+        option_legs=signal.option_legs,
+    )
+    if verdict.verdict == "Block":
+        with get_session() as session:
+            write_audit_entry(
+                session,
+                actor_type="System",
+                actor_id="compliance_checker",
+                action="ORDER_BLOCKED_COMPLIANCE",
+                entity_type="TradeSignal",
+                after_state={
+                    "symbol": signal.symbol,
+                    "side": signal.side,
+                    "quantity": signal.quantity,
+                    "violations": [asdict(v) for v in verdict.violations],
+                },
+            )
+            session.commit()
+        detail = "; ".join(v.detail for v in verdict.violations)
+        raise RiskRejected(f"Compliance block for {signal.symbol}: {detail}")
 
 
 @dataclass

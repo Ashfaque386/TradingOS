@@ -51,3 +51,13 @@ class DataLake:
         if df.height == 0:
             return None
         return cast(date, df.select(pl.col("date").max()).item())
+
+    def list_symbols(self) -> list[str]:
+        """Every symbol actually ingested into this data lake -- read directly off the real
+        Parquet partition filenames (`<root>/<year>/<month>/<SYMBOL>.parquet`), not a
+        configured/expected watchlist. REL-005 E5.6 uses this so the Scheduler's daily Data
+        Freshness gate (Business Rule 4) checks against symbols that genuinely exist, rather
+        than a fabricated universe."""
+        if not self.root.exists():
+            return []
+        return sorted({p.stem for p in self.root.glob("*/*/*.parquet")})

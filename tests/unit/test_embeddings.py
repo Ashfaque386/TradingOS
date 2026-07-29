@@ -21,8 +21,31 @@ def test_default_provider_is_ollama_no_key_needed():
 
 def test_get_embedding_dim_varies_by_provider():
     assert get_embedding_dim(_settings(embedding_provider="huggingface")) == 384
+    assert get_embedding_dim(_settings(embedding_provider="local")) == 384
     assert get_embedding_dim(_settings(embedding_provider="openai")) == 1536
     assert get_embedding_dim(_settings(embedding_provider="gemini")) == 768
+
+
+def test_local_provider_embeds_in_process_no_network_call():
+    """REL-005 live E2E verification: sentence-transformers runs locally on CPU, bypassing
+    both Ollama's unreliable embedding call and HuggingFace's hosted-API account-tier gate."""
+    from src.memory.embeddings import embed_text, embed_texts
+
+    local_settings = _settings(embedding_provider="local")
+    with (
+        patch("src.memory.embeddings.litellm.embedding") as mock_litellm,
+        patch("src.memory.embeddings.get_settings", return_value=local_settings),
+    ):
+        vector = embed_text("a real strategy hypothesis about momentum breakouts")
+
+    assert len(vector) == 384
+    assert all(isinstance(v, float) for v in vector)
+    mock_litellm.assert_not_called()  # the whole point: no external API call at all
+
+    with patch("src.memory.embeddings.get_settings", return_value=local_settings):
+        vectors = embed_texts(["first text", "second text"])
+    assert len(vectors) == 2
+    assert len(vectors[0]) == 384
 
 
 def test_ollama_kwargs_need_no_key():

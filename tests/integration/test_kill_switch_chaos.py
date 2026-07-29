@@ -130,7 +130,8 @@ def test_kill_switch_liquidates_positions_despite_a_redis_partition():
             assert order.status == "CANCELLED"
             assert position.net_quantity == 0
     finally:
-        kill_switch_service.reset()
+        with get_session() as session:
+            kill_switch_service.reset(session)
         with get_session() as session:
             session.query(Order).filter(Order.id == order_id).delete()
             session.query(PortfolioPosition).filter(PortfolioPosition.id == position_id).delete()

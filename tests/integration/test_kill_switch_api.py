@@ -14,6 +14,7 @@ from src.core.db import get_session
 from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
 from src.engine.risk import kill_switch_service
 from src.models.account import Account
+from src.models.audit import AuditLog
 from src.models.strategy import Strategy
 from src.models.trading import Order, PortfolioPosition
 from src.models.user import User
@@ -137,6 +138,16 @@ def test_kill_switch_trip_status_and_reset_end_to_end():
         assert status_after_trip.json()["state"] == "TRIPPED"
         assert status_after_trip.json()["tripped_at"] is not None
 
+        with get_session() as session:
+            audit_rows = list(
+                session.query(AuditLog)
+                .filter(AuditLog.action == "KILL_SWITCH_TRIPPED")
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+            )
+            assert len(audit_rows) == 1
+            assert audit_rows[0].entry_hash is not None
+
         reset_without_confirmation = client.post(
             "/api/v1/system/kill-switch/reset", json={"confirmation": False}, headers=headers
         )
@@ -151,6 +162,7 @@ def test_kill_switch_trip_status_and_reset_end_to_end():
         status_after_reset = client.get("/api/v1/system/kill-switch/status")
         assert status_after_reset.json()["state"] == "ARMED"
     finally:
-        kill_switch_service.reset()
+        with get_session() as session:
+            kill_switch_service.reset(session)
         _cleanup_fixture_rows(*ids)
         cleanup_user(admin_id)

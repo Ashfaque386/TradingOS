@@ -10,10 +10,10 @@ Scope, deliberately reduced from the full Phase_12_Security_Design.md §3 design
     container on a dev machine, never acceptable for production.
   - Broker credentials (Zerodha/Upstox) and LLM provider API keys (OpenAI/Anthropic/DeepSeek/
     Gemini/HuggingFace/OpenCode Zen -- REL-002 E2.2) are both wired through Vault here, via the
-    same generic KV v2 read/write helpers (`_read_secret`/`_write_secret`). The JWT signing key
-    (src/core/security.py) still comes from `Settings.jwt_secret_key`, NOT Vault's Transit
-    engine (SEC-011) -- Transit-based signing-key issuance/rotation stays deferred, same as
-    already documented in security.py's own module docstring (that's REL-007 E7.2 scope).
+    same generic KV v2 read/write helpers (`_read_secret`/`_write_secret`). JWT signing
+    (src/core/security.py) uses Vault's Transit engine, not this module's KV-v2 helpers --
+    see src/core/vault_transit.py (REL-007 E7.2), which is deliberately fail-CLOSED rather than
+    fail-open like everything else in this file.
   - No DB-004 BROKER_CREDENTIALS Postgres pointer table yet (Phase_11_Database_Design.md §2.2:
     a Postgres row holding a `vault_secret_path` pointer, never the secret itself). Secrets are
     read directly from Vault by a fixed KV path per broker/provider (`secret/broker-credentials/
@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 _KV_MOUNT = "secret"
 _BROKER_CREDENTIALS_PREFIX = "broker-credentials"
 _LLM_PROVIDER_KEYS_PREFIX = "llm-provider-keys"
+_MFA_SECRETS_PREFIX = "mfa-secrets"
+_WEBHOOK_SECRETS_PREFIX = "webhook-secrets"
 
 
 def _client(settings: Settings) -> hvac.Client | None:
@@ -160,3 +162,47 @@ def read_llm_provider_key(provider: str, *, settings: Settings | None = None) ->
         f"{_LLM_PROVIDER_KEYS_PREFIX}/{provider}", settings=settings or get_settings()
     )
     return stored.get("api_key") if stored else None
+
+
+def write_mfa_secret(user_id: str, totp_secret: str, *, settings: Settings | None = None) -> bool:
+    """REL-007 E7.1 (SEC-014). Uses the same fail-open KV-v2 primitives as everything else in
+    this file -- the fail-*closed* posture MFA actually needs (never silently skip a check for
+    an enrolled user just because Vault is unreachable) is enforced by the caller
+    (src/api/routers/mfa.py), which treats a `None` read as "verification unavailable, 503", not
+    "skip MFA". Keeping this helper itself uniform with its siblings avoids two different
+    fail-open/fail-closed conventions living in the same module."""
+    return _write_secret(
+        f"{_MFA_SECRETS_PREFIX}/{user_id}",
+        {"totp_secret": totp_secret},
+        settings=settings or get_settings(),
+    )
+
+
+def read_mfa_secret(user_id: str, *, settings: Settings | None = None) -> str | None:
+    stored = _read_secret(f"{_MFA_SECRETS_PREFIX}/{user_id}", settings=settings or get_settings())
+    return stored.get("totp_secret") if stored else None
+
+
+def delete_mfa_secret(user_id: str, *, settings: Settings | None = None) -> bool:
+    return _delete_secret(f"{_MFA_SECRETS_PREFIX}/{user_id}", settings=settings or get_settings())
+
+
+def write_webhook_secret(
+    channel: str, secret: dict[str, str], *, settings: Settings | None = None
+) -> bool:
+    """REL-007 E7.7 (SEC-028): "shared secrets/app secrets used for signature verification are
+    themselves stored in Vault (same KV engine as broker keys), never in application config
+    files." `channel` is one of "telegram"/"discord"/"whatsapp"."""
+    return _write_secret(
+        f"{_WEBHOOK_SECRETS_PREFIX}/{channel}", secret, settings=settings or get_settings()
+    )
+
+
+def read_webhook_secret(channel: str, *, settings: Settings | None = None) -> dict[str, str] | None:
+    return _read_secret(f"{_WEBHOOK_SECRETS_PREFIX}/{channel}", settings=settings or get_settings())
+
+
+def delete_webhook_secret(channel: str, *, settings: Settings | None = None) -> bool:
+    return _delete_secret(
+        f"{_WEBHOOK_SECRETS_PREFIX}/{channel}", settings=settings or get_settings()
+    )
