@@ -2,16 +2,17 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# REL-008's `libgomp1` (LightGBM's OpenMP link) and `git` (model-lineage `git rev-parse HEAD`)
+# apt packages were removed 2026-07-30 alongside the ML/RL platform they existed for -- see
+# Phase_5_Machine_Learning_Architecture.md's own status banner. Re-add if Phase 5 comes back.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    # REL-008: LightGBM's Linux wheel dynamically links libgomp.so.1 (OpenMP), not present on
-    # bare python:3.12-slim -- confirmed via a real ImportError without this.
-    libgomp1 \
-    # REL-008: src/ml/training/orchestrator.py shells out to `git rev-parse HEAD` for real
-    # model-lineage tracking (Phase_5 §3) -- the repo's .git dir is bind-mounted into the
-    # container (docker-compose.yml's `.:/app`), but the `git` binary itself isn't on slim.
-    git \
     && rm -rf /var/lib/apt/lists/*
+
+# REL-009 E9.3: python:3.12-slim's bundled pip (25.0.1) has 6 real, known CVEs (found by this
+# release's own new `pip-audit` CI gate) -- fixed for real by upgrading, not suppressed. Placed
+# before the source COPY steps below so ordinary source-only rebuilds don't re-trigger it.
+RUN pip install --no-cache-dir --upgrade "pip>=26.1.2"
 
 COPY pyproject.toml ./
 COPY src ./src
@@ -32,19 +33,20 @@ RUN pip install --no-cache-dir \
     "opentelemetry-instrumentation-httpx>=0.48b0" \
     "opentelemetry-exporter-otlp-proto-http>=1.27" \
     "prometheus-client>=0.21"
-# REL-008 (Machine Learning Platform) -- same isolation reasoning as optuna/otel above, this is
-# the single largest new dependency tree added to this project (torch/lightgbm/mlflow/onnx/
-# gymnasium/stable-baselines3 together).
-RUN pip install --no-cache-dir \
-    "mlflow>=2.17" \
-    "lightgbm>=4.5" \
-    "torch>=2.5" \
-    "onnx>=1.17" \
-    "onnxruntime>=1.19" \
-    "onnxmltools>=1.13" \
-    "gymnasium>=0.29" \
-    "stable-baselines3>=2.3" \
-    "scipy>=1.14"
+# REL-008's ML/RL platform pip-install step (mlflow/lightgbm/torch/onnx/onnxruntime/onnxmltools/
+# gymnasium/stable-baselines3/scipy -- by far the largest dependency tree in this image) was
+# removed 2026-07-30, disabled pending a host resource upgrade -- see
+# Phase_5_Machine_Learning_Architecture.md's own status banner.
+#
+# `sentence-transformers` (kept -- REL-005 local embeddings, unrelated to Phase 5) pulls in
+# `torch` as its own hard dependency regardless, and pip's default index resolves the CUDA-
+# enabled build, which drags in the entire nvidia-cu13* wheel family (cublas/cudnn/cufft/
+# cusolver/triton/...) even though this host has no GPU -- confirmed for real: a first build
+# without this step landed torch-2.13.0 plus ~15 nvidia-cu13* packages, an 11.1GB image.
+# Installing the CPU-only wheel explicitly, before the main install below resolves
+# sentence-transformers' own torch requirement, makes pip find it already satisfied and skip
+# the CUDA build entirely -- the real, direct source of most of this image's remaining size.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
 RUN pip install --no-cache-dir -e ".[dev]"
 
 CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

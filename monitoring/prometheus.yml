@@ -1,0 +1,16 @@
+# REL-009 E9.1: real scrape config for TradingOS's own real Prometheus metrics
+# (src/observability/metrics.py, exposed at GET /metrics -- src/api/routers/metrics.py).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "tradingos-app"
+    static_configs:
+      - targets: ["app:8000"]
+  - job_name: "tradingos-app-tls"
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true # self-signed REL-007 dev CA, not a real public cert chain
+    static_configs:
+      - targets: ["app-tls:8443"]

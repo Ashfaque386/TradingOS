@@ -1,0 +1,12 @@
+apiVersion: v2
+name: tradingos
+description: >-
+  REL-009 E9.7: real, `helm lint`/`helm template`-clean Helm chart for the `tradingos-api`
+  workload (Phase_8_DevOps_Architecture.md §1-§3). Honest scope: this chart is validated with
+  helm's own tooling (no cluster required for that) but is NOT deployed anywhere by this
+  release's real CI/CD pipeline -- see values.yaml's own comment and the REL-009 plan's CD
+  decision for why (this host's Docker Desktop VM is already memory-constrained; a real local
+  kind/minikube cluster on top of it risks the same OOM crashes seen elsewhere this session).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -19,8 +19,6 @@ services:
         condition: service_started
       vault:
         condition: service_started
-      mlflow:
-        condition: service_started
     environment:
       DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
       QDRANT_URL: http://qdrant:6333
@@ -33,8 +31,6 @@ services:
       # Settings if this is unreachable, so it's here but not a hard startup dependency.
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-only-root-token
-      # REL-008 MLflow tracking server (see the `mlflow` service below).
-      MLFLOW_TRACKING_URI: http://mlflow:5000
     ports:
       # Host port moved off the default 8000: another unrelated project on this machine
       # (dataops_backend / ai_data_automation-backend) already binds host 0.0.0.0:8000,
@@ -94,8 +90,6 @@ services:
         condition: service_started
       vault:
         condition: service_started
-      mlflow:
-        condition: service_started
     environment:
       DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
       QDRANT_URL: http://qdrant:6333
@@ -105,8 +99,12 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-only-root-token
-      MLFLOW_TRACKING_URI: http://mlflow:5000
       RUN_SCHEDULER: "false"
+      # REL-009 E9.4: `false` by default (real deployments never set this) -- lets a real ZAP
+      # scan run (scripts/run_zap_scan.sh) be pointed at this real, deliberately-unsafe endpoint
+      # via a shell env var override, without ever baking `true` into this file. See
+      # Settings.zap_test_endpoint_enabled's own docstring (src/core/config.py).
+      ZAP_TEST_ENDPOINT_ENABLED: ${ZAP_TEST_ENDPOINT_ENABLED:-false}
     ports:
       - "8443:8443"
     volumes:
@@ -211,8 +209,6 @@ services:
     depends_on:
       temporal:
         condition: service_started
-      mlflow:
-        condition: service_started
     environment:
       DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
       QDRANT_URL: http://qdrant:6333
@@ -222,7 +218,6 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-only-root-token
-      MLFLOW_TRACKING_URI: http://mlflow:5000
     volumes:
       - .:/app
       - data_lake:/app/data/lake
@@ -250,46 +245,52 @@ services:
     ports:
       - "8200:8200"
 
-  # REL-008 (Machine Learning Platform): real MLflow tracking server -- experiment tracking,
-  # metric/param/artifact logging, and the Staging/Production/Archived model registry
-  # (Phase_5_Machine_Learning_Architecture.md §3). Backend store is its own Postgres *database*
-  # (`mlflow`, on the existing `postgres` service -- run scripts/setup_mlflow_database.py once
-  # before first `up`, since Postgres's auto-init only fires against a fresh empty volume and
-  # `postgres_data` already has data). Artifact root reuses the existing `data_lake` named
-  # volume (no object storage exists in this dev stack) rather than provisioning a new one. The
-  # official image has no Postgres driver bundled, hence the two-line inline build, matching the
-  # trivial-rebuild pattern already used for postgres/qdrant/redis/vault above.
-  mlflow:
-    image: tradingos-mlflow:latest
+  # REL-008's MLflow tracking server was removed 2026-07-30 alongside the rest of the ML/RL
+  # platform (Phase 5), disabled pending a host resource upgrade -- see
+  # Phase_5_Machine_Learning_Architecture.md's own status banner. Re-add when Phase 5 is
+  # re-implemented (git history has the full original service definition).
+
+  # REL-009 E9.1: real Prometheus, scraping the real /metrics endpoint that has existed since
+  # Phase 4 (src/observability/metrics.py) but had nothing scraping it until now.
+  prometheus:
+    image: tradingos-prometheus:latest
     build:
-      dockerfile_inline: |
-        FROM ghcr.io/mlflow/mlflow:latest
-        RUN pip install --no-cache-dir psycopg2-binary
-    container_name: tradingos-mlflow
+      dockerfile_inline: "FROM prom/prometheus:latest"
+    container_name: tradingos-prometheus
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     command:
       [
-        "mlflow", "server",
-        "--backend-store-uri", "postgresql://tradingos:tradingos_dev_password@postgres:5432/mlflow",
-        "--default-artifact-root", "file:///mlflow-artifacts",
-        "--host", "0.0.0.0",
-        "--port", "5000",
-        # MLflow >=3's server ships a DNS-rebinding-protection middleware that otherwise silently
-        # drops (not 403s) any request whose Host header isn't "localhost"/a private IP with no
-        # port suffix -- confirmed empirically (curl to 127.0.0.1:5001 got a bare connection
-        # reset). Explicit allowlist covers both the host-side mapped port and every in-network
-        # container hostname that calls this service, least-privilege rather than `--dev`'s
-        # "disable everything" escape hatch.
-        "--allowed-hosts", "localhost,localhost:5001,127.0.0.1,127.0.0.1:5001,mlflow,mlflow:5000,app,app-tls",
+        "--config.file=/etc/prometheus/prometheus.yml",
+        "--storage.tsdb.path=/prometheus",
+        "--storage.tsdb.retention.time=15d",
       ]
-    ports:
-      # Host 5000 avoided -- commonly bound by unrelated local dev tooling on this machine.
-      - "5001:5000"
     volumes:
-      - data_lake:/mlflow-artifacts
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  # REL-009 E9.1: real Grafana, provisioned as code (datasource + dashboard JSON both auto-
+  # loaded on startup -- no manual click-through setup). Default admin/admin credentials are
+  # dev-only, matching this project's other dev-mode-only services (Vault -dev, self-signed TLS).
+  grafana:
+    image: tradingos-grafana:latest
+    build:
+      dockerfile_inline: "FROM grafana/grafana:latest"
+    container_name: tradingos-grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    ports:
+      # Host 3001 -- 3000 is already bound by `frontend`.
+      - "3001:3000"
 
   # Next.js dashboard (Phase 4 E4.3, Phase_7_Frontend_Architecture.md). Port 3000 confirmed
   # free against every other project running on this machine.
@@ -307,9 +308,14 @@ services:
     restart: unless-stopped
     environment:
       # Read by the BROWSER (Next.js only exposes NEXT_PUBLIC_* vars client-side), so this must
-      # be the host-exposed port (8001), not the in-network "app:8000" hostname -- the browser
-      # runs outside the docker network entirely.
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
+      # be the host-exposed port (8001), not the in-network "app:8000" hostname -- a real host
+      # browser runs outside the docker network entirely. REL-009 E9.6: this default breaks
+      # Cypress running *inside* the docker network (cypress/included's own browser resolves
+      # "localhost" to its own container, not the host) -- confirmed for real, every login.cy.ts
+      # test hung/failed on it. `${NEXT_PUBLIC_API_BASE_URL:-...}` lets the Cypress CI job (and
+      # local Cypress runs) override this to `http://app:8000` via a shell env var before
+      # `docker compose up frontend`, without changing the correct default for real dev usage.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8001}
     ports:
       - "3000:3000"
     volumes:
@@ -335,3 +341,7 @@ volumes:
     name: tradingos_app_data_lake
   frontend_node_modules:
     name: tradingos_app_frontend_node_modules
+  prometheus_data:
+    name: tradingos_app_prometheus_data
+  grafana_data:
+    name: tradingos_app_grafana_data

@@ -1,0 +1,65 @@
+# REL-009 E9.7: real default values for the `tradingos-api` workload
+# (Phase_8_DevOps_Architecture.md §1 names 4 microservices -- tradingos-api/agents/engine/
+# frontend; this chart covers only tradingos-api's own FastAPI process today, the one this
+# release's real CD pipeline actually builds and pushes. The other 3 are honestly out of scope
+# for this pass, not silently assumed covered).
+
+image:
+  # Matches the real image this release's CD job (`.github/workflows/ci.yml`'s `build-and-push`
+  # job) actually builds and pushes -- ghcr.io, not a placeholder registry.
+  repository: ghcr.io/ashfaque386/tradingos
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+containerPort: 8000
+service:
+  type: ClusterIP
+  port: 80
+
+# Real values.yaml env-var names matching src/core/config.py's Settings fields exactly --
+# secrets (DATABASE_URL credentials, VAULT_TOKEN, broker/LLM keys) are deliberately NOT listed
+# here in plaintext; they're expected to come from a real Kubernetes Secret
+# (`envFrom.secretRef`, templates/deployment.yaml) this chart does not itself create, matching
+# the project's standing "secrets never committed" rule.
+env:
+  DATA_LAKE_ROOT: /app/data/lake
+
+# REL-008's ML/RL platform (torch/lightgbm/mlflow) was removed 2026-07-30, disabled pending a
+# host resource upgrade -- see Phase_5_Machine_Learning_Architecture.md's own status banner. The
+# numbers below were originally sized for that heavier workload; they're now a conservative
+# upper bound, not re-measured against the lighter real image -- safe to lower once a real
+# post-removal measurement exists.
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "3Gi"
+
+# Phase_8_DevOps_Architecture.md §3: "The API pods automatically scale up if WebSocket
+# concurrent connections cross 500 per pod." A real HPA resource is templated below, but
+# genuinely CANNOT use that custom metric without a real metrics-adapter (e.g. Prometheus
+# Adapter) deployed and configured against the real Prometheus instance this release's E9.1
+# stood up -- that adapter deployment is a real, separate piece of cluster infrastructure this
+# chart does not include, honestly flagged rather than faked with a CPU-based HPA pretending to
+# be the real spec. `hpa.enabled: false` by default for exactly this reason -- see
+# templates/hpa.yaml's own comment for the exact custom-metric configuration needed to turn it
+# on for real once a metrics-adapter exists.
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetWsConnectionsPerPod: 500
+
+livenessProbe:
+  path: /health
+  initialDelaySeconds: 10
+  periodSeconds: 15
+
+readinessProbe:
+  path: /health
+  initialDelaySeconds: 5
+  periodSeconds: 10

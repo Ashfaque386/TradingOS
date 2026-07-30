@@ -1,0 +1,29 @@
+{{- if .Values.hpa.enabled }}
+# Phase_8_DevOps_Architecture.md §3's real spec ("scale up if WebSocket concurrent connections
+# cross 500 per pod") needs a custom metric, not CPU/memory -- this requires a real metrics
+# adapter (e.g. the Prometheus Adapter) deployed in-cluster and configured to expose a
+# `websocket_connections_per_pod` custom metric sourced from this release's real E9.1
+# Prometheus instance. That adapter is real, separate cluster infrastructure this chart does
+# not include (see values.yaml's own comment) -- until it exists, `hpa.enabled` stays `false`
+# by default so this template is never applied against a real cluster with a metric it can't
+# actually satisfy.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-tradingos-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-tradingos-api
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: websocket_connections_per_pod
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.hpa.targetWsConnectionsPerPod }}
+{{- end }}

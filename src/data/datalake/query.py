@@ -18,20 +18,28 @@ class DataLake:
     def read_symbol(
         self, symbol: str, start: date | None = None, end: date | None = None
     ) -> pl.DataFrame:
+        # REL-009 E9.3: `symbol` can genuinely reach here from an authenticated HTTP request
+        # body (e.g. POST /ml/models/train's `symbols` field) -- a real Bandit B608 finding, not
+        # a false positive, even though today's callers are all trusted/privileged roles.
+        # DuckDB's `?` placeholders work inside table-function arguments too, so the whole query
+        # (including the read_parquet() path) is genuinely parameterized, not string-built.
         pattern = self._glob(symbol)
-        query = f"SELECT * FROM read_parquet('{pattern}')"
+        query = "SELECT * FROM read_parquet(?)"
+        params: list[object] = [pattern]
         clauses = []
         if start is not None:
-            clauses.append(f"date >= '{start.isoformat()}'")
+            clauses.append("date >= ?")
+            params.append(start)
         if end is not None:
-            clauses.append(f"date <= '{end.isoformat()}'")
+            clauses.append("date <= ?")
+            params.append(end)
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY date"
 
         with duckdb.connect() as conn:
             try:
-                return conn.execute(query).pl()
+                return conn.execute(query, params).pl()
             except duckdb.IOException:
                 # No matching partitions yet for this symbol.
                 return pl.DataFrame(

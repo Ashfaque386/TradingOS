@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from src.agents.scheduler import build_scheduler
 from src.api.routers.agents import router as agents_router
@@ -14,7 +15,6 @@ from src.api.routers.chat import router as chat_router
 from src.api.routers.go_live_readiness import router as go_live_readiness_router
 from src.api.routers.metrics import router as metrics_router
 from src.api.routers.mfa import router as mfa_router
-from src.api.routers.ml import router as ml_router
 from src.api.routers.paper_trading import router as paper_trading_router
 from src.api.routers.portfolio import router as portfolio_router
 from src.api.routers.risk_limits import router as risk_limits_router
@@ -70,9 +70,19 @@ app = FastAPI(title="TradingOS API", version="0.1.0", lifespan=lifespan)
 # Dev-only: the Next.js dashboard (Phase 4 E4.3) runs on a different origin
 # (http://localhost:3000) than this API (http://localhost:8001), so the browser needs CORS to
 # call REST endpoints and open WebSocket connections here.
+#
+# REL-009 E9.6: "http://frontend:3000" is the SAME real frontend, reachable from a real browser
+# running *inside* the `tradingos_default` docker network by its docker-network hostname instead
+# of the host-exposed one -- confirmed as the actual root cause of every Cypress login-flow
+# failure this session: a plain curl to the real API succeeded every time (curl doesn't enforce
+# CORS), but the real browser's own fetch() call was silently blocked by this exact
+# allow_origins list not including the origin Cypress's browser actually runs the page from,
+# surfacing as the app's own generic "Incorrect email or password." catch-all error with no
+# other visible symptom. Real E2E test traffic, not a security loosening -- both origins still
+# resolve to the same real dev frontend, never a third party.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://frontend:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -95,10 +105,20 @@ app.include_router(shadow_mode_router)
 app.include_router(go_live_readiness_router)
 app.include_router(audit_router)
 app.include_router(webhooks_router)
-app.include_router(ml_router)
 configure_tracing(app)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+if get_settings().zap_test_endpoint_enabled:
+    # REL-009 E9.4: see Settings.zap_test_endpoint_enabled's own docstring -- exists ONLY to
+    # give the real OWASP ZAP CI job something real to find, proving the scan gate genuinely
+    # detects a real vulnerability rather than just running and reporting zero findings. This
+    # whole route is registered at import time, not per-request, so it's provably absent from
+    # every real app boot where the flag is unset (the default everywhere except that one job).
+    @app.get("/_zap_test/reflect", response_class=HTMLResponse)
+    def _zap_test_reflect(q: str = "") -> str:
+        return f"<html><body>You searched for: {q}</body></html>"  # deliberately unescaped

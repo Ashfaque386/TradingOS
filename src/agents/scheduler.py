@@ -16,8 +16,7 @@ during REL-005 implementation. SRS Workflow 1 is treated as the more authoritati
 since it's echoed by 3 other agent specs, not 1.
 """
 
-from datetime import date, timedelta
-from typing import Literal, cast
+from datetime import date
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -28,7 +27,6 @@ from src.agents.nodes.memory_agent import (
     generate_lessons_learned_summary,
 )
 from src.core.config import get_settings
-from src.core.db import get_session
 from src.data.datalake.freshness import DataFreshnessError, require_fresh
 from src.data.datalake.query import DataLake
 
@@ -37,13 +35,11 @@ logger = structlog.get_logger(__name__)
 IST_TIMEZONE = "Asia/Kolkata"
 DAILY_CYCLE_JOB_ID = "scheduler_daily_research_cycle"
 WEEKEND_MEMORY_JOB_ID = "scheduler_weekend_memory_consolidation"
-# REL-008 E8.5: two distinct retrain triggers reconciling a real Phase_3/Phase_5 design-doc
-# inconsistency (weekly-scheduled retrain uses "the latest week's data" per Phase_3 §7; a
-# drift-triggered retrain uses "the most recent 6 months" per Phase_5 §6) -- both real triggers,
-# both funnel through the same src/ml/training/orchestrator.py::run_training_job(), differing
-# only in window size and trigger_reason.
-WEEKLY_MODEL_RETRAIN_JOB_ID = "scheduler_weekly_model_retrain"
-DRIFT_CHECK_JOB_ID = "scheduler_drift_check"
+# REL-008's weekly-retrain/drift-check jobs (WEEKLY_MODEL_RETRAIN_JOB_ID/DRIFT_CHECK_JOB_ID) were
+# removed 2026-07-30: the whole ML/RL platform (Phase 5) was disabled pending a host resource
+# upgrade -- see Phase_5_Machine_Learning_Architecture.md's own status banner and
+# Phase_14_Master_Development_Roadmap.md's REL-008 section for why. Re-add both jobs (and
+# run_weekly_model_retrain/run_drift_check below) when Phase 5 is re-implemented.
 
 
 def run_daily_research_cycle() -> None:
@@ -83,84 +79,6 @@ def run_weekend_memory_consolidation() -> None:
         logger.warning("scheduler_weekend_memory_job_failed", error=str(exc))
 
 
-def run_weekly_model_retrain() -> None:
-    """REL-008 E8.5 (weekly half): a cheap, small-window retrain over the last week's real data
-    for every real, currently-ingested symbol -- registers a new Staging candidate per symbol,
-    never promotes (promotion is always a separate, human-role-gated API call)."""
-    from src.ml.training.orchestrator import run_training_job
-
-    lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
-    symbols = lake.list_symbols()
-    if not symbols:
-        logger.warning("scheduler_weekly_retrain_skipped", reason="no symbols ingested")
-        return
-
-    today = date.today()
-    window_start = today - timedelta(days=7)
-    trained, failed = [], []
-    for symbol in symbols:
-        try:
-            with get_session() as session:
-                model = run_training_job(
-                    session,
-                    model_type="LightGBM",
-                    task="classification",
-                    symbols=[symbol],
-                    window_start=window_start,
-                    window_end=today,
-                    trigger_reason="weekly_scheduled",
-                )
-                session.commit()
-                trained.append(str(model.id))
-        except Exception as exc:  # noqa: BLE001 - one bad symbol must not abort the whole job
-            logger.warning("scheduler_weekly_retrain_symbol_failed", symbol=symbol, error=str(exc))
-            failed.append(symbol)
-
-    logger.info("scheduler_weekly_retrain_completed", trained=trained, failed=failed)
-
-
-def run_drift_check() -> None:
-    """REL-008 E8.5 (drift half): checks every real Production model for feature drift / rolling-
-    Sharpe degradation, staging a new drift-triggered retrain candidate when triggered. Never
-    promotes -- see check_drift_and_recommend_retrain()'s own docstring."""
-    from sqlalchemy import select
-
-    from src.ml.drift.monitor import check_drift_and_recommend_retrain
-    from src.models.ml import MLModel
-
-    lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
-    symbols = lake.list_symbols()
-    triggered, checked = [], []
-    try:
-        with get_session() as session:
-            production_types = session.scalars(
-                select(MLModel.model_type).where(MLModel.stage == "Production").distinct()
-            ).all()
-            # Drift-triggered retraining only exists for the supervised path (run_training_job()
-            # only knows how to route "LightGBM"/"TFT-PyTorch") -- RL policy types (PPO-RL/
-            # SAC-RL) have no retrain path here and must be skipped, not misrouted into a
-            # supervised training run.
-            supervised_types: list[Literal["LightGBM", "TFT-PyTorch"]] = [
-                cast(Literal["LightGBM", "TFT-PyTorch"], t)
-                for t in production_types
-                if t in ("LightGBM", "TFT-PyTorch")
-            ]
-            for model_type in supervised_types:
-                for symbol in symbols:
-                    result = check_drift_and_recommend_retrain(
-                        session, model_type=model_type, task="classification", symbol=symbol
-                    )
-                    checked.append(symbol)
-                    if result.triggered:
-                        session.commit()
-                        triggered.append(symbol)
-    except Exception as exc:  # noqa: BLE001 - a drift-check failure must not crash the app
-        logger.warning("scheduler_drift_check_failed", error=str(exc))
-        return
-
-    logger.info("scheduler_drift_check_completed", checked=checked, triggered=triggered)
-
-
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST_TIMEZONE)
     scheduler.add_job(
@@ -173,18 +91,6 @@ def build_scheduler() -> AsyncIOScheduler:
         run_weekend_memory_consolidation,
         CronTrigger(day_of_week="sat", hour=2, minute=0, timezone=IST_TIMEZONE),
         id=WEEKEND_MEMORY_JOB_ID,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_weekly_model_retrain,
-        CronTrigger(day_of_week="sun", hour=3, minute=0, timezone=IST_TIMEZONE),
-        id=WEEKLY_MODEL_RETRAIN_JOB_ID,
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_drift_check,
-        CronTrigger(hour=5, minute=0, timezone=IST_TIMEZONE),
-        id=DRIFT_CHECK_JOB_ID,
         replace_existing=True,
     )
     return scheduler

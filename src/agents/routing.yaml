@@ -13,6 +13,14 @@
 # 600s per call on this machine -- together these made a real end-to-end graph run take 10+
 # minutes per node just to fail through both. huggingface is free, real, and fast; kept as a
 # free alternative ahead of the paid/slow entries, which stay in the chain as further fallbacks.
+#
+# 2026-07-30 (user request, HuggingFace Pro billing now enabled): huggingface promoted ahead of
+# `ollama` in every chain below (was already true everywhere except `sentiment`, fixed here) --
+# `ollama` (local) now stays only as the absolute last-resort entry in every chain, not a
+# primary choice, matching "use huggingface instead of local for every task type." Real usage
+# stays bounded by src/agents/llm_router.py's `_hf_usage_tracker`
+# (Settings.hf_daily_token_budget/hf_max_tokens_per_call) -- once that budget is hit for the day,
+# huggingface is treated as unconfigured and these chains fall through to `ollama` automatically.
 coding:
   - provider: anthropic
     model: claude-3-7-sonnet-20250219
@@ -34,12 +42,12 @@ orchestration:
   - provider: ollama
     model: deepseek-r1:latest
 sentiment:
-  - provider: ollama
-    model: deepseek-r1:latest
   - provider: huggingface
     model: meta-llama/Llama-3.3-70B-Instruct
   - provider: gemini
     model: gemini-1.5-flash
+  - provider: ollama
+    model: deepseek-r1:latest
 research:
   - provider: openai
     model: gpt-4o

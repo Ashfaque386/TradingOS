@@ -58,6 +58,29 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "tradingos"
 
+    # REL-009 (2026-07-30): the user enabled HuggingFace Pro billing and asked for huggingface to
+    # replace local Ollama as the default provider for every task type (routing.yaml), with real
+    # usage optimization added so a burst of calls can't silently exhaust the account's real
+    # quota. `hf_max_tokens_per_call` bounds a single call's own cost (applied only when the
+    # caller doesn't already pass its own `max_tokens`); `hf_daily_token_budget` is a soft,
+    # locally-tracked UTC-daily cap (src/agents/llm_router.py's `_hf_usage_tracker`) -- once real
+    # tracked usage reaches it, huggingface is treated as unconfigured for the rest of that day
+    # and every task-type chain naturally falls through to its next configured provider (ollama
+    # last).
+    #
+    # hf_daily_token_budget is a real, sourced calculation, not a guess -- confirmed via HF's own
+    # docs (2026-07-30): the $9/month PRO subscription includes $2.00/month of real Inference
+    # credit (not $9 -- usage beyond that $2 bills pay-as-you-go to the account's card), and the
+    # real routing.yaml model (meta-llama/Llama-3.3-70B-Instruct) prices at ~$0.10/M input tokens
+    # / $0.32/M output tokens via HF's Inference Providers. Per explicit user choice: hard-cap at
+    # the $2/month free credit so real spend never exceeds it. Using the worst-case all-output
+    # rate ($0.32/M) for safety: $2.00 / 30 days / $0.32 per M tokens ~= 208,000 tokens/day,
+    # rounded down to 200,000 -- real usage is never charged more than this represents even if
+    # the actual input/output mix skews toward the pricier output rate. Re-derive by hand if HF's
+    # published PRO credit amount or this model's per-token pricing changes.
+    hf_max_tokens_per_call: int = 1024
+    hf_daily_token_budget: int = 200_000
+
     # Embedding provider for the Qdrant RAG pipeline (Phase 2 E2.4 — see src/memory/embeddings.py).
     # A settings toggle, not a hardcoded choice: switching to huggingface/local/openai/gemini
     # once that provider's key is configured (and billing/quota allows it) is a `.env` change.
@@ -123,11 +146,19 @@ class Settings(BaseSettings):
     # research cycle alongside the primary `app` service.
     run_scheduler: bool = True
 
-    # REL-008 (MLflow tracking server -- see docker-compose.yml's `mlflow` service). A separate
-    # Postgres *database* (not a schema in `tradingos`) is its backend store, and the existing
-    # `data_lake` named volume doubles as its artifact root (no object storage exists in this dev
-    # stack) -- see scripts/setup_mlflow_database.py for the one-time DB-creation step.
-    mlflow_tracking_uri: str = "http://mlflow:5000"
+    # REL-008's `mlflow_tracking_uri` setting (and the whole ML/RL platform it supported) was
+    # removed 2026-07-30, disabled pending a host resource upgrade -- see
+    # Phase_5_Machine_Learning_Architecture.md's own status banner and
+    # Phase_14_Master_Development_Roadmap.md's REL-008 section for why. Re-add when Phase 5 is
+    # re-implemented.
+
+    # REL-009 E9.4: `False` in every real deployment -- gates a single deliberately-unsafe,
+    # test-only endpoint (src/api/main.py's `/_zap_test/reflect`) that exists purely to prove
+    # the real OWASP ZAP CI job (scripts/run_zap_scan.sh) genuinely detects a real
+    # reflected-input vulnerability, not just that it runs and reports zero findings (which
+    # could mean "nothing found" or "not actually scanning," indistinguishable without this).
+    # Set to `True` only inside that one CI job's own environment, never in dev/prod.
+    zap_test_endpoint_enabled: bool = False
 
 
 @lru_cache

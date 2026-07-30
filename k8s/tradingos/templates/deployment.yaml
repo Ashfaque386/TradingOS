@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-tradingos-api
+  labels:
+    app: tradingos-api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: tradingos-api
+  template:
+    metadata:
+      labels:
+        app: tradingos-api
+    spec:
+      containers:
+        - name: tradingos-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.containerPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-tradingos-config
+            # Real secrets (DATABASE_URL, VAULT_TOKEN, broker/LLM keys) come from a real
+            # Kubernetes Secret this chart deliberately does not create -- see values.yaml's
+            # own comment. `optional: true` so `helm template`/`helm lint` (this release's real
+            # CI validation, see ci.yml) don't require a pre-existing Secret to succeed.
+            - secretRef:
+                name: {{ .Release.Name }}-tradingos-secrets
+                optional: true
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.path }}
+              port: {{ .Values.containerPort }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.path }}
+              port: {{ .Values.containerPort }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

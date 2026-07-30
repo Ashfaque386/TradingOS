@@ -150,71 +150,11 @@ class DeploymentRecommendation(StrictModel):
     rationale: str
 
 
-class MLTrainingRequest(StrictModel):
-    """ML Agent input (AGT-017, REL-008 E8.6) -- set by the caller (POST /ml/models/train) before
-    invoking build_supervised_training_graph(); ml_agent_node executes this deterministically,
-    it never chooses its own training target."""
-
-    model_type: Literal["LightGBM", "TFT-PyTorch"]
-    task: Literal["classification", "regression"]
-    symbols: list[str]
-    window_start: str
-    window_end: str
-    trigger_reason: Literal["manual", "weekly_scheduled", "drift_triggered"] = "manual"
-
-
-class MLTrainingResult(StrictModel):
-    """ML Agent output (AGT-017)."""
-
-    ml_model_id: str
-    mlflow_run_id: str
-    model_type: Literal["LightGBM", "TFT-PyTorch"]
-    metrics: dict[str, float] = Field(default_factory=dict)
-    baseline_comparison: dict[str, float] = Field(default_factory=dict)
-    artifact_path: str
-    git_commit_hash: str
-    training_data_hash: str
-    narrative: str
-
-
-class RLTrainingRequest(StrictModel):
-    """RL Agent input (AGT-018, REL-008 E8.6)."""
-
-    algorithm: Literal["PPO", "SAC"]
-    symbols: list[str]
-    window_start: str
-    window_end: str
-    total_timesteps: int
-    seeds: list[int]
-    trigger_reason: Literal["manual", "weekly_scheduled", "drift_triggered"] = "manual"
-
-
-class RLTrainingResult(StrictModel):
-    """RL Agent output (AGT-018)."""
-
-    ml_model_id: str
-    mlflow_run_id: str
-    algorithm: Literal["PPO", "SAC"]
-    reward_mean_by_seed: dict[str, float] = Field(default_factory=dict)
-    reward_variance_cv: float
-    stability_passed: bool
-    backtest_sharpe: float | None = None
-    artifact_path: str
-    narrative: str
-
-
-class ModelEvaluationVerdict(StrictModel):
-    """Model Evaluator Agent output (AGT-019, REL-008 E8.6) -- a recommendation only. Never
-    itself calls POST /ml/models/{id}/promote; promotion is always a separate, human-role-gated
-    (PortfolioManager/SystemAdministrator) call, matching AGT-017/018's own "never promote
-    yourself" prompt lines and this project's standing human-in-the-loop rule."""
-
-    decision: Literal["Promote", "Reject", "Shadow-Test"]
-    candidate_ml_model_id: str
-    production_ml_model_id: str | None = None
-    metric_deltas: dict[str, float] = Field(default_factory=dict)
-    confidence_score: float = Field(ge=0.0, le=1.0)
-    comparison_report: str
+# REL-008's ML/RL state models (MLTrainingRequest/Result, RLTrainingRequest/Result,
+# ModelEvaluationVerdict, for AGT-017/018/019) were removed 2026-07-30 alongside the rest of the
+# ML/RL platform (Phase 5), disabled pending a host resource upgrade -- see
+# Phase_5_Machine_Learning_Architecture.md's own status banner. Re-add when Phase 5 is
+# re-implemented.
 
 
 class TradingOSGraphState(StrictModel):
@@ -233,15 +173,6 @@ class TradingOSGraphState(StrictModel):
     optimization_result: OptimizationResult | None = None
     risk_assessment: RiskAssessment | None = None
     deployment_recommendation: DeploymentRecommendation | None = None
-
-    # REL-008 E8.6: ML/RL training + evaluation -- set by src/agents/ml_graph.py's two small
-    # graphs, not the main graph above (model training isn't part of every strategy-generation
-    # run, see src/agents/ml_graph.py's module docstring for why it's a separate graph).
-    ml_training_request: MLTrainingRequest | None = None
-    ml_training_result: MLTrainingResult | None = None
-    rl_training_request: RLTrainingRequest | None = None
-    rl_training_result: RLTrainingResult | None = None
-    model_evaluation_verdict: ModelEvaluationVerdict | None = None
 
     # Retry/escalation counters enforcing the business rules from Phase_9/Phase_4:
     code_validation_retry_count: int = 0  # max 3, Code_Validation_Loop

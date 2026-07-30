@@ -1,0 +1,13 @@
+# REL-009 E9.1: auto-loads every dashboard JSON in monitoring/grafana/dashboards/ on startup --
+# no manual import required.
+apiVersion: 1
+
+providers:
+  - name: TradingOS
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

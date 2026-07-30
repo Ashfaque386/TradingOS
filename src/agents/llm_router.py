@@ -14,7 +14,12 @@ fields directly.
 """
 
 import os
+import threading
+import time
+import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,10 +29,28 @@ import yaml
 
 from src.core import vault
 from src.core.config import Settings, get_settings
+from src.observability.metrics import HF_TOKENS_USED_TODAY
 
 logger = structlog.get_logger(__name__)
 
 _tracing_configured = False
+
+# REL-009 E9.2: LiteLLM's LangsmithLogger only starts its periodic background-flush task when
+# called from a thread that already has a running asyncio event loop (verified empirically --
+# `_start_periodic_flush_task` no-ops otherwise, logging "no running event loop, skipping").
+# Every real caller of complete() in this codebase runs inside `_execute_graph_run`'s plain
+# `threading.Thread` (src/api/routers/agents.py), which has no event loop of its own -- without
+# this, every trace sits in LiteLLM's in-memory queue forever and 0% of calls actually reach
+# LangSmith, silently, despite the callback being "configured". LANGSMITH_BATCH_SIZE=1 makes
+# every single event trigger an immediate, synchronous send instead of waiting on that dead
+# periodic task -- confirmed via a real call + a real langsmith.Client().read_run() lookup.
+_LANGSMITH_BATCH_SIZE = "1"
+
+# Set by complete() on every call where tracing is configured (the same UUID handed to LiteLLM
+# as the LangSmith run's `id`), read+cleared by _execute_graph_run after each graph node so the
+# resulting AgentRun row can be tagged with its real trace URL. A ContextVar (not a plain module
+# global) so concurrent graph runs on different threads never see each other's run id.
+_last_langsmith_run_id: ContextVar[str | None] = ContextVar("_last_langsmith_run_id", default=None)
 
 
 def _configure_tracing(settings: Settings) -> None:
@@ -38,9 +61,94 @@ def _configure_tracing(settings: Settings) -> None:
         return
     os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
     os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+    os.environ.setdefault("LANGSMITH_BATCH_SIZE", _LANGSMITH_BATCH_SIZE)
     litellm.success_callback.append("langsmith")
     litellm.failure_callback.append("langsmith")
     _tracing_configured = True
+
+
+def pop_last_langsmith_run_id() -> str | None:
+    """Reads and clears the run id complete() last set (see _last_langsmith_run_id's docstring)
+    -- called once per graph node by _execute_graph_run. Returns None both when tracing isn't
+    configured and when the node made no LLM call at all; callers can't and don't need to tell
+    the two apart."""
+    run_id = _last_langsmith_run_id.get()
+    _last_langsmith_run_id.set(None)
+    return run_id
+
+
+def fetch_langsmith_trace_url(
+    run_id: str, *, attempts: int = 3, delay_seconds: float = 1.0
+) -> str | None:
+    """Real lookup against the LangSmith API for the URL of a just-completed run. Bounded
+    retries since the trace was just POSTed synchronously moments earlier and LangSmith's own
+    indexing can lag briefly. Fails soft (returns None, logs a warning) on any error -- tracing
+    is an observability concern and must never break the agent pipeline it's observing, same
+    principle as every LLM-narrative fallback elsewhere in this codebase."""
+    try:
+        from langsmith import Client
+    except ImportError:  # pragma: no cover -- langsmith is an installed transitive dep today
+        return None
+
+    settings = get_settings()
+    if not settings.langsmith_api_key:
+        return None
+
+    client = Client(api_key=settings.langsmith_api_key)
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            run = client.read_run(run_id)
+            return str(run.url).split("?", 1)[0]  # strip ?trace_id=&start_time= -- still a
+            # fully valid, clickable trace URL, and comfortably under AgentRun.langsmith_trace_url's
+            # 255-char column limit regardless of org/project UUID length.
+        except Exception as exc:  # noqa: BLE001 - see docstring: never raise out of this helper
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds)
+    logger.warning("langsmith_trace_url_fetch_failed", run_id=run_id, error=str(last_error))
+    return None
+
+
+class _HFUsageTracker:
+    """Real, in-process, single-day token-usage counter for the huggingface provider (REL-009,
+    2026-07-30: keep real usage under the account's real HF Pro-tier quota). Module-level
+    singleton -- matches this being a single-process FastAPI service, same justification as
+    src/engine/risk/kill_switch_service.py's own module-level state: there is exactly one real
+    usage budget for the whole running app, not one per request or per thread. Resets at UTC day
+    rollover, not a rolling 24h window -- simple, predictable, and matches how most provider
+    dashboards report daily usage."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._day: date = datetime.now(UTC).date()
+        self._tokens_used = 0
+
+    def _reset_if_new_day_locked(self) -> None:
+        today = datetime.now(UTC).date()
+        if today != self._day:
+            self._day = today
+            self._tokens_used = 0
+            HF_TOKENS_USED_TODAY.set(0)
+
+    def record(self, tokens: int) -> None:
+        with self._lock:
+            self._reset_if_new_day_locked()
+            self._tokens_used += max(tokens, 0)
+            HF_TOKENS_USED_TODAY.set(self._tokens_used)
+
+    def has_budget(self, daily_budget: int) -> bool:
+        with self._lock:
+            self._reset_if_new_day_locked()
+            return self._tokens_used < daily_budget
+
+    def tokens_used_today(self) -> int:
+        with self._lock:
+            self._reset_if_new_day_locked()
+            return self._tokens_used
+
+
+_hf_usage_tracker = _HFUsageTracker()
 
 
 TaskType = Literal["coding", "orchestration", "sentiment", "research", "chat"]
@@ -105,7 +213,23 @@ def resolve_api_key(provider: str, settings: Settings) -> str | None:
 def is_configured(provider: str, settings: Settings) -> bool:
     if provider == "ollama":
         return True
-    return bool(resolve_api_key(provider, settings))
+    if not resolve_api_key(provider, settings):
+        return False
+    if provider == "huggingface" and not _hf_usage_tracker.has_budget(
+        settings.hf_daily_token_budget
+    ):
+        # Real usage-optimization guard (REL-009, 2026-07-30): once today's real tracked usage
+        # hits the configured daily budget, huggingface is treated as unconfigured for the rest
+        # of the day -- every task-type chain in routing.yaml already has huggingface followed by
+        # further fallbacks (ollama last), so this naturally and safely falls through to those
+        # rather than burning real quota into a hard provider error.
+        logger.warning(
+            "huggingface_daily_token_budget_exhausted",
+            tokens_used_today=_hf_usage_tracker.tokens_used_today(),
+            daily_budget=settings.hf_daily_token_budget,
+        )
+        return False
+    return True
 
 
 def _litellm_kwargs(pm: ProviderModel, settings: Settings) -> dict[str, Any]:
@@ -149,15 +273,35 @@ def complete(task_type: TaskType, messages: list[dict[str, str]], **kwargs: Any)
     if not chain:
         raise NoProviderAvailableError(f"no configured provider for task type '{task_type}'")
 
+    run_id = str(uuid.uuid4())
+    if settings.langsmith_api_key:
+        metadata = kwargs.pop("metadata", {})
+        metadata.setdefault("id", run_id)
+        kwargs["metadata"] = metadata
+
     last_error: Exception | None = None
     for pm in chain:
+        call_kwargs = dict(kwargs)
+        if pm.provider == "huggingface":
+            # Real usage-optimization guard (REL-009, 2026-07-30): caps a single call's own cost
+            # unless the caller already asked for a specific max_tokens -- prevents one
+            # unexpectedly long generation from eating a disproportionate chunk of the real daily
+            # budget checked in is_configured() above.
+            call_kwargs.setdefault("max_tokens", settings.hf_max_tokens_per_call)
         try:
             response = litellm.completion(
-                messages=messages, **_litellm_kwargs(pm, settings), **kwargs
+                messages=messages, **_litellm_kwargs(pm, settings), **call_kwargs
             )
             logger.info(
                 "llm_call_succeeded", task_type=task_type, provider=pm.provider, model=pm.model
             )
+            if pm.provider == "huggingface":
+                usage = getattr(response, "usage", None)
+                total_tokens = getattr(usage, "total_tokens", None) if usage else None
+                if isinstance(total_tokens, int):
+                    _hf_usage_tracker.record(total_tokens)
+            if settings.langsmith_api_key:
+                _last_langsmith_run_id.set(run_id)
             return response
         except Exception as exc:  # noqa: BLE001 - deliberately broad: fall through to next provider
             logger.warning(

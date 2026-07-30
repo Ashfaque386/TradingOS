@@ -1,0 +1,10 @@
+# REL-009 E9.1: provisioned-as-code datasource -- no manual click-through Grafana setup.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

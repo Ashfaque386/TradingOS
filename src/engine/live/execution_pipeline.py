@@ -26,6 +26,7 @@ pre-deployment gates (evaluated once per strategy, not per tick) and are NOT re-
 without changing this class.
 """
 
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -38,6 +39,7 @@ from src.engine.risk.compliance_checker import evaluate_compliance
 from src.engine.risk.kill_switch import MaxDrawdownKillSwitch
 from src.engine.risk.naked_options_scanner import OptionLeg
 from src.engine.risk.ws_latency_guard import WebSocketLatencyGuard
+from src.observability.metrics import ORDER_EXECUTION_LATENCY_SECONDS
 from src.observability.tracing import get_tracer
 
 _tracer = get_tracer(__name__)
@@ -158,6 +160,7 @@ class LiveExecutionPipeline:
         call below goes through `httpx.AsyncClient`, which OpenTelemetry's httpx
         instrumentation auto-instruments as a child span under this one -- so a single trace ID
         covers "Execution Engine" through "Broker API" with no extra wiring needed there."""
+        dispatch_start = time.perf_counter()
         with _tracer.start_as_current_span("execution_engine.handle_tick") as span:
             span.set_attribute("symbol", tick.symbol)
 
@@ -177,6 +180,10 @@ class LiveExecutionPipeline:
                 quantity=signal.quantity,
                 limit_price=signal.limit_price,
             )
+            # NFR-02: tick receipt -> handoff to the broker adapter, observed here (not after
+            # place_order returns) -- the budget is dispatch latency, not the broker's own real
+            # network round-trip time, which is separately reported (not asserted) elsewhere.
+            ORDER_EXECUTION_LATENCY_SECONDS.observe(time.perf_counter() - dispatch_start)
             return await self.broker.place_order(order)
 
     def _run_risk_checks(self, signal: TradeSignal) -> None:

@@ -39,7 +39,10 @@ export function KillSwitchButton() {
 
   if (status?.state === "TRIPPED") {
     return (
-      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-5">
+      <div
+        data-testid="kill-switch-tripped-banner"
+        className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-5"
+      >
         <div className="flex items-center gap-2 text-rose-300">
           <AlertTriangle className="h-4 w-4 animate-pulse-glow" />
           <span className="text-sm font-semibold tracking-wide">SYSTEM HALTED</span>
@@ -52,12 +55,13 @@ export function KillSwitchButton() {
         </p>
 
         {!canTrigger ? (
-          <p className="mt-4 text-[11px] text-zinc-500">
+          <p data-testid="kill-switch-insufficient-role" className="mt-4 text-[11px] text-zinc-500">
             Your role ({user?.role ?? "unknown"}) cannot re-arm the system. Requires System
             Administrator, Portfolio Manager, or Risk Manager.
           </p>
         ) : !confirmingReset ? (
           <button
+            data-testid="kill-switch-rearm-button"
             onClick={() => setConfirmingReset(true)}
             className="mt-4 w-full rounded-lg border border-white/10 bg-white/5 py-2 text-xs font-medium text-zinc-300 transition hover:bg-white/10"
           >
@@ -120,7 +124,10 @@ function SlideToHalt({
   };
 
   return (
-    <div className="rounded-2xl border border-rose-500/20 bg-gradient-to-b from-rose-500/[0.07] to-transparent p-5">
+    <div
+      data-testid="kill-switch-armed-panel"
+      className="rounded-2xl border border-rose-500/20 bg-gradient-to-b from-rose-500/[0.07] to-transparent p-5"
+    >
       <div className="mb-3 flex items-center gap-2 text-zinc-300">
         <AlertTriangle className="h-4 w-4 text-rose-400" />
         <span className="text-sm font-semibold tracking-wide">EMERGENCY HALT</span>
@@ -130,6 +137,7 @@ function SlideToHalt({
       </p>
       <div
         ref={trackRef}
+        data-testid="kill-switch-track"
         className="relative h-14 w-full overflow-hidden rounded-full border border-rose-500/25 bg-black/40"
       >
         <motion.div className="pointer-events-none absolute inset-0 bg-rose-500/20" style={{ opacity: glow }} />
@@ -143,6 +151,7 @@ function SlideToHalt({
                 : "Slide to confirm"}
         </div>
         <motion.div
+          data-testid="kill-switch-slider"
           drag={locked ? false : "x"}
           dragConstraints={trackRef}
           dragElastic={0.04}

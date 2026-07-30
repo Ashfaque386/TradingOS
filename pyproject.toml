@@ -85,33 +85,13 @@ dependencies = [
     # unreliable on this machine. sentence-transformers runs the same all-MiniLM-L6-v2 model
     # in-process on CPU -- no external API, no billing gate, no network dependency at all.
     "sentence-transformers>=3.0",
-    # REL-008 (Machine Learning Platform). MLflow tracking-server client (docker-compose.yml's
-    # `mlflow` service) -- experiment tracking, metrics/params/artifacts, Staging/Production/
-    # Archived model registry.
-    "mlflow>=2.17",
-    # REL-008 E8.2: LightGBM tabular classification/regression training.
-    "lightgbm>=4.5",
-    # REL-008 E8.2 (TFT) / E8.4 (RL policy nets). Already installed transitively (via
-    # sentence-transformers) and already runs correctly in CPU-only mode on this host -- promoted
-    # to a direct, documented dependency now that this project's own code imports it.
-    "torch>=2.5",
-    # REL-008 E8.3: ONNX export + ONNX Runtime serving (Phase_5_Machine_Learning_Architecture.md
-    # §5, <10ms inference target / >50ms fallback trip-wire).
-    "onnx>=1.17",
-    "onnxruntime>=1.19",
-    # LightGBM->ONNX conversion path -- flagged as the one genuinely fragile dependency in this
-    # release (real history of breaking across LightGBM booster-format versions); the
-    # torch.onnx.export path (native, no third-party converter) is the fallback if it proves
-    # unworkable at implementation time.
-    "onnxmltools>=1.13",
-    # REL-008 E8.4: the RL environment (Gymnasium) + PPO/SAC training (stable-baselines3, used
-    # directly rather than via FinRL -- FinRL's own pins fight this project's newer pandas/numpy).
-    "gymnasium>=0.29",
-    "stable-baselines3>=2.3",
-    # REL-008 E8.5: Jensen-Shannon divergence for drift detection. Already installed transitively
-    # (via vectorbt/sentence-transformers) -- promoted to a direct, documented dependency now that
-    # this project's own code imports it.
-    "scipy>=1.14",
+    # REL-008's ML/RL platform dependencies (mlflow, lightgbm, torch, onnx, onnxruntime,
+    # onnxmltools, gymnasium, stable-baselines3, scipy) were removed 2026-07-30, disabled
+    # pending a host resource upgrade -- see Phase_5_Machine_Learning_Architecture.md's own
+    # status banner and Phase_14_Master_Development_Roadmap.md's REL-008 section for why. This
+    # is the real, direct cause of freeing meaningful RAM: these were the dominant driver of the
+    # repeated Docker OOM crashes documented in REL-009's own session notes. Re-add when Phase 5
+    # is re-implemented (git history has the exact original pinned versions).
 ]
 
 [project.optional-dependencies]
@@ -123,8 +103,21 @@ dev = [
     "hypothesis>=6.115",
     "testcontainers>=4.8",
     "types-PyYAML>=6.0",
-    "bandit>=1.7",
+    # [toml] extra needed for bandit to read the [tool.bandit] config in this file directly --
+    # without it, bandit silently ignores pyproject.toml and the skip list below has no effect.
+    "bandit[toml]>=1.7",
     "pandas-stubs>=2.0",
+    # REL-009 E9.3: real CVE scanning against the actual installed dependency tree, as a real
+    # CI gate -- chosen over Snyk since it needs no external account/API token to manage.
+    "pip-audit>=2.7",
+    # REL-009 E9.5: mutation testing, scoped to src/engine/risk/ only (see [tool.mutmut] below)
+    # -- Phase_13_Testing_Strategy.md's TEST-002 100%-mutation-kill requirement is explicitly
+    # scoped to the Risk Manager/Kill Switch module, not the whole codebase.
+    "mutmut>=3.2",
+    # REL-009 E9.6 (TEST-014 Performance Tests): tests/perf/locustfile.py's real load-test
+    # client -- run manually inside the `app` container (`docker compose exec app locust ...`),
+    # not a CI gate (see that file's own docstring for why).
+    "locust>=2.32",
 ]
 
 [build-system]
@@ -202,41 +195,10 @@ ignore_missing_imports = true
 module = "casbin.*"
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = "mlflow.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "lightgbm.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "onnx.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "onnxruntime.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "onnxmltools.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "gymnasium.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "stable_baselines3.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "sklearn.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "scipy.*"
-ignore_missing_imports = true
+# REL-008's mypy overrides for mlflow/lightgbm/onnx/onnxruntime/onnxmltools/gymnasium/
+# stable_baselines3/sklearn/scipy were removed 2026-07-30 -- none of those packages are
+# dependencies anymore (the whole ML/RL platform they supported was disabled pending a host
+# resource upgrade, see Phase_5_Machine_Learning_Architecture.md's own status banner).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -244,3 +206,55 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src"]
+
+# REL-009 E9.5: mutation testing scoped to src/engine/risk/ ONLY -- Phase_13_Testing_Strategy.md's
+# TEST-002 requires 100% mutation-kill specifically for the Risk Manager/hardcoded Kill Switch
+# (safety-critical per Rule 1), not the whole codebase (which would take hours and isn't what the
+# design doc actually asks for).
+#
+# mutmut 3.x's real config schema (confirmed against the installed mutmut==3.6.0's own
+# mutmut.configuration.Config, empirically -- its `paths_to_mutate`/`tests_dir`/`runner` keys
+# from older mutmut versions are silently deprecated, and `tests_dir` maps straight into
+# `pytest_add_cli_args_test_selection`, which broadens test collection to the *entire* named
+# directories, not a scoped file list). mutmut runs pytest inside an isolated `mutants/` sandbox
+# containing only `source_paths` (+ the whole `tests/` tree, copied verbatim by mutmut's own
+# hardcoded default) -- pointing test selection at whole directories there collects test files
+# that import untouched sibling packages (e.g. `src.agents`) that were never copied into that
+# sandbox, and collection fails. Naming the exact 3 real test files here (not a directory)
+# avoids collecting anything outside this module's own real test scope.
+[tool.mutmut]
+source_paths = ["src/engine/risk/"]
+# The 3 real scoped test files above import well beyond src/engine/risk/ (src.agents, src.brokers,
+# src.core, src.engine.live, src.models -- confirmed by reading their real imports) -- mutmut's
+# own setup_source_paths() (mutmut/__main__.py) fully shadows the real `src` with `mutants/src` on
+# sys.path, so every sibling package those tests import must exist there too, unmutated. `also_copy`
+# bulk-copies the whole real `src/` tree into the sandbox once, before any mutant is applied;
+# `source_paths` above still controls which files actually get mutated/scored.
+also_copy = ["src/"]
+pytest_add_cli_args_test_selection = [
+    "tests/unit/test_node_risk_manager.py",
+    "tests/unit/test_kill_switch.py",
+    "tests/integration/test_execution_pipeline_compliance.py",
+]
+
+# REL-009 E9.3: a real, repo-wide `bandit -r src` CI gate (previously only ever run narrowly
+# against src/engine/sandbox by one test). Every skip below was individually reviewed against a
+# real bandit report (not a blanket suppression) -- each one is a genuinely low-risk, already-
+# reviewed pattern already established elsewhere in this codebase, not an unexamined finding:
+#   B101 (assert_used): every real hit is a pure type-narrowing/invariant assert (e.g.
+#     `assert isinstance(self._broker, KiteConnectAdapter)`, `assert timestamp is not None`
+#     immediately after the real signature-verification check already ran) -- never a security
+#     enforcement check that `-O` stripping could bypass.
+#   B110 (try_except_pass): only in the two WebSocket relay endpoints
+#     (src/api/routers/streams.py) as the standard "client disconnected, stop relaying" pattern
+#     -- a broad except is the correct behavior there, not a masked bug.
+#   B404/B603/B607 (subprocess use / partial executable path): every real call site
+#     (src/agents/tools/skills.py's `ruff check`, src/ml/training/orchestrator.py's
+#     `git rev-parse HEAD`) uses a fixed argument list (no `shell=True`) with a non-user-
+#     controlled executable name -- genuinely safe subprocess usage, not untrusted-input
+#     execution.
+# B608 (hardcoded_sql_expressions) is deliberately NOT in this list -- the two real findings it
+# caught (src/data/datalake/query.py, src/ml/features/store.py) were genuine, now fixed via
+# real DuckDB parameterized queries, not suppressed.
+[tool.bandit]
+skips = ["B101", "B110", "B404", "B603", "B607"]

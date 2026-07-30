@@ -13,9 +13,7 @@ import polars as pl
 
 from src.agents.scheduler import (
     DAILY_CYCLE_JOB_ID,
-    DRIFT_CHECK_JOB_ID,
     WEEKEND_MEMORY_JOB_ID,
-    WEEKLY_MODEL_RETRAIN_JOB_ID,
     build_scheduler,
     run_daily_research_cycle,
 )
@@ -106,5 +104,3 @@ def test_build_scheduler_registers_every_real_cron_job():
 
     assert DAILY_CYCLE_JOB_ID in job_ids
     assert WEEKEND_MEMORY_JOB_ID in job_ids
-    assert WEEKLY_MODEL_RETRAIN_JOB_ID in job_ids
-    assert DRIFT_CHECK_JOB_ID in job_ids

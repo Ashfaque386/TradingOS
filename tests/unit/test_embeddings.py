@@ -10,6 +10,15 @@ from src.memory.embeddings import (
 
 
 def _settings(**overrides) -> Settings:
+    """`embedding_provider="ollama"` and `hf_token=None` by default: this repo's real `.env` has
+    `EMBEDDING_PROVIDER=local` and a real HF_TOKEN configured (REL-005/REL-009) -- confirmed
+    2026-07-31, these tests passed reliably in isolation but failed when run as part of the full
+    suite (`settings.embedding_provider` reading back as "local" instead of the class default
+    "ollama"), the same real-value-leaks-through-in-full-suite-context pattern already found and
+    fixed for `vault_addr`/`langsmith_api_key` in tests/unit/test_llm_router.py, not a code bug
+    in Settings/embeddings.py itself."""
+    overrides.setdefault("embedding_provider", "ollama")
+    overrides.setdefault("hf_token", None)
     return Settings(_env_file=None, **overrides)
 
 

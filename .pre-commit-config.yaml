@@ -31,3 +31,29 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: bandit
+        name: Bandit SAST (docker compose run --rm app bandit -c pyproject.toml -r src)
+        entry: docker compose run --rm app bandit -c pyproject.toml -r src
+        language: system
+        pass_filenames: false
+        always_run: true
+      # REL-009 E9.3: gitleaks has no place in this project's `app` image (it's a standalone Go
+      # binary, not a Python dependency) -- runs via its own official Docker image instead,
+      # keeping the same "every real check runs in Docker, nothing installed on the host" rule
+      # the three hooks above already established.
+      - id: gitleaks
+        name: gitleaks secrets scan (docker run zricethezav/gitleaks)
+        # Deliberately NOT --no-git: that mode scans the raw filesystem and ignores .gitignore
+        # entirely -- confirmed for real during REL-009 E9.3's own verification, it flags
+        # legitimate local secrets sitting in already-gitignored paths (.env, /certs/,
+        # frontend/.next/) that could never actually reach a commit. Git-aware mode (this
+        # invocation) scans the real git history/tracked content instead, matching what
+        # actually gets committed -- 0 findings against this repo's real history, confirmed.
+        # Runs via scripts/run_gitleaks.sh, not an inline `${PWD}` substitution -- real bug found
+        # running this hook on Windows: pre-commit's "system" hooks don't shell-expand `${PWD}`,
+        # so it was passed to `docker run -v` as the literal string. See that script's own
+        # comment for the exact confirmed error.
+        entry: bash scripts/run_gitleaks.sh
+        language: system
+        pass_filenames: false
+        always_run: true

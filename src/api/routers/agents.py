@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from src.agents import prompt_registry
 from src.agents.graph import build_graph
+from src.agents.llm_router import fetch_langsmith_trace_url, pop_last_langsmith_run_id
 from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT_INITIAL_CAPITAL
 from src.agents.prompt_registry import PromptNotFoundError
 from src.agents.state import TradingOSGraphState
@@ -49,6 +50,7 @@ from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account
 from src.models.agent import AgentLog, AgentRun
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.observability.metrics import AGENT_RUN_DURATION_SECONDS
 
 # No Risk Manager Agent exists yet to set a real per-strategy drawdown limit (Phase 4 scope,
 # per Phase_14_Master_Development_Roadmap.md) -- mirrors kill_switch.py's
@@ -349,9 +351,19 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
         for step in graph.stream(state):
             for node_name, output in step.items():
                 now_wall = datetime.now(UTC)
+                AGENT_RUN_DURATION_SECONDS.labels(agent_name=node_name).observe(
+                    (now_wall - checkpoint_wall).total_seconds()
+                )
                 summary = _summarize_node_output(node_name, output)
 
                 jsonable_output = {k: _jsonable(v) for k, v in output.items()}
+                # REL-009 E9.2 (NFR-05): the node just returned, so pop whatever run id complete()
+                # last set during its execution (None if the node made no LLM call, or tracing
+                # isn't configured) and resolve it to a real LangSmith URL before persisting.
+                langsmith_run_id = pop_last_langsmith_run_id()
+                langsmith_trace_url = (
+                    fetch_langsmith_trace_url(langsmith_run_id) if langsmith_run_id else None
+                )
                 with get_session() as session:
                     child = AgentRun(
                         graph_thread_id=thread_id,
@@ -361,6 +373,7 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
                         status="Completed",
                         started_at=checkpoint_wall,
                         ended_at=now_wall,
+                        langsmith_trace_url=langsmith_trace_url,
                     )
                     session.add(child)
                     session.flush()

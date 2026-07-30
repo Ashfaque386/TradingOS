@@ -58,21 +58,3 @@ compliance_agent:
 compliance_agent_task:
   prompt_id: PMPT-039
   active_version: 1
-ml_agent:
-  prompt_id: PMPT-017
-  active_version: 1
-ml_agent_task:
-  prompt_id: PMPT-040
-  active_version: 1
-rl_agent:
-  prompt_id: PMPT-018
-  active_version: 1
-rl_agent_task:
-  prompt_id: PMPT-041
-  active_version: 1
-model_evaluator_agent:
-  prompt_id: PMPT-019
-  active_version: 1
-model_evaluator_agent_task:
-  prompt_id: PMPT-042
-  active_version: 1

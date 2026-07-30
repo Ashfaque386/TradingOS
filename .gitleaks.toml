@@ -1,0 +1,12 @@
+# REL-009 E9.3: extends gitleaks' own default rule set (not a replacement -- an empty/absent
+# `[[rules]]` table here means "use every built-in rule," only the allowlist below is added).
+title = "TradingOS gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deliberate, real, non-functional secret-pattern fixtures kept only to prove this same gate genuinely catches something real (see the REL-009 plan's Verification section) -- never real credentials."
+paths = [
+    '''tests/ci_fixtures/.*''',
+]
