@@ -74,6 +74,9 @@ class FakeBrokerAdapter(BrokerAdapter):
     async def get_quote(self, symbol: str) -> Quote:
         raise NotImplementedError
 
+    async def get_option_chain(self, underlying: str, expiry):
+        raise NotImplementedError
+
 
 def _tick(symbol: str = "RELIANCE", price: float = 2500.0) -> Tick:
     return Tick(symbol=symbol, price=price, timestamp=datetime.now(UTC))

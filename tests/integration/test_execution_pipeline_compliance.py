@@ -56,6 +56,9 @@ class _AssertNeverCalledBroker(BrokerAdapter):
     async def get_quote(self, symbol: str) -> Quote:
         raise AssertionError("not used in this test")
 
+    async def get_option_chain(self, underlying: str, expiry):
+        raise AssertionError("not used in this test")
+
 
 def test_naked_option_signal_is_blocked_end_to_end_and_never_reaches_the_broker():
     naked_short_call = OptionLeg(

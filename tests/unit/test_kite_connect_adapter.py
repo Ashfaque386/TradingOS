@@ -5,6 +5,8 @@ cancel_order are exercised ONLY here, never against the live API (see
 tests/integration/test_kite_connect_live.py, which covers only read-only endpoints).
 """
 
+from datetime import date
+
 import httpx
 import pytest
 
@@ -344,3 +346,54 @@ async def test_get_quote_maps_the_real_depth_shape():
     assert quote.buy_depth[0].quantity == 100
     assert quote.sell_depth[0].price == 1412.95
     assert quote.sell_depth[0].orders == 13
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_filters_by_underlying_and_expiry_then_batch_quotes():
+    real_csv_header = (
+        "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,"
+        "tick_size,lot_size,instrument_type,segment,exchange\n"
+    )
+    real_csv_rows = (
+        # 2 matching rows (same underlying+expiry), 1 non-matching (different expiry)
+        "1,1,NIFTY26AUG24000CE,NIFTY,0,2026-08-06,24000,0.05,50,CE,NFO-OPT,NFO\n"
+        "2,2,NIFTY26AUG24000PE,NIFTY,0,2026-08-06,24000,0.05,50,PE,NFO-OPT,NFO\n"
+        "3,3,NIFTY26SEP24000CE,NIFTY,0,2026-09-24,24000,0.05,50,CE,NFO-OPT,NFO\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/instruments/NFO":
+            return httpx.Response(200, text=real_csv_header + real_csv_rows)
+        if request.url.path == "/quote":
+            requested_keys = request.url.params.get_list("i")
+            if requested_keys == ["NSE:NIFTY"]:
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "success",
+                        "data": {"NSE:NIFTY": {"last_price": 24100.0, "depth": {}}},
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {
+                        "NFO:NIFTY26AUG24000CE": {"last_price": 150.0, "oi": 1000},
+                        "NFO:NIFTY26AUG24000PE": {"last_price": 120.0, "oi": 900},
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = _adapter_with_transport(handler)
+    chain = await adapter.get_option_chain("NIFTY", date(2026, 8, 6))
+
+    assert chain.underlying == "NIFTY"
+    assert chain.spot_price == 24100.0
+    assert len(chain.instruments) == 2  # the Sep-expiry row is correctly excluded
+    ce = next(i for i in chain.instruments if i.option_type == "CE")
+    assert ce.strike == 24000.0
+    assert ce.last_price == 150.0
+    assert ce.open_interest == 1000
+    assert ce.implied_volatility is not None

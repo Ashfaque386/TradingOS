@@ -58,3 +58,21 @@ compliance_agent:
 compliance_agent_task:
   prompt_id: PMPT-039
   active_version: 1
+sentiment_agent:
+  prompt_id: PMPT-040
+  active_version: 1
+sentiment_agent_task:
+  prompt_id: PMPT-041
+  active_version: 1
+options_strategy_agent:
+  prompt_id: PMPT-042
+  active_version: 1
+options_strategy_agent_task:
+  prompt_id: PMPT-043
+  active_version: 1
+portfolio_manager_agent:
+  prompt_id: PMPT-044
+  active_version: 1
+portfolio_manager_agent_task:
+  prompt_id: PMPT-045
+  active_version: 1

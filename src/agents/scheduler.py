@@ -26,6 +26,8 @@ from src.agents.nodes.memory_agent import (
     archive_low_confidence_memories,
     generate_lessons_learned_summary,
 )
+from src.agents.nodes.news_agent import ingest_news_cycle
+from src.agents.nodes.sentiment_agent import score_and_store_sentiment
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.data.datalake.freshness import DataFreshnessError, require_fresh
@@ -38,6 +40,7 @@ IST_TIMEZONE = "Asia/Kolkata"
 DAILY_CYCLE_JOB_ID = "scheduler_daily_research_cycle"
 WEEKEND_MEMORY_JOB_ID = "scheduler_weekend_memory_consolidation"
 CORPORATE_ACTIONS_JOB_ID = "scheduler_corporate_actions_ingestion"
+NEWS_SENTIMENT_JOB_ID = "scheduler_news_sentiment_cycle"
 # REL-010 E10.7: no intraday-ingestion job is wired here -- Upstox's real historical-candle
 # endpoint 404s in sandbox mode (confirmed empirically, see
 # src/brokers/upstox_adapter.py::get_historical_candles's own docstring) and this dev
@@ -89,6 +92,24 @@ def run_corporate_actions_ingestion() -> None:
         logger.warning("scheduler_corporate_actions_ingestion_failed", error=str(exc))
 
 
+def run_news_sentiment_cycle() -> None:
+    """REL-010 E10.3: real RSS ingestion (src/agents/nodes/news_agent.py) + real LLM sentiment
+    scoring persisted to Qdrant (src/agents/nodes/sentiment_agent.py). Every-30-minutes cadence
+    during market hours matches the plan's own stated interval; both steps already degrade
+    per-item/per-feed on failure, so this wrapper only needs to guard against a total surprise
+    (e.g. Qdrant itself being down)."""
+    try:
+        items = ingest_news_cycle()
+        point_ids = score_and_store_sentiment(items)
+        logger.info(
+            "scheduler_news_sentiment_cycle_completed",
+            items_ingested=len(items),
+            items_scored=len(point_ids),
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed cycle must not crash the app
+        logger.warning("scheduler_news_sentiment_cycle_failed", error=str(exc))
+
+
 def run_weekend_memory_consolidation() -> None:
     try:
         archived = archive_low_confidence_memories()
@@ -114,6 +135,14 @@ def build_scheduler() -> AsyncIOScheduler:
         run_daily_research_cycle,
         CronTrigger(hour=6, minute=0, timezone=IST_TIMEZONE),
         id=DAILY_CYCLE_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_news_sentiment_cycle,
+        # Every 30 min across NSE's real 09:15-15:30 IST session (hour=9-15 covers both ends;
+        # a 09:00 or 15:45 firing outside the real session is a harmless no-op, not incorrect).
+        CronTrigger(hour="9-15", minute="*/30", timezone=IST_TIMEZONE),
+        id=NEWS_SENTIMENT_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(

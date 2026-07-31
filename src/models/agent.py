@@ -26,6 +26,11 @@ class AgentRun(Base, UUIDPKMixin):
     started_at: Mapped[datetime]
     ended_at: Mapped[datetime | None]
     langsmith_trace_url: Mapped[str | None] = mapped_column(String(255))
+    # REL-010 E10.8d: Orchestrator HITL (POST /agents/runs/{id}/approve|reject|retry).
+    human_decision: Mapped[str | None] = mapped_column(String(20))
+    retried_from_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id")
+    )
 
 
 class AgentLog(Base, UUIDPKMixin):

@@ -8,11 +8,15 @@ from fastapi.responses import HTMLResponse
 
 from src.agents.scheduler import build_scheduler
 from src.api.routers.agents import router as agents_router
+from src.api.routers.audit import observability_router
 from src.api.routers.audit import router as audit_router
 from src.api.routers.auth import router as auth_router
+from src.api.routers.broker_config import router as broker_config_router
 from src.api.routers.canvas import router as canvas_router
 from src.api.routers.chat import router as chat_router
 from src.api.routers.go_live_readiness import router as go_live_readiness_router
+from src.api.routers.market_data import router as market_data_router
+from src.api.routers.memory import router as memory_router
 from src.api.routers.metrics import router as metrics_router
 from src.api.routers.mfa import router as mfa_router
 from src.api.routers.paper_trading import router as paper_trading_router
@@ -105,8 +109,12 @@ app.include_router(paper_trading_router)
 app.include_router(shadow_mode_router)
 app.include_router(go_live_readiness_router)
 app.include_router(audit_router)
+app.include_router(observability_router)
 app.include_router(webhooks_router)
 app.include_router(skills_router)
+app.include_router(market_data_router)
+app.include_router(broker_config_router)
+app.include_router(memory_router)
 configure_tracing(app)
 
 

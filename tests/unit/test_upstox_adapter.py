@@ -3,6 +3,8 @@
 make a real network call, let alone place a real order.
 """
 
+from datetime import date
+
 import httpx
 import pytest
 
@@ -359,3 +361,47 @@ async def test_get_historical_candles_hits_the_real_endpoint_shape_and_parses_th
     assert "/historical-candle/NSE_EQ|INE002A01018/day/2024-01-02/2024-01-01" in captured["url"]
     assert len(candles) == 2
     assert candles[0][4] == 104.0  # close
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_parses_the_real_documented_response_shape():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": [
+                    {
+                        "expiry": "2026-08-06",
+                        "strike_price": 24000,
+                        "underlying_key": "NSE_INDEX|Nifty 50",
+                        "underlying_spot_price": 24100.5,
+                        "call_options": {
+                            "instrument_key": "NSE_FO|CE24000",
+                            "market_data": {"ltp": 150.0, "oi": 1000},
+                            "option_greeks": {"iv": 15.2, "delta": 0.55},
+                        },
+                        "put_options": {
+                            "instrument_key": "NSE_FO|PE24000",
+                            "market_data": {"ltp": 120.0, "oi": 900},
+                            "option_greeks": {"iv": 14.8, "delta": -0.45},
+                        },
+                    }
+                ],
+            },
+        )
+
+    adapter = _adapter_with_transport(handler)
+    chain = await adapter.get_option_chain("NSE_INDEX|Nifty 50", date(2026, 8, 6))
+
+    assert "instrument_key=NSE_INDEX" in captured["url"].replace("%7C", "|")
+    assert chain.spot_price == 24100.5
+    assert len(chain.instruments) == 2
+    ce = next(i for i in chain.instruments if i.option_type == "CE")
+    assert ce.strike == 24000.0
+    assert ce.last_price == 150.0
+    assert ce.open_interest == 1000
+    assert ce.implied_volatility == 15.2

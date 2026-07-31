@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,15 +41,18 @@ from src.agents.llm_router import fetch_langsmith_trace_url, pop_last_langsmith_
 from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT_INITIAL_CAPITAL
 from src.agents.prompt_registry import PromptNotFoundError
 from src.agents.state import TradingOSGraphState
+from src.api.deps import require_role
 from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account
 from src.models.agent import AgentLog, AgentRun
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.user import User
 from src.observability.metrics import AGENT_RUN_DURATION_SECONDS
 
 # No Risk Manager Agent exists yet to set a real per-strategy drawdown limit (Phase 4 scope,
@@ -60,6 +63,13 @@ _DEFAULT_MAX_DRAWDOWN_LIMIT = Decimal("15.00")
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 GRAPH_ROOT_AGENT_NAME = "TradingOSGraph"
+
+# REL-010 E10.8d: Orchestrator HITL (retry/approve/reject) -- the same role set src/api/routers/
+# portfolio.py's E10.5 allocation-recommendation accept/reject already gates on, plus RiskManager
+# since a rejected deployment recommendation is exactly the kind of decision that role exists for.
+_can_manage_hitl = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
 
 
 # --- Topology -----------------------------------------------------------------------------
@@ -581,6 +591,159 @@ def get_run(run_id: uuid.UUID) -> AgentRunDetail:
                 )
                 for log in logs
             ],
+        )
+
+
+# --- Orchestrator HITL (REL-010 E10.8d, API-020..024) -----------------------------------------
+
+
+class RetryResponse(BaseModel):
+    run_id: uuid.UUID
+    retried_from_run_id: uuid.UUID
+    thread_id: str
+    status: str
+
+
+@router.post("/runs/{run_id}/retry", response_model=RetryResponse, status_code=202)
+def retry_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> RetryResponse:
+    """API-021. Valid only for a run that genuinely ended `"Failed"` -- dispatches a fresh
+    end-to-end graph run via the same detached-thread machinery as `/research/trigger`, with
+    `retried_from_run_id` linking it back to the run a human asked to retry."""
+    with get_session() as session:
+        failed = session.get(AgentRun, run_id)
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if failed.status != "Failed":
+            raise HTTPException(
+                status_code=400, detail=f"Run status is '{failed.status}', not 'Failed'"
+            )
+
+        thread_id = str(uuid.uuid4())
+        root = AgentRun(
+            graph_thread_id=thread_id,
+            agent_name=GRAPH_ROOT_AGENT_NAME,
+            status="Running",
+            started_at=datetime.now(UTC),
+            retried_from_run_id=run_id,
+        )
+        session.add(root)
+        session.commit()
+        new_run_id = root.id
+
+    threading.Thread(
+        target=_execute_graph_run,
+        kwargs={"thread_id": thread_id, "root_run_id": new_run_id},
+        daemon=True,
+    ).start()
+    return RetryResponse(
+        run_id=new_run_id, retried_from_run_id=run_id, thread_id=thread_id, status="Running"
+    )
+
+
+def _strategy_from_run_lineage(session: Session, run_id: uuid.UUID) -> Strategy | None:
+    """Walks the real DB-012 lineage from a root AgentRun to whichever Strategy its graph thread
+    produced the most recent BacktestResult for. BacktestResult.agent_run_id points at the
+    "backtesting" node's own per-node child AgentRun (see `_persist_strategy_progress` above),
+    not the root run -- so this looks up that child first, rather than assuming `run_id` itself
+    is what BacktestResult references."""
+    backtesting_run_ids = list(
+        session.scalars(
+            select(AgentRun.id).where(
+                AgentRun.parent_run_id == run_id, AgentRun.agent_name == "backtesting"
+            )
+        )
+    )
+    if not backtesting_run_ids:
+        return None
+    result = session.scalars(
+        select(BacktestResult)
+        .where(BacktestResult.agent_run_id.in_(backtesting_run_ids))
+        .order_by(BacktestResult.created_at.desc())
+    ).first()
+    if result is None:
+        return None
+    version = session.get(StrategyVersion, result.strategy_version_id)
+    if version is None:
+        return None
+    return session.get(Strategy, version.strategy_id)
+
+
+class HitlDecisionResponse(BaseModel):
+    run_id: uuid.UUID
+    human_decision: str
+    strategy_id: uuid.UUID | None = None
+    strategy_status: str | None = None
+
+
+@router.post("/runs/{run_id}/approve", response_model=HitlDecisionResponse)
+def approve_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> HitlDecisionResponse:
+    """API-022. Records a human's real, audited sign-off on this run's deployment
+    recommendation. No further state change: an auto-`"PaperTrading"` recommendation was already
+    applied by `_persist_strategy_progress` when the run completed -- there is no mid-graph pause
+    state machine to resume (no such feature exists in this pipeline), so approval here is a
+    durable record of agreement, not a trigger."""
+    with get_session() as session:
+        run = session.get(AgentRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        run.human_decision = "Approved"
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="AGENT_RUN_APPROVED",
+            entity_type="AgentRun",
+            entity_id=run_id,
+            after_state={"human_decision": "Approved"},
+        )
+        session.commit()
+        return HitlDecisionResponse(run_id=run_id, human_decision="Approved")
+
+
+class RejectRunRequest(BaseModel):
+    reason: str
+
+
+@router.post("/runs/{run_id}/reject", response_model=HitlDecisionResponse)
+def reject_run(
+    run_id: uuid.UUID, body: RejectRunRequest, _user: User = Depends(_can_manage_hitl)
+) -> HitlDecisionResponse:
+    """API-023. The real human-override mechanism (Business Rule 3): if this run's thread
+    produced a Strategy that reached `"PaperTrading"` automatically, a reject overrides it to
+    `"Deprecated"` -- a required `reason` is captured in the audit trail, never silently
+    dropped."""
+    with get_session() as session:
+        run = session.get(AgentRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        run.human_decision = "Rejected"
+
+        strategy = _strategy_from_run_lineage(session, run_id)
+        strategy_status = None
+        if strategy is not None and strategy.status == "PaperTrading":
+            strategy.status = "Deprecated"
+            strategy_status = strategy.status
+
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="AGENT_RUN_REJECTED",
+            entity_type="AgentRun",
+            entity_id=run_id,
+            after_state={
+                "human_decision": "Rejected",
+                "reason": body.reason,
+                "strategy_id": str(strategy.id) if strategy is not None else None,
+                "strategy_status": strategy_status,
+            },
+        )
+        session.commit()
+        return HitlDecisionResponse(
+            run_id=run_id,
+            human_decision="Rejected",
+            strategy_id=strategy.id if strategy is not None else None,
+            strategy_status=strategy_status,
         )
 
 

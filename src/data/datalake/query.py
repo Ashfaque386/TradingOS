@@ -69,3 +69,40 @@ class DataLake:
         if not self.root.exists():
             return []
         return sorted({p.stem for p in self.root.glob("*/*/*.parquet")})
+
+
+class IntradayDataLake:
+    """Read interface over the REL-010 E10.7 minute-bar lake
+    (src/data/ingest/intraday_writer.py::IntradayParquetWriter), partitioned one level deeper
+    than the daily EOD lake above (`<root>/<year>/<month>/<day>/<SYMBOL>.parquet`, not
+    `<root>/<year>/<month>/<SYMBOL>.parquet`) -- a separate glob depth, not a `DataLake`
+    subclass, since the two partition layouts aren't interchangeable."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def read_symbol(self, symbol: str, day: date | None = None) -> pl.DataFrame:
+        pattern = str(self.root / "*" / "*" / "*" / f"{symbol}.parquet")
+        query = "SELECT * FROM read_parquet(?)"
+        params: list[object] = [pattern]
+        if day is not None:
+            query += " WHERE CAST(timestamp AS DATE) = ?"
+            params.append(day)
+        query += " ORDER BY timestamp"
+
+        with duckdb.connect() as conn:
+            try:
+                return conn.execute(query, params).pl()
+            except duckdb.IOException:
+                # No matching partitions yet for this symbol.
+                return pl.DataFrame(
+                    schema={
+                        "symbol": pl.Utf8,
+                        "timestamp": pl.Datetime,
+                        "open": pl.Float64,
+                        "high": pl.Float64,
+                        "low": pl.Float64,
+                        "close": pl.Float64,
+                        "volume": pl.Int64,
+                    }
+                )

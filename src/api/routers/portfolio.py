@@ -21,21 +21,37 @@ Data sources are deliberately honest about what is and isn't real yet:
     same reason). `/portfolio/allocation` returns by-symbol exposure (real) plus explicit
     `sector_data_available` / `strategy_data_available` flags instead of inventing a mapping.
 
-Auth/RBAC gap matches every other Phase 4 router: no JWT/auth module exists yet.
+The read-only endpoints above predate real JWT/RBAC (REL-007) and stay ungated, matching every
+other plain market-data-style read in this codebase (e.g. agents.py's `/runs`). REL-010 E10.5
+adds the allocation-recommendation endpoints below, which ARE real RBAC-gated (mutating actions
+need it; the reads next to them stay open for consistency with the rest of this file).
 """
 
-from fastapi import APIRouter, HTTPException
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.agents.nodes.portfolio_manager_agent import generate_allocation_recommendation
+from src.api.deps import require_role
 from src.brokers.base import BrokerAdapter, Margin, Position
 from src.brokers.factory import NoBrokerConfigured, build_broker
+from src.core.audit import write_audit_entry
 from src.core.db import get_session
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
+from src.models.portfolio_allocation_recommendation import PortfolioAllocationRecommendation
 from src.models.strategy import BacktestResult, Strategy
 from src.models.trading import RiskLimit
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1", tags=["portfolio"])
+
+_can_manage_allocation = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, audit_denials=True
+)
 
 
 class PnLResponse(BaseModel):
@@ -194,4 +210,124 @@ async def portfolio_allocation() -> AllocationResponse:
         gross_exposure=gross,
         sector_data_available=False,
         strategy_data_available=False,
+    )
+
+
+class AllocationRecommendationResponse(BaseModel):
+    id: uuid.UUID
+    generated_at: datetime
+    recommendations: dict[str, object]
+    rationale: str | None
+    status: str
+    decided_by_user_id: uuid.UUID | None
+    decided_at: datetime | None
+
+
+def _to_recommendation_response(
+    row: PortfolioAllocationRecommendation,
+) -> AllocationRecommendationResponse:
+    return AllocationRecommendationResponse(
+        id=row.id,
+        generated_at=row.generated_at,
+        recommendations=row.recommendations,
+        rationale=row.rationale,
+        status=row.status,
+        decided_by_user_id=row.decided_by_user_id,
+        decided_at=row.decided_at,
+    )
+
+
+@router.post(
+    "/portfolio/allocation-recommendation/trigger",
+    response_model=AllocationRecommendationResponse,
+)
+async def trigger_allocation_recommendation(
+    _user: User = Depends(_can_manage_allocation),
+) -> AllocationRecommendationResponse:
+    """REL-010 E10.5 (AGT-016). Runs the Portfolio Manager Agent on demand against real
+    current strategy/backtest data and the real broker margin -- advisory only, never applied
+    to any real position."""
+    broker = _get_broker()
+    with get_session() as session:
+        recommendation = await generate_allocation_recommendation(session, broker)
+        if recommendation is None:
+            raise HTTPException(
+                status_code=422,
+                detail="No eligible Live/PaperTrading strategy with a backtest result, or the "
+                "LLM failed to produce a valid recommendation -- see server logs.",
+            )
+        return _to_recommendation_response(recommendation)
+
+
+@router.get(
+    "/portfolio/allocation-recommendation/latest",
+    response_model=AllocationRecommendationResponse | None,
+)
+def latest_allocation_recommendation() -> AllocationRecommendationResponse | None:
+    with get_session() as session:
+        row = session.scalars(
+            select(PortfolioAllocationRecommendation).order_by(
+                PortfolioAllocationRecommendation.generated_at.desc()
+            )
+        ).first()
+        return _to_recommendation_response(row) if row is not None else None
+
+
+def _decide_recommendation(
+    recommendation_id: uuid.UUID, *, new_status: str, user: User, action: str
+) -> AllocationRecommendationResponse:
+    with get_session() as session:
+        row = session.get(PortfolioAllocationRecommendation, recommendation_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Recommendation not found")
+        if row.status != "Proposed":
+            raise HTTPException(status_code=400, detail=f"Recommendation is already {row.status}")
+
+        row.status = new_status
+        row.decided_by_user_id = user.id
+        row.decided_at = datetime.now(UTC)
+
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=user.email,
+            action=action,
+            entity_type="PortfolioAllocationRecommendation",
+            entity_id=row.id,
+            after_state={"status": new_status},
+        )
+        session.commit()
+        return _to_recommendation_response(row)
+
+
+@router.post(
+    "/portfolio/allocation-recommendation/{recommendation_id}/accept",
+    response_model=AllocationRecommendationResponse,
+)
+def accept_allocation_recommendation(
+    recommendation_id: uuid.UUID, user: User = Depends(_can_manage_allocation)
+) -> AllocationRecommendationResponse:
+    """Records real human sign-off only -- no automated position-sizing execution path exists
+    anywhere in this codebase (Business Rule 3), so "Accepted" is a durable, audited record of
+    the decision, not a trigger for anything else."""
+    return _decide_recommendation(
+        recommendation_id,
+        new_status="Accepted",
+        user=user,
+        action="PORTFOLIO_ALLOCATION_RECOMMENDATION_ACCEPTED",
+    )
+
+
+@router.post(
+    "/portfolio/allocation-recommendation/{recommendation_id}/reject",
+    response_model=AllocationRecommendationResponse,
+)
+def reject_allocation_recommendation(
+    recommendation_id: uuid.UUID, user: User = Depends(_can_manage_allocation)
+) -> AllocationRecommendationResponse:
+    return _decide_recommendation(
+        recommendation_id,
+        new_status="Rejected",
+        user=user,
+        action="PORTFOLIO_ALLOCATION_RECOMMENDATION_REJECTED",
     )

@@ -68,6 +68,9 @@ class NoOpFakeBroker(BrokerAdapter):
     async def get_quote(self, symbol: str) -> Quote:
         raise NotImplementedError
 
+    async def get_option_chain(self, underlying: str, expiry):
+        raise NotImplementedError
+
 
 def test_configure_tracing_is_idempotent():
     configure_tracing()

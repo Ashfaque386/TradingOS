@@ -11,11 +11,16 @@ Real, working skills (backed by infrastructure that already exists from Phase 1/
   - fetch_portfolio_status: real query against the PORTFOLIO_POSITIONS table.
   - notify_omni_channel: real Telegram/Discord outbound dispatch (REL-010 E10.2) -- WhatsApp
     stays stubbed within this same skill (no live WhatsApp Business API token yet).
+  - fetch_india_vix, fetch_nse_sector_data: real Yahoo Finance data (REL-010 E10.3), confirmed
+    working tickers, no new vendor/API key.
+  - query_news_sentiment: real Qdrant semantic search over the news_sentiment collection
+    (REL-010 E10.3).
 
 Honestly-stubbed skills (no live data source wired up yet -- each raises SkillNotImplementedError
-rather than fabricating market data): fetch_global_indices, fetch_india_vix,
-fetch_nse_sector_data, query_macro_calendar. These need a market-data vendor decision, not yet
-made as of this docstring's last update.
+rather than fabricating market data): fetch_global_indices, query_macro_calendar. These need a
+market-data vendor decision (fetch_global_indices) or a confirmed free structured source
+(query_macro_calendar -- no free public RBI policy-calendar feed could be confirmed as of
+REL-010 implementation time), not yet made/found as of this docstring's last update.
 """
 
 import ast
@@ -26,6 +31,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import black
+import yfinance
 from qdrant_client import QdrantClient
 
 from src.agents.tools.base import BaseSkill
@@ -80,6 +86,18 @@ class CodeTemplateSearchSkill(BaseSkill):
         vector = embed_text(query)
         hits = _qdrant_client().query_points(
             collection_name="code_templates", query=vector, limit=top_k
+        )
+        return [{"score": h.score, "payload": h.payload} for h in hits.points]
+
+
+class NewsSentimentQuerySkill(BaseSkill):
+    name = "query_news_sentiment"
+    description = "Semantic search over real, scored news items in news_sentiment (REL-010 E10.3)."
+
+    def execute(self, *, query: str, top_k: int = 5) -> list[dict[str, Any]]:  # type: ignore[override]
+        vector = embed_text(query)
+        hits = _qdrant_client().query_points(
+            collection_name="news_sentiment", query=vector, limit=top_k
         )
         return [{"score": h.score, "payload": h.payload} for h in hits.points]
 
@@ -232,21 +250,59 @@ class GlobalIndicesSkill(BaseSkill):
 
 class IndiaVixSkill(BaseSkill):
     name = "fetch_india_vix"
-    description = "STUB: India VIX -- no market-data vendor wired yet."
+    description = (
+        "Real India VIX close, via the already-integrated yfinance adapter (REL-010 E10.3) -- "
+        "no new vendor/API key."
+    )
+    version = "1.0.0"
 
     def execute(self, **kwargs: Any) -> Any:
-        raise SkillNotImplementedError("fetch_india_vix needs a live NSE VIX data source")
+        history = yfinance.Ticker("^INDIAVIX").history(period="5d", interval="1d")
+        if history.empty:
+            raise SkillNotImplementedError(
+                "fetch_india_vix: Yahoo Finance returned no data for ^INDIAVIX"
+            )
+        last_row = history.iloc[-1]
+        return {"date": history.index[-1].date().isoformat(), "close": float(last_row["Close"])}
 
 
 class NseSectorDataSkill(BaseSkill):
     name = "fetch_nse_sector_data"
-    description = "STUB: NSE sector rotation/internals -- no sector-index mapping ingested yet."
+    description = (
+        "Real NSE sector index closes, via yfinance (REL-010 E10.3) -- confirmed real tickers, "
+        "not a full constituent mapping (see _SECTOR_TICKERS)."
+    )
+    version = "1.0.0"
+    # Real, confirmed-working Yahoo Finance tickers for real NSE sector indices (verified
+    # empirically at implementation time, not guessed) -- a small, honest subset, not the full
+    # NSE sector taxonomy.
+    _SECTOR_TICKERS = {
+        "IT": "^CNXIT",
+        "BANK": "^NSEBANK",
+        "AUTO": "^CNXAUTO",
+        "PHARMA": "^CNXPHARMA",
+    }
 
     def execute(self, **kwargs: Any) -> Any:
-        raise SkillNotImplementedError(
-            "fetch_nse_sector_data needs a sector-constituent mapping not yet ingested "
-            "(only raw per-symbol OHLCV exists from Phase 1)"
-        )
+        result: dict[str, Any] = {}
+        for sector, ticker in self._SECTOR_TICKERS.items():
+            try:
+                history = yfinance.Ticker(ticker).history(period="5d", interval="1d")
+            except Exception as exc:  # noqa: BLE001 - one bad ticker shouldn't sink the others
+                result[sector] = {"error": str(exc)}
+                continue
+            if history.empty:
+                result[sector] = {"error": "no data returned"}
+                continue
+            result[sector] = {
+                "date": history.index[-1].date().isoformat(),
+                "close": float(history.iloc[-1]["Close"]),
+            }
+        if not any("close" in v for v in result.values()):
+            raise SkillNotImplementedError(
+                "fetch_nse_sector_data: Yahoo Finance returned no data for any sector ticker"
+            )
+        return result
 
 
 class MacroCalendarSkill(BaseSkill):
@@ -314,6 +370,7 @@ class OmniChannelNotifySkill(BaseSkill):
 ALL_SKILLS: list[BaseSkill] = [
     QdrantStrategyMemorySkill(),
     CodeTemplateSearchSkill(),
+    NewsSentimentQuerySkill(),
     FormatPythonCodeSkill(),
     RunLinterSkill(),
     StaticSafetyCheckSkill(),

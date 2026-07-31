@@ -18,7 +18,7 @@ the Execution Agent's order-tracking table, Phase 4 E4.2).
 """
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 import httpx
@@ -26,6 +26,7 @@ import httpx
 from src.brokers.base import (
     BrokerAdapter,
     Margin,
+    OptionChain,
     OrderRequest,
     OrderResponse,
     OrderType,
@@ -131,6 +132,9 @@ class BrokerCircuitBreaker(BrokerAdapter):
 
     async def get_quote(self, symbol: str) -> Quote:
         return await self.primary.get_quote(symbol)
+
+    async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
+        return await self.primary.get_option_chain(underlying, expiry)
 
     # --- circuit breaker internals ------------------------------------------------------
 

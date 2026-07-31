@@ -80,6 +80,9 @@ class ScriptedBrokerAdapter(BrokerAdapter):
     async def get_quote(self, symbol: str) -> Quote:
         raise NotImplementedError
 
+    async def get_option_chain(self, underlying: str, expiry):
+        raise NotImplementedError
+
 
 def _response(
     broker_order_id: str = "ORD1", status: str = "OPEN", filled_quantity: int = 0

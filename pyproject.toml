@@ -38,6 +38,9 @@ dependencies = [
     # REL-007 E7.5 (SEC-017): policy-file RBAC, replacing scattered `if role ==` checks.
     "casbin>=1.36",
     "yfinance>=0.2",
+    # REL-010 E10.3 (News Agent, AGT-013): real RSS parsing over confirmed-working free
+    # financial news feeds (Moneycontrol/Economic Times) -- no API key needed.
+    "feedparser>=6.0",
     "litellm>=1.52",
     "pyyaml>=6.0",
     "langgraph>=0.2",
@@ -173,6 +176,10 @@ explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = "yfinance.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "feedparser.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

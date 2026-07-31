@@ -16,6 +16,7 @@ modification/cancellation can be exercised end-to-end in tests without ever touc
 exchange or real funds. Flipping to production is a deliberate settings change, never a default.
 """
 
+from datetime import date
 from typing import Any
 
 import httpx
@@ -24,6 +25,8 @@ from src.brokers.base import (
     BrokerAdapter,
     DepthLevel,
     Margin,
+    OptionChain,
+    OptionInstrument,
     OrderRequest,
     OrderResponse,
     OrderStatus,
@@ -256,6 +259,54 @@ class UpstoxAdapter(BrokerAdapter):
         response.raise_for_status()
         candles: list[list[Any]] = response.json()["data"]["candles"]
         return candles
+
+    async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
+        """REL-010 E10.4. Real Upstox endpoint -- `GET /option/chain?instrument_key=...&
+        expiry_date=YYYY-MM-DD` -- confirmed against Upstox's own developer docs. Unlike Kite,
+        Upstox's real response already includes real Greeks/IV per contract (`option_greeks`),
+        so this method parses Upstox's own values directly rather than re-deriving them via
+        src/engine/options/greeks.py. `underlying` must be a real Upstox instrument_key (e.g.
+        "NSE_INDEX|Nifty 50"), matching this method's own real endpoint contract -- callers
+        resolve a plain symbol via `search_instrument_key()` first, same as every other method
+        here that needs one.
+
+        Real, confirmed finding (empirical call against the live sandbox at implementation
+        time): Upstox's SANDBOX also 404s on this endpoint, same as get_historical_candles above
+        -- covered by mocked-HTTP unit tests only; real live verification needs a genuine
+        production Upstox access token, not configured in this dev environment."""
+        response = await self._client.get(
+            "/option/chain",
+            params={"instrument_key": underlying, "expiry_date": expiry.isoformat()},
+        )
+        response.raise_for_status()
+        rows = response.json()["data"]
+
+        spot_price = rows[0]["underlying_spot_price"] if rows else 0.0
+        instruments: list[OptionInstrument] = []
+        for row in rows:
+            strike = float(row["strike_price"])
+            for side_key, option_type in (("call_options", "CE"), ("put_options", "PE")):
+                leg = row.get(side_key)
+                if leg is None:
+                    continue
+                market_data = leg.get("market_data", {})
+                greeks = leg.get("option_greeks", {})
+                instruments.append(
+                    OptionInstrument(
+                        symbol=leg.get("instrument_key", f"{underlying}-{strike}-{option_type}"),
+                        underlying=underlying,
+                        strike=strike,
+                        option_type=option_type,
+                        expiry=expiry,
+                        last_price=market_data.get("ltp"),
+                        open_interest=market_data.get("oi"),
+                        implied_volatility=greeks.get("iv"),
+                    )
+                )
+
+        return OptionChain(
+            underlying=underlying, expiry=expiry, spot_price=spot_price, instruments=instruments
+        )
 
     async def _fetch_single_order(self, broker_order_id: str) -> OrderResponse:
         for order in await self.get_order_book():

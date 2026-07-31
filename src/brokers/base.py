@@ -14,6 +14,7 @@ latency budget (NFR-02), so broker HTTP calls must not block the event loop.
 """
 
 from abc import ABC, abstractmethod
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +24,7 @@ OrderType = Literal["MARKET", "LIMIT", "SL", "SL-M"]
 OrderStatus = Literal["PENDING", "OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED"]
 ProductType = Literal["INTRADAY", "DELIVERY"]
 Validity = Literal["DAY", "IOC"]
+OptionType = Literal["CE", "PE"]
 
 
 class BrokerModel(BaseModel):
@@ -89,6 +91,28 @@ class Quote(BrokerModel):
     sell_depth: list[DepthLevel] = Field(default_factory=list)
 
 
+class OptionInstrument(BrokerModel):
+    """REL-010 E10.4. `implied_volatility` is `None` when the broker doesn't return it directly
+    (Kite Connect) and a local Black-Scholes solve (src/engine/options/greeks.py) also fails to
+    converge -- never a fabricated number."""
+
+    symbol: str
+    underlying: str
+    strike: float
+    option_type: OptionType
+    expiry: date
+    last_price: float | None = None
+    open_interest: int | None = None
+    implied_volatility: float | None = None
+
+
+class OptionChain(BrokerModel):
+    underlying: str
+    expiry: date
+    spot_price: float
+    instruments: list[OptionInstrument] = Field(default_factory=list)
+
+
 class BrokerAdapter(ABC):
     """A concrete adapter (e.g. `UpstoxAdapter`) implements every method against one broker's
     real API. Callers (the Execution Agent, E4.2) depend only on this interface, never on a
@@ -128,4 +152,9 @@ class BrokerAdapter(ABC):
         Read-only market data -- no order is placed, no funds move -- so unlike
         place_order/modify_order/cancel_order this is safe to exercise against the real API
         even for adapters that route order placement to a broker's live production endpoint."""
+        ...
+
+    @abstractmethod
+    async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
+        """REL-010 E10.4. Read-only market data, same safety posture as get_quote above."""
         ...

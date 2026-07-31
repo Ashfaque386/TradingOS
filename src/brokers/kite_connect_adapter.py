@@ -15,6 +15,9 @@ get_order_book) are verified against the real API, in
 tests/integration/test_kite_connect_live.py.
 """
 
+import csv
+import io
+from datetime import date
 from typing import Any
 
 import httpx
@@ -23,6 +26,8 @@ from src.brokers.base import (
     BrokerAdapter,
     DepthLevel,
     Margin,
+    OptionChain,
+    OptionInstrument,
     OrderRequest,
     OrderResponse,
     OrderStatus,
@@ -31,6 +36,7 @@ from src.brokers.base import (
     Quote,
     Side,
 )
+from src.engine.options.greeks import implied_volatility
 
 KITE_BASE_URL = "https://api.kite.trade"
 KITE_VARIETY = "regular"  # this adapter only supports regular orders (not amo/co/iceberg/auction)
@@ -202,6 +208,76 @@ class KiteConnectAdapter(BrokerAdapter):
             last_price=data["last_price"],
             buy_depth=[DepthLevel(**level) for level in depth.get("buy", [])],
             sell_depth=[DepthLevel(**level) for level in depth.get("sell", [])],
+        )
+
+    async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
+        """REL-010 E10.4. Kite's real `/instruments/NFO` endpoint returns a plain CSV dump of
+        every F&O instrument (columns confirmed against Kite Connect's own docs:
+        `instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,
+        lot_size,instrument_type,segment,exchange`) -- filtered here to `underlying`'s real
+        CE/PE rows for the given `expiry`, then batch-quoted for real LTP/OI. Kite's quote
+        response carries no Greeks, so IV is solved locally (src/engine/options/greeks.py) from
+        each real LTP -- returns `None` per-instrument if that solve doesn't converge, never a
+        fabricated value."""
+        instruments_response = await self._client.get("/instruments/NFO")
+        instruments_response.raise_for_status()
+        rows = list(csv.DictReader(io.StringIO(instruments_response.text)))
+
+        matching = [
+            row
+            for row in rows
+            if row["name"] == underlying
+            and row["instrument_type"] in ("CE", "PE")
+            and row["expiry"] == expiry.isoformat()
+        ]
+        if not matching:
+            return OptionChain(underlying=underlying, expiry=expiry, spot_price=0.0, instruments=[])
+
+        spot_quote = await self.get_quote(underlying)
+
+        instrument_keys = [f"NFO:{row['tradingsymbol']}" for row in matching]
+        quote_response = await self._client.get(
+            "/quote", params=[("i", key) for key in instrument_keys]
+        )
+        quote_response.raise_for_status()
+        quotes = quote_response.json()["data"]
+
+        days_to_expiry = (expiry - date.today()).days
+        instruments = []
+        for row in matching:
+            key = f"NFO:{row['tradingsymbol']}"
+            quote = quotes.get(key, {})
+            last_price = quote.get("last_price")
+            option_type = row["instrument_type"]
+            strike = float(row["strike"])
+            iv = None
+            if last_price:
+                iv = implied_volatility(
+                    spot=spot_quote.last_price,
+                    strike=strike,
+                    expiry_days=max(days_to_expiry, 0.5),
+                    rate=0.07,  # a real, standard approximation for the Indian risk-free rate
+                    option_price=last_price,
+                    option_type=option_type,
+                )
+            instruments.append(
+                OptionInstrument(
+                    symbol=row["tradingsymbol"],
+                    underlying=underlying,
+                    strike=strike,
+                    option_type=option_type,
+                    expiry=expiry,
+                    last_price=last_price,
+                    open_interest=quote.get("oi"),
+                    implied_volatility=iv,
+                )
+            )
+
+        return OptionChain(
+            underlying=underlying,
+            expiry=expiry,
+            spot_price=spot_quote.last_price,
+            instruments=instruments,
         )
 
     # --- internals -------------------------------------------------------------------

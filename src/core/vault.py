@@ -133,6 +133,15 @@ def read_broker_credentials(
     )
 
 
+def delete_broker_credentials(broker: str, *, settings: Settings | None = None) -> bool:
+    """REL-010 E10.8: lets an operator revoke a stored broker credential via the broker-config
+    API without needing direct Vault CLI/UI access. See `write_broker_credentials` on the
+    `settings` param."""
+    return _delete_secret(
+        f"{_BROKER_CREDENTIALS_PREFIX}/{broker}", settings=settings or get_settings()
+    )
+
+
 def write_llm_provider_key(
     provider: str, api_key: str, *, settings: Settings | None = None
 ) -> bool:
