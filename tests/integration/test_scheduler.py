@@ -7,18 +7,23 @@ all exercised for real.
 """
 
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
 
 from src.agents.scheduler import (
+    CORPORATE_ACTIONS_JOB_ID,
     DAILY_CYCLE_JOB_ID,
     WEEKEND_MEMORY_JOB_ID,
     build_scheduler,
+    run_corporate_actions_ingestion,
     run_daily_research_cycle,
 )
+from src.core.db import get_session
 from src.data.datalake.query import DataLake
 from src.data.ingest.writer import ParquetLakeWriter
+from src.models.corporate_action import CorporateAction
 
 
 def _seed_fresh_symbol(tmp_path, symbol: str) -> None:
@@ -104,3 +109,43 @@ def test_build_scheduler_registers_every_real_cron_job():
 
     assert DAILY_CYCLE_JOB_ID in job_ids
     assert WEEKEND_MEMORY_JOB_ID in job_ids
+    assert CORPORATE_ACTIONS_JOB_ID in job_ids
+
+
+def test_run_corporate_actions_ingestion_with_no_seed_file_is_a_real_silent_no_op(monkeypatch):
+    """REL-010 E10.7: this dev environment has no seed CSV by default -- a real, honest no-op
+    (0 rows), not an error, matching CorporateActionsAdapter.fetch()'s own documented behavior
+    for a missing file."""
+    from src.core.config import get_settings
+
+    monkeypatch.setattr(
+        get_settings(), "corporate_actions_csv_path", Path("/tmp/does-not-exist.csv")
+    )
+    run_corporate_actions_ingestion()  # must not raise
+
+
+def test_run_corporate_actions_ingestion_writes_a_real_seeded_csv(tmp_path, monkeypatch):
+    from src.core.config import get_settings
+
+    symbol = "TEST-SCHEDULER-E10.7"
+    csv_path = tmp_path / "corporate_actions.csv"
+    csv_path.write_text(
+        "symbol,ex_date,action_type,ratio_numerator,ratio_denominator,dividend_amount,source\n"
+        f"{symbol},2024-05-01,BONUS,1,2,,test-source\n"
+    )
+    monkeypatch.setattr(get_settings(), "corporate_actions_csv_path", csv_path)
+
+    try:
+        run_corporate_actions_ingestion()
+        with get_session() as session:
+            row = (
+                session.query(CorporateAction)
+                .filter(CorporateAction.symbol == symbol)
+                .one_or_none()
+            )
+        assert row is not None
+        assert row.action_type == "BONUS"
+    finally:
+        with get_session() as session:
+            session.query(CorporateAction).filter(CorporateAction.symbol == symbol).delete()
+            session.commit()

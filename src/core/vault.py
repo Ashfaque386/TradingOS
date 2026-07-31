@@ -44,6 +44,7 @@ _BROKER_CREDENTIALS_PREFIX = "broker-credentials"
 _LLM_PROVIDER_KEYS_PREFIX = "llm-provider-keys"
 _MFA_SECRETS_PREFIX = "mfa-secrets"
 _WEBHOOK_SECRETS_PREFIX = "webhook-secrets"
+_BOT_TOKENS_PREFIX = "bot-tokens"
 
 
 def _client(settings: Settings) -> hvac.Client | None:
@@ -206,3 +207,26 @@ def delete_webhook_secret(channel: str, *, settings: Settings | None = None) -> 
     return _delete_secret(
         f"{_WEBHOOK_SECRETS_PREFIX}/{channel}", settings=settings or get_settings()
     )
+
+
+def write_bot_token(channel: str, token: str, *, settings: Settings | None = None) -> bool:
+    """REL-010 E10.2: outbound bot credentials (Telegram/Discord), same Vault-first pattern as
+    every other secret in this file. Deliberately separate from `write_webhook_secret` -- that
+    one holds the INBOUND signature-verification secret (Telegram's secret token, Discord's
+    public key), a fundamentally different credential than the OUTBOUND bot token this needs to
+    actually *send* a message. `channel` is "telegram" or "discord"."""
+    return _write_secret(
+        f"{_BOT_TOKENS_PREFIX}/{channel}", {"token": token}, settings=settings or get_settings()
+    )
+
+
+def read_bot_token(channel: str, *, settings: Settings | None = None) -> str | None:
+    """Falls back to `Settings` (`.env`-sourced) at the call site, same as every other
+    Vault-first read in this file -- returns `None` here whether Vault is unreachable or nothing
+    has been written yet, indistinguishably."""
+    stored = _read_secret(f"{_BOT_TOKENS_PREFIX}/{channel}", settings=settings or get_settings())
+    return stored.get("token") if stored else None
+
+
+def delete_bot_token(channel: str, *, settings: Settings | None = None) -> bool:
+    return _delete_secret(f"{_BOT_TOKENS_PREFIX}/{channel}", settings=settings or get_settings())

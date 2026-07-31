@@ -20,10 +20,18 @@ Real system context (kill-switch state, a strategy status breakdown) is injected
 user's message so the model answers from actual state rather than inventing numbers -- gathered
 defensively (try/except per fact) so a DB hiccup drops that one fact rather than failing the
 whole reply, matching the fallback-on-failure pattern used throughout src/agents/nodes/.
+
+REL-010 E10.1: `channel`/`external_metadata`/`webhook_event_id` were added to `ChatMessage` so
+this same real, tested reply pipeline could be reused verbatim for omni-channel (Telegram/
+Discord) messages -- src/api/routers/webhooks.py calls `generate_and_store_reply` directly with
+an `on_complete` callback rather than reimplementing the LLM-call/pending-row/thread machinery.
+`channel` defaults to "Web" everywhere so the existing dashboard frontend's behavior (and every
+pre-REL-010 test/call site) is unchanged.
 """
 
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
@@ -67,9 +75,16 @@ def _to_response(message: ChatMessage) -> ChatMessageResponse:
 
 
 @router.get("/messages", response_model=list[ChatMessageResponse])
-def list_messages() -> list[ChatMessageResponse]:
+def list_messages(channel: str = "Web") -> list[ChatMessageResponse]:
+    """`channel` defaults to "Web" -- the pre-REL-010 dashboard behavior is unchanged unless a
+    caller (webhooks.py's own history reads, or a future admin view) explicitly asks for
+    another channel's thread."""
     with get_session() as session:
-        messages = session.scalars(select(ChatMessage).order_by(ChatMessage.created_at))
+        messages = session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.channel == channel)
+            .order_by(ChatMessage.created_at)
+        )
         return [_to_response(m) for m in messages]
 
 
@@ -114,9 +129,19 @@ def _build_messages(
     return messages
 
 
-def _generate_reply(
-    *, assistant_message_id: uuid.UUID, history: list[tuple[str, str, str]], user_content: str
+def generate_and_store_reply(
+    *,
+    assistant_message_id: uuid.UUID,
+    history: list[tuple[str, str, str]],
+    user_content: str,
+    on_complete: Callable[[str, str], None] | None = None,
 ) -> None:
+    """Real LLM call + resolves the pending assistant row. REL-010 E10.1: extracted from the
+    dashboard's own `send_message` so src/api/routers/webhooks.py can reuse this exact, already-
+    tested reply pipeline for Telegram/Discord messages rather than reimplementing it.
+    `on_complete(reply_text, status)` fires (in this same background thread) once the row update
+    has committed -- webhooks.py uses it to dispatch the real outbound notify skill and update
+    the originating WebhookEvent row; this module has no knowledge of webhooks.py itself."""
     try:
         response = complete("chat", messages=_build_messages(history, user_content))
         reply = response.choices[0].message.content
@@ -126,6 +151,8 @@ def _generate_reply(
                 assistant_message.content = reply
                 assistant_message.status = "Completed"
                 session.commit()
+        if on_complete is not None:
+            on_complete(reply, "Completed")
     except NoProviderAvailableError as exc:
         with get_session() as session:
             assistant_message = session.get(ChatMessage, assistant_message_id)
@@ -134,6 +161,8 @@ def _generate_reply(
                 assistant_message.error = str(exc)
                 assistant_message.content = ""
                 session.commit()
+        if on_complete is not None:
+            on_complete("", "Failed")
     except Exception as exc:  # noqa: BLE001 - must always resolve the pending row, even on a bug
         with get_session() as session:
             assistant_message = session.get(ChatMessage, assistant_message_id)
@@ -142,6 +171,8 @@ def _generate_reply(
                 assistant_message.error = str(exc)
                 assistant_message.content = ""
                 session.commit()
+        if on_complete is not None:
+            on_complete("", "Failed")
 
 
 @router.post("/messages", response_model=ChatMessageResponse, status_code=202)
@@ -152,20 +183,28 @@ def send_message(body: SendMessageRequest) -> ChatMessageResponse:
     with get_session() as session:
         history = [
             (m.role, m.content, m.status)
-            for m in session.scalars(select(ChatMessage).order_by(ChatMessage.created_at))
+            for m in session.scalars(
+                select(ChatMessage)
+                .where(ChatMessage.channel == "Web")
+                .order_by(ChatMessage.created_at)
+            )
         ]
 
-        user_message = ChatMessage(role="user", content=body.content, status="Completed")
+        user_message = ChatMessage(
+            role="user", content=body.content, status="Completed", channel="Web"
+        )
         session.add(user_message)
         session.flush()
 
-        assistant_message = ChatMessage(role="assistant", content="", status="Pending")
+        assistant_message = ChatMessage(
+            role="assistant", content="", status="Pending", channel="Web"
+        )
         session.add(assistant_message)
         session.commit()
         assistant_id = assistant_message.id
 
     threading.Thread(
-        target=_generate_reply,
+        target=generate_and_store_reply,
         kwargs={
             "assistant_message_id": assistant_id,
             "history": history,

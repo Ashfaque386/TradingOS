@@ -2,6 +2,14 @@
 Postgres/Redis/Vault. Secrets are written to Vault directly (not `.env`, which the
 `@lru_cache`d Settings object reads only once at process startup) -- same pattern as
 scripts/seed_vault_webhook_secrets.py, just done in-test.
+
+REL-010 E10.1 fix: "latest row" lookups now order by `received_at` (real insertion time), not
+`id` -- `WebhookEvent.id` is a random UUID (UUIDPKMixin), which has no chronological relationship
+to insertion order at all. A real, latent bug: this test file got away with `ORDER BY id DESC`
+before because it was usually the only source of Telegram-channel rows in a given test run;
+adding REL-010's own webhook-routing tests (tests/integration/test_webhooks_routing.py) increased
+same-channel row counts enough to make the non-determinism a real, reproducible test flake,
+confirmed via an actual failing run, not hypothesized.
 """
 
 import hashlib
@@ -46,7 +54,7 @@ def test_telegram_webhook_accepts_a_correctly_signed_update():
             row = (
                 session.query(WebhookEvent)
                 .filter(WebhookEvent.channel == "Telegram")
-                .order_by(WebhookEvent.id.desc())
+                .order_by(WebhookEvent.received_at.desc())
                 .first()
             )
             assert row is not None
@@ -207,7 +215,7 @@ def test_whatsapp_webhook_accepts_a_correctly_signed_message():
             row = (
                 session.query(WebhookEvent)
                 .filter(WebhookEvent.channel == "WhatsApp")
-                .order_by(WebhookEvent.id.desc())
+                .order_by(WebhookEvent.received_at.desc())
                 .first()
             )
             assert row is not None

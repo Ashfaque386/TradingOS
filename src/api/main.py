@@ -20,6 +20,7 @@ from src.api.routers.portfolio import router as portfolio_router
 from src.api.routers.risk_limits import router as risk_limits_router
 from src.api.routers.settings import router as settings_router
 from src.api.routers.shadow_mode import router as shadow_mode_router
+from src.api.routers.skills import router as skills_router
 from src.api.routers.strategies import router as strategies_router
 from src.api.routers.streams import router as streams_router
 from src.api.routers.system import router as system_router
@@ -105,6 +106,7 @@ app.include_router(shadow_mode_router)
 app.include_router(go_live_readiness_router)
 app.include_router(audit_router)
 app.include_router(webhooks_router)
+app.include_router(skills_router)
 configure_tracing(app)
 
 

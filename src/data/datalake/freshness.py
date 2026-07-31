@@ -2,17 +2,19 @@
 data lake is missing the previous trading day's EOD data."""
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 from src.data.datalake.query import DataLake
+from src.data.reference.nse_holiday_calendar import previous_trading_day as _previous_trading_day
 
 
 def previous_trading_day(as_of: date) -> date:
-    """Weekday calendar approximation; NSE holiday calendar refinement is a Phase 1 follow-up."""
-    day = as_of - timedelta(days=1)
-    while day.weekday() >= 5:
-        day -= timedelta(days=1)
-    return day
+    """REL-010 E10.7: now a real NSE holiday calendar
+    (src/data/reference/nse_holiday_calendar.py) rather than the "every weekday" approximation
+    this function used to be -- see that module's own docstring for what real holidays are (and
+    are not yet) covered. Re-exported under this same name so every existing call site
+    (src/engine/backtest/, etc.) is unaffected."""
+    return _previous_trading_day(as_of)
 
 
 @dataclass(frozen=True)

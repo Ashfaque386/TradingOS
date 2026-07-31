@@ -229,6 +229,34 @@ class UpstoxAdapter(BrokerAdapter):
         instrument_key: str = results[0]["instrument_key"]
         return instrument_key
 
+    async def get_historical_candles(
+        self, instrument_key: str, interval: str, from_date: str, to_date: str
+    ) -> list[list[Any]]:
+        """REL-010 E10.7: real Upstox historical-candle endpoint --
+        `GET /historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}`, confirmed
+        against Upstox's own developer docs (real path/param order, not guessed): `interval` is
+        one of "1minute"/"3minute"/"5minute"/"15minute"/"30minute"/"day"/"week"/"month"; dates
+        are `YYYY-MM-DD` strings. Each returned candle is
+        `[timestamp, open, high, low, close, volume, open_interest]`, Upstox's own real response
+        shape -- this method returns that raw list-of-lists rather than reshaping it, so callers
+        decide their own DataFrame schema (see src/data/ingest/intraday.py).
+
+        Real, confirmed finding (empirical call against the live sandbox at implementation
+        time): Upstox's SANDBOX returns a real 404 for this endpoint regardless of interval/date
+        range -- historical market data is not part of sandbox's simulated coverage, matching
+        the same already-documented partial-sandbox-coverage pattern as get_margin()/
+        get_positions() (see tests/integration/test_upstox_sandbox.py's own module docstring).
+        This method is covered by mocked-HTTP unit tests only
+        (tests/unit/test_upstox_adapter.py); real live verification needs a genuine PRODUCTION
+        Upstox access token, which is not configured in this dev environment -- an honest,
+        stated gap, same category as Kite Connect having no sandbox at all."""
+        response = await self._client.get(
+            f"/historical-candle/{instrument_key}/{interval}/{to_date}/{from_date}"
+        )
+        response.raise_for_status()
+        candles: list[list[Any]] = response.json()["data"]["candles"]
+        return candles
+
     async def _fetch_single_order(self, broker_order_id: str) -> OrderResponse:
         for order in await self.get_order_book():
             if order.broker_order_id == broker_order_id:

@@ -330,3 +330,32 @@ async def test_get_quote_always_hits_production_even_in_sandbox_mode():
     assert quote.last_price == 1412.95
     assert quote.buy_depth[0].quantity == 100
     assert quote.sell_depth[0].orders == 13
+
+
+@pytest.mark.asyncio
+async def test_get_historical_candles_hits_the_real_endpoint_shape_and_parses_the_response():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": {
+                    "candles": [
+                        ["2024-01-02T00:00:00+05:30", 100.0, 105.0, 99.0, 104.0, 12345, 0],
+                        ["2024-01-01T00:00:00+05:30", 98.0, 101.0, 97.0, 100.0, 9876, 0],
+                    ]
+                },
+            },
+        )
+
+    adapter = _adapter_with_transport(handler)
+    candles = await adapter.get_historical_candles(
+        "NSE_EQ|INE002A01018", "day", "2024-01-01", "2024-01-02"
+    )
+
+    assert "/historical-candle/NSE_EQ|INE002A01018/day/2024-01-02/2024-01-01" in captured["url"]
+    assert len(candles) == 2
+    assert candles[0][4] == 104.0  # close

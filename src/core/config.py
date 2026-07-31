@@ -25,6 +25,13 @@ class Settings(BaseSettings):
 
     data_lake_root: Path = Path("/app/data/lake")
 
+    # REL-010 E10.7: real, hand-maintained corporate-actions CSV (src/data/ingest/
+    # corporate_actions.py's own docstring explains why this is a CSV, not a live NSE feed --
+    # no official NSE corporate-actions API/CSV exists, confirmed via web search at
+    # implementation time). Missing file is a real, honest no-op (CorporateActionsAdapter.fetch
+    # returns []), not an error -- this dev environment has no seed data yet by default.
+    corporate_actions_csv_path: Path = Path("/app/data/corporate_actions_seed.csv")
+
     # DEPRECATED as of REL-007 E7.2: JWTs are now signed/verified via Vault's Transit engine
     # (src/core/vault_transit.py), not this static secret. Nothing reads these two fields
     # anymore -- kept only as a historical record of the pre-Transit scheme, deliberately not
@@ -140,6 +147,15 @@ class Settings(BaseSettings):
     discord_public_key: str | None = None
     whatsapp_app_secret: str | None = None
     whatsapp_verify_token: str | None = None
+
+    # REL-010 E10.2 (Notification/Omni-Channel Agent, AGT-022): OUTBOUND credentials -- distinct
+    # from the inbound-only secrets directly above (those verify a request came from the real
+    # platform; these let this app send a real message back). Vault-first via
+    # src/core/vault.py::read_bot_token, same fail-open .env fallback. `discord_application_id`
+    # is Discord's public application ID (not a secret -- needed to build the real
+    # `/webhooks/{application_id}/{interaction_token}` follow-up URL).
+    telegram_bot_token: str | None = None
+    discord_application_id: str | None = None
 
     # REL-007 E7.6 (TLS, SEC-023/024). Gates src/agents/scheduler.py's APScheduler so the
     # sibling `app-tls` compose service (same image, HTTPS-only) doesn't double-fire the daily

@@ -59,3 +59,7 @@ p, SystemAdministrator, /api/v1/ml/models/{model_id}/predict, POST
 p, PortfolioManager, /api/v1/ml/models/{model_id}/predict, POST
 p, RiskManager, /api/v1/ml/models/{model_id}/predict, POST
 p, ReadOnlyAuditor, /api/v1/ml/models/{model_id}/predict, POST
+p, SystemAdministrator, /api/v1/skills/{name}/enable, POST
+p, SystemAdministrator, /api/v1/skills/{name}/disable, POST
+p, SystemAdministrator, /api/v1/skills/agent-map, POST
+p, SystemAdministrator, /api/v1/skills/agent-map/{grant_id}, DELETE

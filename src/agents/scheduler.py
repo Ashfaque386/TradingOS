@@ -27,14 +27,23 @@ from src.agents.nodes.memory_agent import (
     generate_lessons_learned_summary,
 )
 from src.core.config import get_settings
+from src.core.db import get_session
 from src.data.datalake.freshness import DataFreshnessError, require_fresh
 from src.data.datalake.query import DataLake
+from src.data.ingest.corporate_actions import CorporateActionsAdapter, CorporateActionsWriter
 
 logger = structlog.get_logger(__name__)
 
 IST_TIMEZONE = "Asia/Kolkata"
 DAILY_CYCLE_JOB_ID = "scheduler_daily_research_cycle"
 WEEKEND_MEMORY_JOB_ID = "scheduler_weekend_memory_consolidation"
+CORPORATE_ACTIONS_JOB_ID = "scheduler_corporate_actions_ingestion"
+# REL-010 E10.7: no intraday-ingestion job is wired here -- Upstox's real historical-candle
+# endpoint 404s in sandbox mode (confirmed empirically, see
+# src/brokers/upstox_adapter.py::get_historical_candles's own docstring) and this dev
+# environment has no production Upstox token configured. Wiring a job that would fail every
+# real run isn't honest progress -- src/data/ingest/intraday.py's fetch_intraday_candles is
+# real, unit-tested code ready to be scheduled once a production token exists.
 # REL-008's weekly-retrain/drift-check jobs (WEEKLY_MODEL_RETRAIN_JOB_ID/DRIFT_CHECK_JOB_ID) were
 # removed 2026-07-30: the whole ML/RL platform (Phase 5) was disabled pending a host resource
 # upgrade -- see Phase_5_Machine_Learning_Architecture.md's own status banner and
@@ -66,6 +75,20 @@ def run_daily_research_cycle() -> None:
     logger.info("scheduler_daily_cycle_triggered", symbols=symbols)
 
 
+def run_corporate_actions_ingestion() -> None:
+    """REL-010 E10.7: real CSV-read + real Postgres upsert (src/data/ingest/corporate_actions.py)
+    -- scheduled before the daily research cycle so a same-day corporate action is reflected
+    before that cycle's own backtests run. A missing/empty CSV is a real, silent no-op (0 rows
+    written), not an error -- this dev environment has no seed data by default."""
+    try:
+        rows = CorporateActionsAdapter(get_settings().corporate_actions_csv_path).fetch()
+        with get_session() as session:
+            written = CorporateActionsWriter().write(session, rows)
+        logger.info("scheduler_corporate_actions_ingestion_completed", rows_written=written)
+    except Exception as exc:  # noqa: BLE001 - a failed ingestion run must not crash the app
+        logger.warning("scheduler_corporate_actions_ingestion_failed", error=str(exc))
+
+
 def run_weekend_memory_consolidation() -> None:
     try:
         archived = archive_low_confidence_memories()
@@ -81,6 +104,12 @@ def run_weekend_memory_consolidation() -> None:
 
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST_TIMEZONE)
+    scheduler.add_job(
+        run_corporate_actions_ingestion,
+        CronTrigger(hour=5, minute=30, timezone=IST_TIMEZONE),
+        id=CORPORATE_ACTIONS_JOB_ID,
+        replace_existing=True,
+    )
     scheduler.add_job(
         run_daily_research_cycle,
         CronTrigger(hour=6, minute=0, timezone=IST_TIMEZONE),

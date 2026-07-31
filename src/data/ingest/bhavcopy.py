@@ -7,7 +7,7 @@ adapter is intentionally isolated behind EODDataSourceAdapter — swap
 implementations without touching the ingestion pipeline or writer.
 """
 
-from datetime import date, timedelta
+from datetime import date
 from io import StringIO
 
 import httpx
@@ -15,6 +15,7 @@ import polars as pl
 import structlog
 
 from src.data.ingest.base import EOD_SCHEMA, EODDataSourceAdapter
+from src.data.reference.nse_holiday_calendar import trading_days_between
 
 logger = structlog.get_logger(__name__)
 
@@ -26,14 +27,10 @@ NSE_HEADERS = {
 
 
 def _trading_days(start: date, end: date) -> list[date]:
-    """Weekday calendar approximation; NSE holiday calendar refinement is a Phase 1 follow-up."""
-    days = []
-    current = start
-    while current <= end:
-        if current.weekday() < 5:
-            days.append(current)
-        current += timedelta(days=1)
-    return days
+    """REL-010 E10.7: now a real NSE holiday calendar (src/data/reference/nse_holiday_calendar.py)
+    rather than the "every weekday" approximation this function used to be -- see that module's
+    own docstring for what real holidays are (and are not yet) covered."""
+    return trading_days_between(start, end)
 
 
 class BhavcopyAdapter(EODDataSourceAdapter):

@@ -9,23 +9,28 @@ Real, working skills (backed by infrastructure that already exists from Phase 1/
     src/engine/sandbox/runner.py) -- the full dry-run named in Phase_4_AI_Agent_Design.md's
     Python Validator Agent spec, now real rather than a stand-in.
   - fetch_portfolio_status: real query against the PORTFOLIO_POSITIONS table.
+  - notify_omni_channel: real Telegram/Discord outbound dispatch (REL-010 E10.2) -- WhatsApp
+    stays stubbed within this same skill (no live WhatsApp Business API token yet).
 
 Honestly-stubbed skills (no live data source wired up yet -- each raises SkillNotImplementedError
 rather than fabricating market data): fetch_global_indices, fetch_india_vix,
-fetch_nse_sector_data, query_macro_calendar, notify_omni_channel. These need either a market-data
-vendor decision or the Phase 4 omni-channel webhook gateway, neither built yet.
+fetch_nse_sector_data, query_macro_calendar. These need a market-data vendor decision, not yet
+made as of this docstring's last update.
 """
 
 import ast
+import asyncio
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import black
 from qdrant_client import QdrantClient
 
 from src.agents.tools.base import BaseSkill
+from src.agents.tools.notifiers import send_discord_followup, send_telegram_message
+from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.engine.sandbox.runner import execute_in_sandbox
@@ -252,13 +257,57 @@ class MacroCalendarSkill(BaseSkill):
         raise SkillNotImplementedError("query_macro_calendar needs a macro calendar data source")
 
 
+def _telegram_bot_token() -> str:
+    settings = get_settings()
+    token = vault.read_bot_token("telegram") or settings.telegram_bot_token
+    if not token:
+        raise SkillNotImplementedError(
+            "notify_omni_channel(channel='telegram') needs a real bot token -- none configured "
+            "in Vault or TELEGRAM_BOT_TOKEN"
+        )
+    return token
+
+
 class OmniChannelNotifySkill(BaseSkill):
     name = "notify_omni_channel"
-    description = "STUB: Telegram/Discord/WhatsApp/Slack notify -- gateway is Phase 4 scope."
+    description = (
+        "Real outbound Telegram/Discord dispatch (REL-010 E10.2). WhatsApp remains stubbed -- "
+        "no live WhatsApp Business API token configured this release, per explicit user decision."
+    )
+    version = "1.0.0"
 
-    def execute(self, **kwargs: Any) -> Any:
+    def execute(  # type: ignore[override]
+        self, *, channel: Literal["telegram", "discord", "whatsapp"], text: str, **kwargs: Any
+    ) -> Any:
+        # `SkillNotImplementedError` is reserved for "not configured/not built" only -- a real
+        # `httpx.HTTPStatusError` from an actually-attempted send (bot blocked, bad chat_id, ...)
+        # is deliberately left to propagate un-wrapped, so a caller distinguishing "this
+        # capability doesn't exist" from "it exists and just failed this once" (e.g.
+        # src/api/routers/webhooks.py deciding whether to record a real delivery failure) can
+        # still tell the two apart, matching every other real skill's honesty convention.
+        if channel == "telegram":
+            return asyncio.run(
+                send_telegram_message(
+                    chat_id=kwargs["chat_id"], text=text, bot_token=_telegram_bot_token()
+                )
+            )
+        if channel == "discord":
+            application_id = kwargs.get("application_id") or get_settings().discord_application_id
+            if not application_id:
+                raise SkillNotImplementedError(
+                    "notify_omni_channel(channel='discord') needs a real application_id -- none "
+                    "provided and DISCORD_APPLICATION_ID is not configured"
+                )
+            return asyncio.run(
+                send_discord_followup(
+                    application_id=application_id,
+                    interaction_token=kwargs["interaction_token"],
+                    content=text,
+                )
+            )
         raise SkillNotImplementedError(
-            "notify_omni_channel needs the omni-channel webhook gateway (Phase 4, LLD §9.2)"
+            "notify_omni_channel(channel='whatsapp') needs a live WhatsApp Business API token "
+            "-- not configured this release, per explicit user decision (Telegram/Discord only)"
         )
 
 
