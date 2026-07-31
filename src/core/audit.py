@@ -14,8 +14,10 @@ function in this module at all, by design). See that migration's docstring and
 table owner can still disable the trigger -- not fixable at this layer).
 
 WORM archival (SEC-039) is NOT implemented -- no object storage with write-once guarantees
-exists in this environment's docker-compose stack. Deferred to REL-009. Documented here rather
-than silently omitted.
+exists in this environment's docker-compose stack. REL-009 (Observability & CI/CD Hardening)
+and REL-010 (Omni-Channel & Remaining API Surfaces) both shipped without adding one; this
+remains a real, open infra gap not tied to any specific upcoming release. Documented here
+rather than silently omitted.
 """
 
 from __future__ import annotations
