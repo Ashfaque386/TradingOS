@@ -1,8 +1,8 @@
-# Wrapper for scripts/backup_data_lake.py, matching run_daily_shadow_mode.ps1's pattern -- no
-# Windows Scheduled Task is registered for this yet (that's a separate, explicit decision the
-# same way the Shadow Mode one was). Run manually for now:
+# Wrapper for scripts/backup_data_lake.py, matching run_daily_shadow_mode.ps1's pattern.
+#
+# REL-015 E15.5 (GLH-13): registered as the "TradingOS Nightly Backup" Windows Scheduled Task
+# (verified via `Get-ScheduledTaskInfo`). Can still be run manually for an on-demand backup:
 #   powershell -File scripts\windows\backup_data_lake.ps1
-# or register a nightly Scheduled Task pointed at this script later, once wanted.
 #
 # Assumes tradingos-app is already running (docker compose up). Scheduled Tasks capture no
 # output by default, so this appends timestamped output to a log file, same as the Shadow Mode

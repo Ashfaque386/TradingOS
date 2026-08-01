@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     vault_addr: str | None = "http://vault:8200"
     vault_token: str | None = "dev-only-root-token"
 
+    # REL-015 E15.3 (GLH-06, SEC-039): the `minio` compose service, MinIO's real S3-compatible
+    # API with Object Lock support -- see src/core/audit_archive.py for the WORM archive tier
+    # built on top of this.
+    audit_archive_s3_endpoint: str = "http://minio:9000"
+    audit_archive_s3_access_key: str = "tradingos-minio-admin"
+    audit_archive_s3_secret_key: str = "tradingos_minio_dev_password"
+    audit_archive_s3_bucket: str = "audit-archive"
+
     # LLM providers (Phase 2 E2.2 — see Phase_14_Master_Development_Roadmap.md §3.2).
     # Ollama always runs (local, no key). Every cloud provider is optional (`| None`) so an
     # unconfigured provider is simply skipped by src/agents/llm_router.py's fallback chains

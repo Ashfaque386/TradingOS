@@ -24,6 +24,10 @@ venv/
 # scripts/generate_dev_tls_cert.py -- private key material must never be committed.
 /certs/
 
+# REL-015 E15.1: real Vault unseal key + root token, written by scripts/vault_auto_unseal.py --
+# never committed, same category as /certs/ above.
+/vault/keys/
+
 # Test / coverage
 .pytest_cache/
 .mypy_cache/

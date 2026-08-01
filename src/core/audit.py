@@ -13,11 +13,11 @@ function in this module at all, by design). See that migration's docstring and
 `src/models/audit.py`'s class docstring for the one known gap (a session connected as the
 table owner can still disable the trigger -- not fixable at this layer).
 
-WORM archival (SEC-039) is NOT implemented -- no object storage with write-once guarantees
-exists in this environment's docker-compose stack. REL-009 (Observability & CI/CD Hardening)
-and REL-010 (Omni-Channel & Remaining API Surfaces) both shipped without adding one; this
-remains a real, open infra gap not tied to any specific upcoming release. Documented here
-rather than silently omitted.
+WORM archival (SEC-039): implemented as of REL-015 E15.3 (GLH-06) -- see
+src/core/audit_archive.py for the real, independent second immutability layer (MinIO Object
+Lock, COMPLIANCE mode) this module's rows are replicated into nightly
+(scripts/archive_audit_log.py), on top of -- not instead of -- the Postgres-level protection
+described above.
 """
 
 from __future__ import annotations

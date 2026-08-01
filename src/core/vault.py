@@ -1,13 +1,19 @@
-"""Local dev Vault client (Phase 4 E4.1 exit criterion: "Wire Vault-issued short-lived tokens
+"""Local Vault client (Phase 4 E4.1 exit criterion: "Wire Vault-issued short-lived tokens
 for broker API key retrieval at execution time", Phase 3 §5 sequence diagram). Talks to the
-real dev-mode Vault instance in docker-compose.yml's `vault` service via HashiCorp's official
+real Vault instance in docker-compose.yml's `vault` service via HashiCorp's official
 `hvac` client -- a genuine KV v2 read/write round-trip against a real server, not a stub.
 
+REL-015 E15.1 (GLH-01): the `vault` service moved from `-dev` mode to a real server (persistent
+`file` storage backend, genuine seal/unseal lifecycle, a real random root token distributed via
+`scripts/vault_auto_unseal.py` + `scripts/docker-entrypoint-with-vault-token.sh`, TLS still
+disabled -- see docker/vault/config.hcl's own comment on why that's fine on this single-host
+internal network). `ensure_kv_engine()` below self-heals the KV v2 mount real server mode doesn't
+auto-provide (dev mode did), the same way `vault_transit.ensure_transit_key()` already self-heals
+the Transit engine.
+
 Scope, deliberately reduced from the full Phase_12_Security_Design.md §3 design:
-  - Storage backend is Vault dev mode's in-memory store, not a real durable backend (Consul/
-    Raft) -- restarting the `vault` container loses everything written to it, by design.
-  - No auto-unseal, no TLS, a fixed root token baked into docker-compose.yml -- fine for a local
-    container on a dev machine, never acceptable for production.
+  - No TLS on this internal-only Docker bridge listener -- same posture as every other internal
+    service (Postgres/Redis/Qdrant) on this single-host topology (Phase 1 ADR 10).
   - Broker credentials (Zerodha/Upstox) and LLM provider API keys (OpenAI/Anthropic/DeepSeek/
     Gemini/HuggingFace/OpenCode Zen -- REL-002 E2.2) are both wired through Vault here, via the
     same generic KV v2 read/write helpers (`_read_secret`/`_write_secret`). JWT signing
@@ -58,6 +64,28 @@ def _client(settings: Settings) -> hvac.Client | None:
         logger.info("Vault unreachable at %s: %s", settings.vault_addr, exc)
         return None
     return client
+
+
+def ensure_kv_engine(settings: Settings | None = None) -> None:
+    """REL-015 E15.1 (GLH-01): idempotent setup, mirroring `vault_transit.ensure_transit_key()`.
+
+    `-dev` mode auto-mounts a KV v2 engine at `secret/`; the real server mode this project moved
+    to (docker/vault/config.hcl) mounts nothing by default, so every `_read_secret`/`_write_secret`
+    call above 404'd ("no handler for route") the first time this ran against the new real Vault,
+    until this was added. Safe to call on every app boot, same as its Transit sibling -- does
+    nothing once the mount already exists."""
+    settings = settings or get_settings()
+    client = _client(settings)
+    if client is None:
+        return
+    try:
+        client.sys.enable_secrets_engine(
+            backend_type="kv", path=_KV_MOUNT, options={"version": "2"}
+        )
+        logger.info("Enabled the KV v2 secrets engine at '%s/' (real Vault mode).", _KV_MOUNT)
+    except hvac.exceptions.InvalidRequest as exc:
+        if "path is already in use" not in str(exc):
+            raise
 
 
 def _write_secret(path: str, secret: dict[str, str], *, settings: Settings) -> bool:

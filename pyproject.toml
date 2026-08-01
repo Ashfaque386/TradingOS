@@ -88,6 +88,11 @@ dependencies = [
     # unreliable on this machine. sentence-transformers runs the same all-MiniLM-L6-v2 model
     # in-process on CPU -- no external API, no billing gate, no network dependency at all.
     "sentence-transformers>=3.0",
+    # REL-015 E15.3 (GLH-06, SEC-039): WORM audit archive tier. boto3 talks to the `minio`
+    # compose service over its S3-compatible API (Object Lock support included) -- no AWS
+    # account or real S3 bucket involved, same "real protocol, local container" pattern as
+    # hvac/Vault above.
+    "boto3>=1.35",
     # REL-008's ML/RL platform dependencies (mlflow, lightgbm, torch, onnx, onnxruntime,
     # onnxmltools, gymnasium, stable-baselines3, scipy) were removed 2026-07-30, disabled
     # pending a host resource upgrade -- see Phase_5_Machine_Learning_Architecture.md's own
@@ -121,6 +126,8 @@ dev = [
     # client -- run manually inside the `app` container (`docker compose exec app locust ...`),
     # not a CI gate (see that file's own docstring for why).
     "locust>=2.32",
+    # REL-015 E15.3: type stubs for boto3 (the WORM audit archive's MinIO/S3 client).
+    "boto3-stubs[s3]>=1.35",
 ]
 
 [build-system]

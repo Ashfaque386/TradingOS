@@ -32,6 +32,7 @@ from src.api.routers.users import router as users_router
 from src.api.routers.webhooks import router as webhooks_router
 from src.core.config import get_settings
 from src.core.security_headers import SecurityHeadersMiddleware
+from src.core.vault import ensure_kv_engine
 from src.core.vault_transit import VaultTransitUnavailableError, ensure_transit_key
 from src.observability.tracing import configure_tracing
 
@@ -52,6 +53,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.error(
             "Vault Transit setup failed at startup -- login will 503 until this is fixed: %s", exc
         )
+
+    # REL-015 E15.1: real Vault server mode (unlike `-dev`) mounts no KV engine by default --
+    # self-heals broker-credential/LLM-key/MFA/webhook-secret storage the same way the Transit
+    # key above self-heals JWT signing. Fails open (logs, doesn't raise): every reader of this
+    # engine already tolerates "nothing stored yet" and falls back to `.env` Settings, so a
+    # failure here degrades to that same fallback rather than blocking boot.
+    try:
+        ensure_kv_engine(get_settings())
+    except Exception as exc:  # noqa: BLE001 -- see comment above on why this fails open
+        logger.error("Vault KV engine setup failed at startup: %s", exc)
 
     # REL-005 E5.6: the Scheduler Agent (AGT-025), started with the app rather than run as a
     # separate process -- an in-process APScheduler needs to live inside the same event loop
