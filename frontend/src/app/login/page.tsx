@@ -14,6 +14,21 @@ import { GlassCard } from "@/components/ui/glass-card";
 //   - mfa_required=true, mfa_enrolled=true  -> already enrolled, just needs a fresh code (verify).
 type Step = "credentials" | "enroll" | "verify";
 
+// A genuine 401 from the backend (wrong credentials/code) throws an Error whose message
+// contains the real HTTP status (see lib/api.ts's post()/get() helpers: `POST ${path} failed:
+// ${res.status} ...`). Anything else -- fetch() itself throwing, e.g. a TLS handshake the
+// browser hasn't been told to trust yet, a DNS failure, the backend being down -- is a
+// connection problem, not a bad password, and showing "Incorrect email or password" for that
+// case is actively misleading (confirmed the hard way: a real user's login attempts against an
+// untrusted self-signed cert never even reached this backend -- no LOGIN_FAILURE audit row
+// existed for them -- yet they saw the same "incorrect password" message a real 401 would show).
+function isAuthRejection(err: unknown): boolean {
+  return err instanceof Error && /failed: 4\d\d/.test(err.message);
+}
+const CONNECTION_ERROR_MESSAGE =
+  "Couldn't reach the server. If this is a fresh setup, you may need to open the API's own " +
+  "URL directly once and accept its certificate warning, then try again.";
+
 const inputClass =
   "w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-400/50";
 const labelClass = "mb-1 block text-[11px] uppercase tracking-wider text-zinc-500";
@@ -54,8 +69,8 @@ export default function LoginPage() {
         setEnrollment(enrolled);
         setStep("enroll");
       }
-    } catch {
-      setError("Incorrect email or password.");
+    } catch (err) {
+      setError(isAuthRejection(err) ? "Incorrect email or password." : CONNECTION_ERROR_MESSAGE);
     } finally {
       setSubmitting(false);
     }
@@ -70,8 +85,12 @@ export default function LoginPage() {
       const session = await api.mfaConfirm(pendingToken, totpCode);
       await completeSession(session.access_token, session.refresh_token);
       router.replace("/");
-    } catch {
-      setError("Incorrect code. Check your authenticator app and try again.");
+    } catch (err) {
+      setError(
+        isAuthRejection(err)
+          ? "Incorrect code. Check your authenticator app and try again."
+          : CONNECTION_ERROR_MESSAGE,
+      );
     } finally {
       setSubmitting(false);
     }
@@ -89,8 +108,12 @@ export default function LoginPage() {
       );
       await completeSession(session.access_token, session.refresh_token);
       router.replace("/");
-    } catch {
-      setError(useBackupCode ? "Incorrect or already-used backup code." : "Incorrect code.");
+    } catch (err) {
+      if (!isAuthRejection(err)) {
+        setError(CONNECTION_ERROR_MESSAGE);
+      } else {
+        setError(useBackupCode ? "Incorrect or already-used backup code." : "Incorrect code.");
+      }
     } finally {
       setSubmitting(false);
     }

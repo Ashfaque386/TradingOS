@@ -10,3 +10,11 @@ description = "Deliberate, real, non-functional secret-pattern fixtures kept onl
 paths = [
     '''tests/ci_fixtures/.*''',
 ]
+# REL-017 E17.4: `monte_carlo_p95_max_drawdown` (a real DB-007 column/field name, src/api/
+# routers/strategies.py's BacktestSummary) trips gitleaks' generic-api-key entropy heuristic --
+# a real false positive on a real identifier, not a secret. Allowlisted by exact string rather
+# than by path, since this name legitimately appears in both the Python model and the TS
+# frontend type it mirrors.
+regexes = [
+    '''monte_carlo_p95_max_drawdown''',
+]
