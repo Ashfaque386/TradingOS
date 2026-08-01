@@ -7,16 +7,17 @@ risk_manager.py). This node runs that checker against whatever data is available
 TradingOSGraphState at the pre-deployment strategy-review stage, then asks an LLM to narrate the
 real result.
 
-Honest gap (unchanged from risk_manager.py's own documented gap, re-confirmed for REL-006, not
-re-guessed): no real order quantity exists yet at this stage (Position Sizing isn't threaded
-into TradingOSGraphState), and no structured OptionLeg data exists either (StrategyLogic is
-plain-text conditions, not structured legs). `evaluate_compliance()` is called with only the
-strategy's first universe symbol and no quantity/legs, so `position_limit_checked`,
-`circuit_filter_checked`, and `naked_options_checked` are honestly False here -- this node
-therefore Passes essentially every strategy at the graph-review stage. The real teeth of AGT-020
-is the live execution-pipeline pre-trade check (src/engine/live/execution_pipeline.py's
-`compliance_pre_trade_check`), where a real TradeSignal carries real quantity/price/option_legs
--- see that module for the check that actually has data to block on.
+REL-016 E16.3 (GLH-09) closed the naked-options half of this node's original gap: for "F&O"
+strategies, `state.strategy_logic.option_legs` (Strategy Generator Agent prompt v2, PMPT-029) now
+gives `evaluate_compliance()` real declared legs, so a genuinely naked leg produces a real
+`verdict="Block"` here -- this node's actual veto power, not just advisory narration.
+
+Honest gap still open (re-confirmed for REL-016, not re-guessed): no real order quantity exists
+yet at this stage (Position Sizing isn't threaded into TradingOSGraphState), so
+`position_limit_checked`/`circuit_filter_checked` stay honestly False here regardless of asset
+class -- the real teeth for those two is the live execution-pipeline pre-trade check
+(src/engine/live/execution_pipeline.py's `compliance_pre_trade_check`), where a real TradeSignal
+carries real quantity/price -- see that module for the check that actually has data to block on.
 """
 
 import json
@@ -28,6 +29,7 @@ from src.agents.nodes.common import extract_json
 from src.agents.prompt_registry import get_active_prompt
 from src.agents.state import ComplianceVerdict, TradingOSGraphState
 from src.engine.risk.compliance_checker import evaluate_compliance
+from src.engine.risk.naked_options_scanner import OptionLeg
 
 PROMPT_SLUG = "compliance_agent"
 TASK_PROMPT_SLUG = "compliance_agent_task"
@@ -76,7 +78,22 @@ def compliance_node(state: TradingOSGraphState) -> dict[str, object]:
         if state.strategy_logic and state.strategy_logic.universe
         else "UNKNOWN"
     )
-    result = evaluate_compliance(symbol=symbol)
+    declared_legs = state.strategy_logic.option_legs if state.strategy_logic else None
+    option_legs = (
+        [
+            OptionLeg(
+                symbol=leg.symbol,
+                option_type=leg.option_type,
+                strike=leg.strike,
+                side=leg.side,
+                quantity=leg.quantity,
+            )
+            for leg in declared_legs
+        ]
+        if declared_legs
+        else None
+    )
+    result = evaluate_compliance(symbol=symbol, option_legs=option_legs)
 
     violations_summary = (
         "; ".join(f"{v.rule}: {v.detail}" for v in result.violations)

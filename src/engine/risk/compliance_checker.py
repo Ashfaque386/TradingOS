@@ -7,13 +7,24 @@ Three checks, per Phase_14_Master_Development_Roadmap.md §7 E6.1:
   2. Circuit-filter (price-band) check -- against `PLACEHOLDER_CIRCUIT_BAND_PCT` below.
   3. No-naked-options (Business Rule 2) -- delegates to `naked_options_scanner`, unmodified.
 
-Honest gap, confirmed during REL-006 research and unchanged by this file: no real SEBI
-position-limit or circuit-filter feed exists anywhere in this codebase, config, or DB. The two
-placeholder tables below are small, static, developer-maintained stand-ins -- real code, real
-enforcement, real tests, but the reference data itself is illustrative, not a live regulatory
-feed. Scoped to the 5 symbols the data lake already has real OHLCV for (confirmed by the user
-as the intended REL-006 scope, rather than a broader config-driven table). Extend this dict when
-a real feed exists; don't rebuild the checking logic around it.
+Honest gap, confirmed during REL-006 research and RE-confirmed during REL-016 E16.4 (GLH-10),
+still unchanged by this file: no real SEBI position-limit or circuit-filter feed exists anywhere
+in this codebase, config, or DB, and none is legitimately available to integrate. SEBI itself is
+a regulator, not a data provider -- it publishes no live per-client/per-symbol position-limit API
+at all; individual position data is confidential to the broker/clearing corp, never broadcast.
+For circuit-filter bands, NSE's own website exposes per-symbol data, but every real access path
+found (nsepython, nsetools, nsepy, NseIndiaApi) is an unofficial scraper of nseindia.com with no
+SEBI/NSE endorsement, subject to anti-bot blocking and undocumented breaking changes -- not a
+dependency this codebase's own "real code, real reliability" bar would accept for a live
+risk-compliance gate. Commercial vendors (TrueData, Global Datafeeds, Breeze, etc.) do offer real
+paid feeds, but adopting one is a budget/procurement decision, not a code change this pass can
+make unilaterally. This is therefore closed out as a permanent, documented constraint (GLH-10),
+not an indefinitely-open item -- re-open only if a genuine official feed or an approved paid
+vendor contract materializes. The two placeholder tables below remain the right honest choice:
+real code, real enforcement, real tests, but the reference data itself is illustrative, not a
+live regulatory feed. Scoped to the 5 symbols the data lake already has real OHLCV for (confirmed
+by the user as the intended REL-006 scope, rather than a broader config-driven table). Extend
+this dict if a real feed ever does become available; don't rebuild the checking logic around it.
 
 Per the confirmed product decision for REL-006: when naked-options exposure can't be verified
 (no structured `OptionLeg` data available -- e.g. StrategyLogic is plain-text/code, not

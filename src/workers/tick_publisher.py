@@ -87,7 +87,13 @@ async def _publish_once(symbols: list[str]) -> None:
 
 async def main() -> None:
     settings = get_settings()
-    data_lake = DataLake(settings.data_lake_root)
+    # REL-016 fix: DataLake.__init__ expects the ohlcv_daily-level directory itself (it globs
+    # root/*/*/{symbol}.parquet) -- the original REL-015 version pointed this one level too
+    # high (settings.data_lake_root, the lake's parent), so list_symbols() always returned []
+    # and this worker silently published nothing, every cycle, with no error. Never actually
+    # exercised until now: _is_market_open() gates this whole branch, and the worker has only
+    # ever run outside real market hours so far.
+    data_lake = DataLake(settings.data_lake_root / "ohlcv_daily")
     logger.info(
         "Tick publisher starting (REL-015 E15.6) -- polling every %ss during real NSE market "
         "hours.",

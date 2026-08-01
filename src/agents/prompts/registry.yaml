@@ -27,7 +27,7 @@ market_analyst_agent_task:
   active_version: 1
 strategy_generator_agent_task:
   prompt_id: PMPT-029
-  active_version: 1
+  active_version: 2
 python_code_generator_agent_task:
   prompt_id: PMPT-030
   active_version: 1

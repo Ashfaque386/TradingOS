@@ -6,49 +6,158 @@ switch check is the one real, hard gate this node enforces:
 `kill_switch_service.is_tripped()`, backed by real DB state
 (src/engine/risk/kill_switch_service.py).
 
-Correlation and naked-options checks are honestly NOT run against real data this pass -- verified
-during REL-005 implementation, not assumed:
-  - `correlation.check_correlation_constraint()` needs a real Nifty 50 benchmark return series;
-    the real data lake (checked directly, not guessed) has never ingested any index/benchmark
-    symbol, only 5 individual large-cap stocks (RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK). There
-    is also no historical portfolio-equity-curve table to derive "existing portfolio returns"
-    from, only current position snapshots.
-  - `naked_options_scanner.scan_for_naked_options()` needs structured `OptionLeg` data; nothing
-    in this pipeline produces structured legs from LLM-generated Python strategy code or from
-    `StrategyLogic` (plain-text conditions only).
-  - Position sizing (`position_sizing.compute_position_sizes`) needs real account capital, which
-    isn't threaded into `TradingOSGraphState` anywhere.
-Rather than fabricate a result for any of these, the node returns `decision=
-"ApproveWithRestrictions"` (never a clean "Approve") whenever the kill switch itself is armed,
-and the narrative says plainly what wasn't checked and why -- matching this codebase's
-established honestly-stubbed-capability convention (src/agents/tools/skills.py's
-SkillNotImplementedError).
+REL-016 E16.2 (GLH-08) closed the correlation gap: `^NSEI` (Nifty 50) is now real, ingested
+index-level OHLCV data (src/data/ingest/pipeline.py --source yfinance --symbols ^NSEI), and
+`_compute_correlation` below converts it plus the candidate's own real backtest equity curve
+(`state.equity_curve`, already carried for the Optimization Agent's Monte Carlo re-sampling) into
+the two return series `correlation.check_correlation_constraint()` needs. One piece remains
+honestly open: there is still no historical portfolio-equity-curve table to derive "the existing
+live portfolio's own past returns" from (only current position snapshots) -- so this evaluates
+the candidate's correlation to Nifty 50 in isolation (`candidate_weight=1.0`, which algebraically
+zeroes out whatever `existing_portfolio_returns` is passed), not blended with a real existing
+book. `correlation_passed` stays `None` (honestly unavailable, not fabricated) whenever the
+candidate has no equity curve, the benchmark data has no overlapping dates, or too few overlapping
+points exist for a meaningful correlation.
+
+REL-016 E16.3 (GLH-09) closed the naked-options gap for real: `StrategyLogic.option_legs`
+(populated by the Strategy Generator Agent for "F&O" strategies only, prompt v2/PMPT-029) now
+gives `naked_options_scanner.scan_for_naked_options()` real, declared legs to check instead of
+nothing. `naked_options_checked` stays `False` (not fabricated True) for "Equity" strategies or
+any "F&O" strategy the LLM didn't populate legs for.
+
+Position sizing (`position_sizing.compute_position_sizes`) still needs real account capital,
+which isn't threaded into `TradingOSGraphState` anywhere -- this one honest gap remains, unchanged
+by REL-016 (no epic in this release scoped it).
 """
 
 import json
+from typing import Literal
 
+import pandas as pd
 import structlog
 
 from src.agents.llm_router import complete
 from src.agents.nodes.common import extract_json
 from src.agents.prompt_registry import get_active_prompt
-from src.agents.state import RiskAssessment, TradingOSGraphState
+from src.agents.state import (
+    EquityCurvePoint,
+    RiskAssessment,
+    StrategyOptionLeg,
+    TradingOSGraphState,
+)
+from src.core.config import get_settings
+from src.data.datalake.query import DataLake
 from src.engine.risk import kill_switch_service
+from src.engine.risk.correlation import CorrelationCheckResult, check_correlation_constraint
+from src.engine.risk.naked_options_scanner import OptionLeg, scan_for_naked_options
 
 PROMPT_SLUG = "risk_manager_agent"
 TASK_PROMPT_SLUG = "risk_manager_agent_task"
 NOT_COMPUTED_NOTE = "Not checked this pass -- no real data source available (see module docstring)."
+BENCHMARK_SYMBOL = "^NSEI"
+_MIN_OVERLAPPING_DAYS = 5  # below this, a correlation figure is statistical noise, not a signal
 logger = structlog.get_logger(__name__)
 
 
-def _generate_narrative(hypothesis: str) -> str:
+def _returns_from_equity_curve(equity_curve: list[EquityCurvePoint]) -> pd.Series:
+    dates = [p.date for p in equity_curve]
+    equities = [p.equity for p in equity_curve]
+    frame = pd.DataFrame({"date": dates, "equity": equities})
+    frame["date"] = pd.to_datetime(frame["date"])
+    series = frame.set_index("date")["equity"].sort_index().pct_change().dropna()
+    return series
+
+
+def _returns_from_benchmark(symbol: str) -> pd.Series | None:
+    data_lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+    df = data_lake.read_symbol(symbol, None, None)
+    if df.is_empty():
+        return None
+    pdf = df.sort("date").to_pandas().set_index("date")
+    pdf.index = pd.to_datetime(pdf.index)
+    return pdf["close"].pct_change().dropna()
+
+
+def _compute_correlation(state: TradingOSGraphState) -> CorrelationCheckResult | None:
+    """Returns `None` (not a fabricated result) whenever a real correlation figure can't
+    honestly be produced -- see module docstring for exactly which real data source each case
+    is missing."""
+    if not state.equity_curve:
+        return None
+    candidate_returns = _returns_from_equity_curve(state.equity_curve)
+    benchmark_returns = _returns_from_benchmark(BENCHMARK_SYMBOL)
+    if benchmark_returns is None:
+        return None
+
+    aligned_candidate, aligned_benchmark = candidate_returns.align(benchmark_returns, join="inner")
+    if len(aligned_candidate) < _MIN_OVERLAPPING_DAYS:
+        return None
+
+    # candidate_weight=1.0 evaluates the candidate strategy's own correlation to the benchmark in
+    # isolation -- algebraically, this zeroes out whatever `existing_portfolio_returns` is passed
+    # (see simulate_combined_portfolio_returns), so `aligned_candidate` is passed there too rather
+    # than a fabricated "existing portfolio" series this codebase doesn't have real data for yet.
+    return check_correlation_constraint(
+        existing_portfolio_returns=aligned_candidate,
+        candidate_returns=aligned_candidate,
+        benchmark_returns=aligned_benchmark,
+        candidate_weight=1.0,
+    )
+
+
+def _run_naked_options_check(
+    declared_legs: list[StrategyOptionLeg] | None,
+) -> tuple[bool, list[OptionLeg]]:
+    """Returns (checked, naked_legs). `checked=False` (not fabricated True) whenever no legs were
+    declared -- an "Equity" strategy, or an "F&O" strategy the LLM didn't populate legs for."""
+    if not declared_legs:
+        return False, []
+    legs = [
+        OptionLeg(
+            symbol=leg.symbol,
+            option_type=leg.option_type,
+            strike=leg.strike,
+            side=leg.side,
+            quantity=leg.quantity,
+        )
+        for leg in declared_legs
+    ]
+    result = scan_for_naked_options(legs)
+    return True, result.naked_legs
+
+
+def _generate_narrative(
+    *,
+    hypothesis: str,
+    correlation_result: CorrelationCheckResult | None,
+    naked_options_checked: bool,
+    naked_legs: list[OptionLeg],
+) -> str:
+    if correlation_result is None:
+        correlation_summary = NOT_COMPUTED_NOTE
+    else:
+        correlation_summary = (
+            f"Candidate-vs-Nifty50 correlation is {correlation_result.correlation:.2f} "
+            f"({'within' if correlation_result.passed else 'exceeds'} the "
+            f"{correlation_result.limit:.2f} limit)."
+        )
+    if not naked_options_checked:
+        naked_options_summary = NOT_COMPUTED_NOTE
+    elif naked_legs:
+        naked_options_summary = (
+            f"{len(naked_legs)} declared leg(s) have no OTM hedge: "
+            + "; ".join(f"{leg.symbol} {leg.option_type} {leg.strike}" for leg in naked_legs)
+        )
+    else:
+        naked_options_summary = "All declared option legs are hedged -- no naked exposure."
+
     try:
         system_prompt = get_active_prompt(PROMPT_SLUG)
         user_prompt = get_active_prompt(TASK_PROMPT_SLUG).format(
             hypothesis=hypothesis,
             kill_switch_tripped=False,
-            correlation_summary=NOT_COMPUTED_NOTE,
-            naked_options_summary=NOT_COMPUTED_NOTE,
+            correlation_summary=correlation_summary,
+            naked_options_summary=naked_options_summary,
             position_sizing_summary=NOT_COMPUTED_NOTE,
         )
         response = complete(
@@ -64,8 +173,8 @@ def _generate_narrative(hypothesis: str) -> str:
     except Exception as exc:  # noqa: BLE001 - narrative is advisory; never block the loop on it
         logger.warning("risk_manager_narrative_fallback", error=str(exc))
         return (
-            "Kill switch armed (not tripped). Correlation, naked-options, and position-sizing "
-            f"checks were not run: {NOT_COMPUTED_NOTE}"
+            f"Kill switch armed (not tripped). Correlation: {correlation_summary} "
+            f"Naked-options: {naked_options_summary} Position sizing: {NOT_COMPUTED_NOTE}"
         )
 
 
@@ -88,14 +197,42 @@ def risk_manager_node(state: TradingOSGraphState) -> dict[str, object]:
             )
         }
 
+    correlation_result = _compute_correlation(state)
+    declared_legs = state.strategy_logic.option_legs if state.strategy_logic else None
+    naked_options_checked, naked_legs = _run_naked_options_check(declared_legs)
+
     hypothesis = state.strategy_logic.hypothesis if state.strategy_logic else "unknown strategy"
-    narrative = _generate_narrative(hypothesis)
+    narrative = _generate_narrative(
+        hypothesis=hypothesis,
+        correlation_result=correlation_result,
+        naked_options_checked=naked_options_checked,
+        naked_legs=naked_legs,
+    )
+
+    # Advisory decision, deliberately asymmetric between the two checks:
+    #   - correlation_ok is STRICT (None does not count as OK). A real graph run always has a
+    #     populated state.equity_curve by the time this node runs (Backtesting happens before
+    #     Risk in the pipeline) -- an unavailable correlation figure here signals something
+    #     upstream is actually missing, not a legitimately-inapplicable check, so it should not
+    #     silently pass.
+    #   - naked_options_ok is LENIENT (not-checked counts as OK). Naked-options genuinely does
+    #     NOT apply to an "Equity" strategy -- that's inapplicability by design, not a gap, the
+    #     same non-strict treatment circuit_filter_checked/position_limit_checked already get in
+    #     compliance_checker.py for a missing quantity.
+    # Either way, the hardcoded Compliance Agent (src/engine/risk/compliance_checker.py) holds
+    # the actual veto power over a real naked leg -- this node only narrates and flags.
+    correlation_ok = correlation_result is not None and correlation_result.passed
+    naked_options_ok = not naked_options_checked or not naked_legs
+    decision: Literal["Approve", "ApproveWithRestrictions"] = (
+        "Approve" if (correlation_ok and naked_options_ok) else "ApproveWithRestrictions"
+    )
+
     return {
         "risk_assessment": RiskAssessment(
-            decision="ApproveWithRestrictions",
+            decision=decision,
             kill_switch_tripped=False,
-            correlation_passed=None,
-            naked_options_checked=False,
+            correlation_passed=None if correlation_result is None else correlation_result.passed,
+            naked_options_checked=naked_options_checked,
             narrative=narrative,
         )
     }

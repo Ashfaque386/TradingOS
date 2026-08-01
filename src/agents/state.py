@@ -44,6 +44,21 @@ class MarketContext(StrictModel):
     insights: list[str]
 
 
+class StrategyOptionLeg(StrictModel):
+    """REL-016 E16.3 (GLH-09): one option leg a strategy declares it will trade -- the
+    Pydantic-side twin of `src/engine/risk/naked_options_scanner.py::OptionLeg` (a plain
+    dataclass there, matching that module's own dependency-light "hardcoded engine" style; this
+    twin exists so `StrategyLogic.model_json_schema()` -- already fed straight into the Strategy
+    Generator Agent's prompt -- teaches the LLM the exact shape to emit, the same two-classes-
+    same-fields precedent this codebase already has for EquityCurvePoint/ComplianceVerdict."""
+
+    symbol: str
+    option_type: Literal["CE", "PE"]
+    strike: float
+    side: Literal["buy", "sell"]
+    quantity: int
+
+
 class StrategyLogic(StrictModel):
     """Strategy Generator Agent output (AGT-003) — plain-text mathematical trading logic."""
 
@@ -57,6 +72,12 @@ class StrategyLogic(StrictModel):
     take_profit: str
     position_sizing: str
     confidence_score: float = Field(ge=0.0, le=1.0)
+    # REL-016 E16.3 (GLH-09): populated by the Strategy Generator Agent only for "F&O" strategies
+    # (prompt v2, PMPT-029) -- gives the hardcoded naked-options scanner real, declared legs to
+    # check instead of the honest-but-permanent skip this codebase had before (risk_manager.py/
+    # compliance_checker.py's own module docstrings named this exact gap). None for "Equity"
+    # strategies, where there is nothing to declare.
+    option_legs: list[StrategyOptionLeg] | None = None
 
 
 class PythonCode(StrictModel):

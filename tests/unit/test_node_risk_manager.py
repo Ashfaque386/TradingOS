@@ -3,7 +3,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.agents.nodes.risk_manager import risk_manager_node
-from src.agents.state import OptimizationResult, StrategyLogic, TradingOSGraphState
+from src.agents.state import (
+    OptimizationResult,
+    StrategyLogic,
+    StrategyOptionLeg,
+    TradingOSGraphState,
+)
 
 _STRATEGY = StrategyLogic(
     hypothesis="momentum",
@@ -16,6 +21,31 @@ _STRATEGY = StrategyLogic(
     take_profit="5%",
     position_sizing="fixed",
     confidence_score=0.7,
+)
+
+_FO_STRATEGY_WITH_NAKED_LEG = _STRATEGY.model_copy(
+    update={
+        "asset_class": "F&O",
+        "option_legs": [
+            StrategyOptionLeg(
+                symbol="NIFTY", option_type="CE", strike=25000, side="sell", quantity=50
+            )
+        ],
+    }
+)
+
+_FO_STRATEGY_WITH_HEDGED_SPREAD = _STRATEGY.model_copy(
+    update={
+        "asset_class": "F&O",
+        "option_legs": [
+            StrategyOptionLeg(
+                symbol="NIFTY", option_type="CE", strike=25000, side="sell", quantity=50
+            ),
+            StrategyOptionLeg(
+                symbol="NIFTY", option_type="CE", strike=25200, side="buy", quantity=50
+            ),
+        ],
+    }
 )
 
 
@@ -77,4 +107,43 @@ def test_risk_manager_node_falls_back_to_deterministic_narrative_on_llm_failure(
     ):
         result = risk_manager_node(_state())
 
-    assert "not run" in result["risk_assessment"].narrative
+    assert "Not checked this pass" in result["risk_assessment"].narrative
+
+
+def test_risk_manager_node_flags_a_real_naked_leg_from_declared_option_legs():
+    """REL-016 E16.3 (GLH-09): a real, unhedged sold leg (no same-underlying OTM buy leg) must
+    be caught end-to-end via the real hardcoded scan_for_naked_options(), not skipped."""
+    state = TradingOSGraphState(
+        thread_id="t1",
+        strategy_logic=_FO_STRATEGY_WITH_NAKED_LEG,
+        optimization_result=OptimizationResult(passed=True),
+    )
+    with (
+        patch("src.agents.nodes.risk_manager.kill_switch_service.is_tripped", return_value=False),
+        patch("src.agents.nodes.risk_manager.complete", side_effect=RuntimeError("LLM down")),
+    ):
+        result = risk_manager_node(state)
+
+    assessment = result["risk_assessment"]
+    assert assessment.naked_options_checked is True
+    assert assessment.decision == "ApproveWithRestrictions"
+    assert "NIFTY CE 25000" in assessment.narrative
+
+
+def test_risk_manager_node_does_not_flag_a_real_hedged_spread():
+    """REL-016 E16.3: the same sold leg, now paired with a real higher-strike OTM buy leg (a
+    bear call spread) -- scan_for_naked_options() must find no naked exposure."""
+    state = TradingOSGraphState(
+        thread_id="t1",
+        strategy_logic=_FO_STRATEGY_WITH_HEDGED_SPREAD,
+        optimization_result=OptimizationResult(passed=True),
+    )
+    with (
+        patch("src.agents.nodes.risk_manager.kill_switch_service.is_tripped", return_value=False),
+        patch("src.agents.nodes.risk_manager.complete", side_effect=RuntimeError("LLM down")),
+    ):
+        result = risk_manager_node(state)
+
+    assessment = result["risk_assessment"]
+    assert assessment.naked_options_checked is True
+    assert "no naked exposure" in assessment.narrative.lower()
