@@ -475,6 +475,60 @@ export interface OhlcvBar {
   volume: number;
 }
 
+// REL-013 -- src/api/routers/paper_trading.py's real response models. Every row is a real
+// depth-walked simulated fill against a real live broker quote; nothing here ever calls
+// place_order (src/engine/paper_trading/execution_service.py).
+export interface PaperTrade {
+  id: string;
+  strategy_id: string | null;
+  symbol: string;
+  side: "BUY" | "SELL";
+  requested_quantity: number;
+  filled_quantity: number;
+  reference_price: number;
+  fill_price: number;
+  slippage_bps: number;
+  executed_at: string;
+}
+
+export interface PaperPosition {
+  symbol: string;
+  net_quantity: number;
+  average_cost: number | null;
+  realized_pnl: number;
+  trade_count: number;
+}
+
+// REL-013 -- src/api/routers/shadow_mode.py's real response models. Broker-honest: Upstox
+// attempts hit a real sandbox order call, Zerodha attempts are local-only payload validation
+// (Kite Connect has no sandbox at all) -- see src/brokers/shadow_mode.py.
+export interface ShadowDailySummary {
+  date: string;
+  attempts: number;
+  errors: number;
+  clean: boolean;
+}
+
+export interface ShadowModeStatus {
+  consecutive_clean_days: number;
+  go_live_gate_met: boolean;
+  daily_summary: ShadowDailySummary[];
+}
+
+// REL-013 -- src/api/routers/go_live_readiness.py's real response model
+// (src/engine/go_live_gate.py's 4-condition authoritative gate).
+export interface GateCondition {
+  label: string;
+  met: boolean;
+  detail: string;
+}
+
+export interface GoLiveReadiness {
+  strategy_id: string;
+  gate_met: boolean;
+  conditions: GateCondition[];
+}
+
 export const api = {
   login: (email: string, password: string) =>
     post<LoginResponse>("/api/v1/auth/login", { email, password }),
@@ -567,4 +621,14 @@ export const api = {
 
   ohlcv: (symbol: string) => get<OhlcvBar[]>(`/api/v1/market/ohlcv/${symbol}`),
   symbols: () => get<string[]>("/api/v1/market/symbols"),
+
+  paperTrades: (strategyId?: string) =>
+    get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),
+  paperPositions: (strategyId?: string) =>
+    get<PaperPosition[]>(`/api/v1/paper-trading/positions${toQuery({ strategy_id: strategyId })}`),
+
+  shadowModeStatus: () => get<ShadowModeStatus>("/api/v1/shadow-mode/status"),
+
+  goLiveReadiness: (strategyId: string) =>
+    get<GoLiveReadiness>(`/api/v1/go-live/readiness/${strategyId}`),
 };

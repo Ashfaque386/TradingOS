@@ -15,7 +15,9 @@ from src.api.main import app
 from src.brokers.factory import NoBrokerConfigured, build_upstox_adapter
 from src.core.config import get_settings
 from src.core.db import get_session
+from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.shadow_mode import ShadowModeAttempt
+from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
 
@@ -31,25 +33,30 @@ def test_zerodha_attempt_is_real_end_to_end_and_never_hits_the_network():
     if not (get_settings().zerodha_api_key and get_settings().zerodha_access_token):
         pytest.skip("Zerodha not configured in this environment")
 
-    response = client.post(
-        "/api/v1/shadow-mode/attempt",
-        json={"broker": "zerodha", "symbol": "INFY", "side": "BUY", "quantity": 10},
-    )
-    assert response.status_code == 201
-    body = response.json()
-    assert body["broker"] == "zerodha"
-    assert body["outcome"] == "Validated"
-    assert body["used_real_sandbox"] is False
-
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
     try:
-        status_response = client.get("/api/v1/shadow-mode/status")
-        assert status_response.status_code == 200
-        status_body = status_response.json()
-        today = datetime.now(UTC).date().isoformat()
-        today_summary = next(d for d in status_body["daily_summary"] if d["date"] == today)
-        assert today_summary["attempts"] >= 1
+        response = client.post(
+            "/api/v1/shadow-mode/attempt",
+            json={"broker": "zerodha", "symbol": "INFY", "side": "BUY", "quantity": 10},
+            headers=auth_header(token),
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["broker"] == "zerodha"
+        assert body["outcome"] == "Validated"
+        assert body["used_real_sandbox"] is False
+
+        try:
+            status_response = client.get("/api/v1/shadow-mode/status")
+            assert status_response.status_code == 200
+            status_body = status_response.json()
+            today = datetime.now(UTC).date().isoformat()
+            today_summary = next(d for d in status_body["daily_summary"] if d["date"] == today)
+            assert today_summary["attempts"] >= 1
+        finally:
+            _cleanup(uuid.UUID(body["id"]))
     finally:
-        _cleanup(uuid.UUID(body["id"]))
+        cleanup_user(user_id)
 
 
 def test_upstox_attempt_against_the_real_sandbox():
@@ -58,19 +65,48 @@ def test_upstox_attempt_against_the_real_sandbox():
     except NoBrokerConfigured:
         pytest.skip("Upstox not configured in this environment")
 
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.post(
+            "/api/v1/shadow-mode/attempt",
+            json={"broker": "upstox", "symbol": "INFY", "side": "BUY", "quantity": 1},
+            headers=auth_header(token),
+        )
+        if response.status_code != 201:
+            pytest.skip(
+                f"Real Upstox sandbox call failed (status={response.status_code}) -- likely "
+                "today's expired daily access token, not a code defect."
+            )
+        body = response.json()
+        assert body["broker"] == "upstox"
+        assert body["used_real_sandbox"] is True
+        _cleanup(uuid.UUID(body["id"]))
+    finally:
+        cleanup_user(user_id)
+
+
+def test_attempt_requires_authentication():
+    """SEC-046: POST /attempt was found with NO auth dependency at all -- any unauthenticated
+    caller could trigger a real order-placement call against Upstox's real sandbox. 401 must
+    fire before the handler body runs (before any broker call or DB write)."""
     response = client.post(
         "/api/v1/shadow-mode/attempt",
-        json={"broker": "upstox", "symbol": "INFY", "side": "BUY", "quantity": 1},
+        json={"broker": "zerodha", "symbol": "INFY", "side": "BUY", "quantity": 10},
     )
-    if response.status_code != 201:
-        pytest.skip(
-            f"Real Upstox sandbox call failed (status={response.status_code}) -- likely today's "
-            "expired daily access token, not a code defect."
+    assert response.status_code == 401
+
+
+def test_attempt_requires_the_gated_role():
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    try:
+        response = client.post(
+            "/api/v1/shadow-mode/attempt",
+            json={"broker": "zerodha", "symbol": "INFY", "side": "BUY", "quantity": 10},
+            headers=auth_header(token),
         )
-    body = response.json()
-    assert body["broker"] == "upstox"
-    assert body["used_real_sandbox"] is True
-    _cleanup(uuid.UUID(body["id"]))
+        assert response.status_code == 403
+    finally:
+        cleanup_user(user_id)
 
 
 def test_status_reports_zero_consecutive_days_honestly_when_nothing_has_run():

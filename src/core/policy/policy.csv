@@ -95,3 +95,9 @@ p, RiskManager, /api/v1/agents/prompts/{slug}/active-version, PUT
 p, SystemAdministrator, /api/v1/strategies/{strategy_id}/backtest, POST
 p, PortfolioManager, /api/v1/strategies/{strategy_id}/backtest, POST
 p, RiskManager, /api/v1/strategies/{strategy_id}/backtest, POST
+p, SystemAdministrator, /api/v1/paper-trading/execute, POST
+p, PortfolioManager, /api/v1/paper-trading/execute, POST
+p, RiskManager, /api/v1/paper-trading/execute, POST
+p, SystemAdministrator, /api/v1/shadow-mode/attempt, POST
+p, PortfolioManager, /api/v1/shadow-mode/attempt, POST
+p, RiskManager, /api/v1/shadow-mode/attempt, POST

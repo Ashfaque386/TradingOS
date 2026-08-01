@@ -12,24 +12,40 @@ src/engine/paper_trading/execution_service.py) -- nothing here ever calls place_
 PnL uses the average-cost-basis method (each closing trade realizes PnL against the position's
 running weighted-average entry price), not FIFO lot matching -- a real, standard, but simplified
 accounting choice, documented here rather than silently assumed.
+
+UPDATE 2026-08-01 (SEC-046, found during a paper-trading-dashboard research pass): POST /execute
+had NO auth dependency at all -- any unauthenticated caller could trigger a real depth-walked
+broker quote call and write rows into the same paper_trades ledger the Go-Live Readiness Gate
+(src/engine/go_live_gate.py) counts trades from. Gated to the same SystemAdministrator/
+PortfolioManager/RiskManager set used for POST /strategies/{id}/backtest (an equivalent-weight
+operational action, same precedent as REL-011 E10.11.0/SEC-045). GET /trades and GET /positions
+stay open (Any role, matching this codebase's existing read-endpoint convention) -- only the
+mutating call was ever the gap.
 """
 
 import uuid
 from datetime import datetime
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from src.api.deps import require_role
 from src.brokers.base import Side
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.db import get_session
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.engine.paper_trading.execution_service import NoLiquidityError, execute_paper_trade
 from src.engine.paper_trading.position_accounting import replay_ledger
 from src.models.paper_trading import PaperTrade
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/paper-trading", tags=["paper-trading"])
+
+_can_execute_paper_trade = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
 
 
 class ExecuteRequest(BaseModel):
@@ -68,7 +84,9 @@ def _to_response(trade: PaperTrade) -> PaperTradeResponse:
 
 
 @router.post("/execute", response_model=PaperTradeResponse, status_code=201)
-async def execute(body: ExecuteRequest) -> PaperTradeResponse:
+async def execute(
+    body: ExecuteRequest, _user: User = Depends(_can_execute_paper_trade)
+) -> PaperTradeResponse:
     try:
         broker = build_broker()
     except NoBrokerConfigured as exc:

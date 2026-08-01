@@ -17,10 +17,12 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.db import get_session
+from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.account import Account
 from src.models.paper_trading import PaperTrade
 from src.models.strategy import Strategy
 from src.models.user import User
+from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
 
@@ -174,19 +176,50 @@ async def test_execute_against_a_real_broker_quote():
     except NoBrokerConfigured:
         pytest.skip("No broker configured in this environment")
 
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.post(
+            "/api/v1/paper-trading/execute",
+            json={"symbol": "INFY", "side": "BUY", "quantity": 10},
+            headers=auth_header(token),
+        )
+        if response.status_code != 201:
+            pytest.skip(
+                f"Real broker call failed (status={response.status_code}, "
+                f"body={response.text[:200]}) -- almost certainly today's expired daily access "
+                "token (Zerodha/Upstox both require a fresh login each trading day, no refresh "
+                "token), not a code defect."
+            )
+
+        body = response.json()
+        assert body["symbol"] == "INFY"
+        assert body["filled_quantity"] > 0
+        with get_session() as session:
+            session.query(PaperTrade).filter(PaperTrade.id == uuid.UUID(body["id"])).delete()
+            session.commit()
+    finally:
+        cleanup_user(user_id)
+
+
+def test_execute_requires_authentication():
+    """SEC-046: POST /execute was found with NO auth dependency at all -- any unauthenticated
+    caller could trigger a real broker quote call and write a row into the ledger the Go-Live
+    Readiness Gate counts trades from. 401 must fire before the handler body runs (before any
+    broker call or DB write), same shape as test_backtest_trigger_requires_authentication."""
     response = client.post(
         "/api/v1/paper-trading/execute", json={"symbol": "INFY", "side": "BUY", "quantity": 10}
     )
-    if response.status_code != 201:
-        pytest.skip(
-            f"Real broker call failed (status={response.status_code}, body={response.text[:200]}) "
-            "-- almost certainly today's expired daily access token (Zerodha/Upstox both require "
-            "a fresh login each trading day, no refresh token), not a code defect."
-        )
+    assert response.status_code == 401
 
-    body = response.json()
-    assert body["symbol"] == "INFY"
-    assert body["filled_quantity"] > 0
-    with get_session() as session:
-        session.query(PaperTrade).filter(PaperTrade.id == uuid.UUID(body["id"])).delete()
-        session.commit()
+
+def test_execute_requires_the_gated_role():
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    try:
+        response = client.post(
+            "/api/v1/paper-trading/execute",
+            json={"symbol": "INFY", "side": "BUY", "quantity": 10},
+            headers=auth_header(token),
+        )
+        assert response.status_code == 403
+    finally:
+        cleanup_user(user_id)

@@ -10,6 +10,7 @@ import { GlassCard } from "@/components/ui/glass-card";
 import { Gated } from "@/components/ui/gated";
 import { CodeDiff } from "./code-diff";
 import { EquityCurveChart } from "./equity-curve-chart";
+import { GoLiveGatePanel } from "./go-live-gate-panel";
 import { VALIDATION_COLOR } from "./strategy-card";
 
 export function ReviewPanel({ strategyId }: { strategyId: string }) {
@@ -208,6 +209,8 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
           </>
         )}
       </GlassCard>
+
+      <GoLiveGatePanel strategyId={strategyId} />
     </div>
   );
 }

@@ -3,26 +3,41 @@ Phase_9_Master_Implementation_Guide.md §4/§6: "Shadow Mode has run for 5 conse
 zero broker API syntax errors." See src/brokers/shadow_mode.py's module docstring for why
 Zerodha and Upstox attempts are handled honestly differently (no broker-agnostic "dry run" flag
 actually exists on either broker's real API).
+
+UPDATE 2026-08-01 (SEC-046, found during a paper-trading-dashboard research pass): POST /attempt
+had NO auth dependency at all -- any unauthenticated caller could trigger a real order-placement
+call against Upstox's real sandbox (used_real_sandbox=True path), not just a harmless local
+payload build. Gated to the same SystemAdministrator/PortfolioManager/RiskManager set as
+POST /paper-trading/execute and POST /strategies/{id}/backtest (same precedent as REL-011
+E10.11.0/SEC-045). GET /status stays open (Any role, matching this codebase's existing
+read-endpoint convention) -- only the mutating, broker-calling endpoint was ever the gap.
 """
 
 import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from src.api.deps import require_role
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderType, ProductType, Side, Validity
 from src.brokers.factory import NoBrokerConfigured, build_upstox_adapter, build_zerodha_adapter
 from src.brokers.shadow_mode import ShadowModeAdapter
 from src.core.db import get_session
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.engine.shadow_mode_status import compute_daily_summary, consecutive_clean_days
 from src.models.shadow_mode import ShadowModeAttempt
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/shadow-mode", tags=["shadow-mode"])
 
 BrokerName = Literal["zerodha", "upstox"]
+
+_can_attempt_shadow_order = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
 
 
 class AttemptRequest(BaseModel):
@@ -54,7 +69,9 @@ def _build_adapter(broker: BrokerName) -> BrokerAdapter:
 
 
 @router.post("/attempt", response_model=AttemptResponse, status_code=201)
-async def attempt(body: AttemptRequest) -> AttemptResponse:
+async def attempt(
+    body: AttemptRequest, _user: User = Depends(_can_attempt_shadow_order)
+) -> AttemptResponse:
     try:
         broker_adapter = _build_adapter(body.broker)
     except NoBrokerConfigured as exc:
