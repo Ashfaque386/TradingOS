@@ -27,6 +27,11 @@ router is the read/action surface on top of that real data.
 to every status transition this endpoint handles (not just Paper->Live) since it's the one real
 human-approval action in this router and the strictest applicable gate. Everything else here is
 read-only and stays open, matching every other Phase 4 router's convention.
+
+REL-011 E10.11.0: `/backtest` was found to have NO auth dependency at all during frontend-
+completeness research -- any caller, including an unauthenticated one, could launch a real
+vectorbt backtest run. Gated to SystemAdministrator/PortfolioManager/RiskManager (the same set
+as agents.py's Orchestrator HITL endpoints), a real fix, not a pre-existing documented gap.
 """
 
 import threading
@@ -43,7 +48,7 @@ from src.api.deps import require_role
 from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
-from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake
 from src.engine.sandbox.backtest_runner import (
     RealBacktestOutcome,
@@ -56,6 +61,13 @@ from src.models.user import User
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 
 _can_promote = require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, audit_denials=True)
+# REL-011 E10.11.0: found with NO auth dependency at all -- any caller, including
+# unauthenticated ones, could launch a real vectorbt backtest run. Gated to the same SA/PM/RM
+# set as src/api/routers/agents.py's Orchestrator HITL endpoints (_can_manage_hitl), since
+# triggering a real backtest is an equivalent-weight operational action.
+_can_trigger_backtest = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
 
 DEFAULT_BACKTEST_LOOKBACK_DAYS = 365
 DEFAULT_INITIAL_CAPITAL = 100_000.0
@@ -297,7 +309,9 @@ def _fetch_code(version_id: uuid.UUID) -> str:
 
 
 @router.post("/{strategy_id}/backtest", response_model=BacktestTriggerResponse, status_code=202)
-def trigger_backtest(strategy_id: uuid.UUID) -> BacktestTriggerResponse:
+def trigger_backtest(
+    strategy_id: uuid.UUID, _user: User = Depends(_can_trigger_backtest)
+) -> BacktestTriggerResponse:
     with get_session() as session:
         strategy = session.get(Strategy, strategy_id)
         if strategy is None:

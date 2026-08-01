@@ -1,6 +1,8 @@
 // REL-009 E9.6: the Agent Console (/agents) renders real data from the real
 // GET /api/v1/agents/runs endpoint, not a fabricated/mocked list.
 
+export {};
+
 const API_URL = Cypress.env("apiUrl");
 
 describe("Agent Console", () => {

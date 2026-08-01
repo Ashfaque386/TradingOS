@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { Gated } from "@/components/ui/gated";
 import type { PromptSummary } from "@/lib/api";
 
 export function PromptManager() {
@@ -88,14 +89,16 @@ function PromptRow({
               </button>
             ))}
             {previewVersion !== prompt.active_version && (
-              <button
-                onClick={() => setActive.mutate(previewVersion)}
-                disabled={setActive.isPending}
-                className="ml-auto flex items-center gap-1 rounded-md bg-emerald-500/90 px-2.5 py-1 text-[10px] font-semibold text-black transition hover:bg-emerald-400 disabled:opacity-50"
-              >
-                <Check className="h-3 w-3" />
-                {setActive.isPending ? "Swapping…" : `Make v${previewVersion} active`}
-              </button>
+              <Gated permission="swapActivePrompt">
+                <button
+                  onClick={() => setActive.mutate(previewVersion)}
+                  disabled={setActive.isPending}
+                  className="ml-auto flex items-center gap-1 rounded-md bg-emerald-500/90 px-2.5 py-1 text-[10px] font-semibold text-black transition hover:bg-emerald-400 disabled:opacity-50"
+                >
+                  <Check className="h-3 w-3" />
+                  {setActive.isPending ? "Swapping…" : `Make v${previewVersion} active`}
+                </button>
+              </Gated>
             )}
           </div>
           <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-black/40 p-3 font-mono text-[10.5px] leading-relaxed text-zinc-400">

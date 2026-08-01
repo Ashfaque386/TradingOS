@@ -10,6 +10,8 @@
 // left tripped by a previous run), and create a real, fresh ReadOnlyAuditor user via the real
 // POST /users endpoint -- exactly the same real user-creation path an admin would use.
 
+export {};
+
 const API_URL = Cypress.env("apiUrl");
 
 function loginViaApi(email: string, password: string) {

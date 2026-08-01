@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { Gated } from "@/components/ui/gated";
 
 const STATUS_STYLES: Record<string, string> = {
   Running: "text-cyan-300",
@@ -36,14 +37,16 @@ export function RunControls({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2">
-        <button
-          onClick={() => trigger.mutate()}
-          disabled={trigger.isPending}
-          className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-4 py-2 text-xs font-semibold text-black transition hover:brightness-110 disabled:opacity-50"
-        >
-          <Play className="h-3.5 w-3.5" />
-          {trigger.isPending ? "Starting…" : "Trigger Research Cycle"}
-        </button>
+        <Gated permission="triggerResearch">
+          <button
+            onClick={() => trigger.mutate()}
+            disabled={trigger.isPending}
+            className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-4 py-2 text-xs font-semibold text-black transition hover:brightness-110 disabled:opacity-50"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {trigger.isPending ? "Starting…" : "Trigger Research Cycle"}
+          </button>
+        </Gated>
         {trigger.isError && (
           <span className="text-[11px] text-rose-400">Failed to start — is the backend up?</span>
         )}

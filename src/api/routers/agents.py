@@ -465,10 +465,15 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
 
 
 @router.post("/research/trigger", response_model=TriggerResponse, status_code=202)
-def trigger_research() -> TriggerResponse:
+def trigger_research(_user: User = Depends(_can_manage_hitl)) -> TriggerResponse:
     """Starts one real end-to-end graph run (CEO -> Market Analyst -> Strategy Generator ->
     Code Gen -> Validator loop). Every node makes a real LLM call through
     src/agents/llm_router.py against whichever provider is configured -- this is not a dry run.
+
+    REL-011 E10.11.0: found with NO auth dependency at all during frontend-completeness
+    research -- any caller, including unauthenticated ones, could kick off a real,
+    LLM-costing graph run. Gated to the same SA/PM/RM set as the Orchestrator HITL endpoints
+    below, since triggering the research pipeline is an equivalent-weight operational action.
 
     Dispatched via a detached `threading.Thread`, not FastAPI's `BackgroundTasks`: Starlette
     awaits every registered BackgroundTask during graceful shutdown, and a single node here can
@@ -518,6 +523,11 @@ class AgentRunSummary(BaseModel):
     status: str
     started_at: datetime
     ended_at: datetime | None
+    # REL-011 E11.4b: AgentRun.human_decision (REL-010 E10.8d) was never serialized onto this
+    # response model -- only HitlDecisionResponse (the approve/reject mutation's own return
+    # value) carried it, so a reloaded run detail view had no way to show "already
+    # approved/rejected" state. Additive field, not a new mutation.
+    human_decision: str | None = None
 
 
 class AgentRunDetail(AgentRunSummary):
@@ -533,6 +543,7 @@ def _to_summary(run: AgentRun) -> AgentRunSummary:
         status=run.status,
         started_at=run.started_at,
         ended_at=run.ended_at,
+        human_decision=run.human_decision,
     )
 
 
@@ -791,7 +802,12 @@ def get_prompt_version(slug: str, version: int) -> PromptVersionContent:
 
 
 @router.put("/prompts/{slug}/active-version", response_model=PromptSummary)
-def set_active_version(slug: str, body: SetActiveVersionRequest) -> PromptSummary:
+def set_active_version(
+    slug: str, body: SetActiveVersionRequest, _user: User = Depends(_can_manage_hitl)
+) -> PromptSummary:
+    """REL-011 E10.11.0: found with NO auth dependency at all -- any caller could hot-swap
+    which prompt version drives a production agent. Gated to the same SA/PM/RM set as the
+    Orchestrator HITL endpoints, since this is an equivalent-weight operational action."""
     try:
         prompt_registry.set_active_version(slug, body.version)
     except PromptNotFoundError as exc:

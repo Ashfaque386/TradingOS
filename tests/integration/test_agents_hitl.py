@@ -4,8 +4,9 @@ real FastAPI app + real Postgres.
 `retry` is real dispatched via the same detached `threading.Thread` machinery as
 `/research/trigger` (src/api/routers/agents.py) -- every real LLM call that machinery would make
 is exactly the kind of thing this codebase's existing test suite deliberately never exercises
-over HTTP (confirmed: no test anywhere calls POST /research/trigger; see
-tests/integration/test_agents_router_api.py's own docstring). `threading.Thread` itself is
+over HTTP (confirmed: no test ever reaches POST /research/trigger's real handler body -- REL-011
+E10.11.0 added 401/403 boundary tests for its new RBAC gate, which never get past that gate; see
+tests/integration/test_agents_router_api.py). `threading.Thread` itself is
 patched here so the retry endpoint's real DB writes (new AgentRun row, `retried_from_run_id`)
 are exercised without spawning an actual real graph run -- the same category of mock as
 test_portfolio_manager_agent.py patching `complete` instead of calling a live LLM.

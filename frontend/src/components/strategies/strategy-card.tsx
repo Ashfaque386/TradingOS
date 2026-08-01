@@ -16,20 +16,25 @@ export function StrategyCard({
   selected,
   onSelect,
   onDragEnd,
+  draggable,
 }: {
   strategy: StrategySummary;
   selected: boolean;
   onSelect: () => void;
   onDragEnd: (info: PanInfo) => void;
+  /** REL-011 E11.3: gates only the drag-to-promote interaction (usePermission("promoteStrategy")
+   * in the parent board) -- the card itself stays visible/readable for every role, since the
+   * board is a legitimate read surface and only the mutating drag gesture needs gating. */
+  draggable: boolean;
 }) {
   const dragging = useRef(false);
 
   return (
     <motion.div
-      drag
+      drag={draggable}
       dragSnapToOrigin
       dragElastic={0.15}
-      whileDrag={{ scale: 1.04, zIndex: 20, boxShadow: "0 20px 40px rgba(0,0,0,0.5)" }}
+      whileDrag={draggable ? { scale: 1.04, zIndex: 20, boxShadow: "0 20px 40px rgba(0,0,0,0.5)" } : undefined}
       onDragStart={() => {
         dragging.current = true;
       }}
@@ -43,7 +48,8 @@ export function StrategyCard({
         if (!dragging.current) onSelect();
       }}
       className={cn(
-        "cursor-grab select-none rounded-xl border p-3 transition-colors active:cursor-grabbing",
+        "select-none rounded-xl border p-3 transition-colors",
+        draggable && "cursor-grab active:cursor-grabbing",
         selected
           ? "border-cyan-400/40 bg-cyan-400/[0.06]"
           : "border-white/8 bg-white/[0.02] hover:border-white/15",

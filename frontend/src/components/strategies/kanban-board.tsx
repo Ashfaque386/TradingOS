@@ -5,6 +5,7 @@ import type { PanInfo } from "framer-motion";
 import { useRef } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { usePermission } from "@/lib/usePermission";
 import type { StrategyStatus, StrategySummary } from "@/lib/api";
 import { StrategyCard } from "./strategy-card";
 
@@ -27,6 +28,12 @@ export function KanbanBoard({
 }) {
   const queryClient = useQueryClient();
   const columnRefs = useRef<Partial<Record<StrategyStatus, HTMLDivElement | null>>>({});
+  // REL-011 E11.3: this drag-to-promote gesture is a real mutating control (POST
+  // /strategies/{id}/promote, server-gated SA/PM) that previously had NO client-side role
+  // check at all -- any role could drag a card and attempt a promote (it would 403 server-side,
+  // but the UI let them try). The board itself stays visible/readable for every role; only the
+  // drag interaction is gated.
+  const canPromote = usePermission("promoteStrategy");
 
   const promote = useMutation({
     mutationFn: ({ id, toStatus }: { id: string; toStatus: StrategyStatus }) =>
@@ -37,6 +44,7 @@ export function KanbanBoard({
   const byStatus = (status: StrategyStatus) => strategies.filter((s) => s.status === status);
 
   const handleDragEnd = (strategy: StrategySummary, info: PanInfo) => {
+    if (!canPromote) return;
     const point = { x: info.point.x, y: info.point.y };
     for (const col of COLUMNS) {
       const el = columnRefs.current[col.status];
@@ -53,7 +61,17 @@ export function KanbanBoard({
   };
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+    <div>
+      {!canPromote && (
+        <p
+          data-testid="kanban-readonly-banner"
+          className="mb-3 text-[11px] text-zinc-500"
+        >
+          Your role can view strategy status but cannot drag a card to promote it. Requires
+          System Administrator or Portfolio Manager.
+        </p>
+      )}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
       {COLUMNS.map((col) => {
         const items = byStatus(col.status);
         return (
@@ -87,11 +105,13 @@ export function KanbanBoard({
                 selected={s.id === selectedId}
                 onSelect={() => onSelect(s.id)}
                 onDragEnd={(info) => handleDragEnd(s, info)}
+                draggable={canPromote}
               />
             ))}
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

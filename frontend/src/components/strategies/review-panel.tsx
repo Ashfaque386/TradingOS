@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useBacktestJob } from "@/hooks/useBacktestJob";
 import { GlassCard } from "@/components/ui/glass-card";
+import { Gated } from "@/components/ui/gated";
 import { CodeDiff } from "./code-diff";
 import { EquityCurveChart } from "./equity-curve-chart";
 import { VALIDATION_COLOR } from "./strategy-card";
@@ -136,14 +137,16 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
         eyebrow="Sandbox"
         title="Backtest"
         action={
-          <button
-            onClick={() => trigger.mutate()}
-            disabled={trigger.isPending || jobRunning || !strategy.current_version_id}
-            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-3 py-1.5 text-[11px] font-semibold text-black transition hover:brightness-110 disabled:opacity-40"
-          >
-            <Play className="h-3 w-3" />
-            {jobRunning ? "Running…" : "Run Backtest"}
-          </button>
+          <Gated permission="triggerBacktest">
+            <button
+              onClick={() => trigger.mutate()}
+              disabled={trigger.isPending || jobRunning || !strategy.current_version_id}
+              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-3 py-1.5 text-[11px] font-semibold text-black transition hover:brightness-110 disabled:opacity-40"
+            >
+              <Play className="h-3 w-3" />
+              {jobRunning ? "Running…" : "Run Backtest"}
+            </button>
+          </Gated>
         }
       >
         {jobRunning && (

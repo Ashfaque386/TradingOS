@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.core.db import get_session
-from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
+from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.account import Account
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
 from src.models.user import User
@@ -161,7 +161,9 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         assert "run_backtest" in version_response.json()["python_code"]
 
         # Real backtest, real sandbox, real TCS data -- polled to completion (~60-90s).
-        trigger_response = client.post(f"/api/v1/strategies/{strategy_id}/backtest")
+        trigger_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest", headers=headers
+        )
         assert trigger_response.status_code == 202
         job_id = trigger_response.json()["job_id"]
 
@@ -255,7 +257,9 @@ def test_backtest_rejects_a_strategy_with_no_universe_recorded():
     headers = auth_header(admin_token)
 
     try:
-        backtest_response = client.post(f"/api/v1/strategies/{strategy_id}/backtest")
+        backtest_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest", headers=headers
+        )
         assert backtest_response.status_code == 409
 
         promote_response = client.post(
@@ -267,3 +271,23 @@ def test_backtest_rejects_a_strategy_with_no_universe_recorded():
     finally:
         _cleanup_fixture_rows(user_id, account_id, strategy_id, version_id)
         cleanup_user(admin_id)
+
+
+def test_backtest_trigger_requires_authentication():
+    """REL-011 E10.11.0: POST /{strategy_id}/backtest was found with NO auth dependency at all
+    -- any caller, including unauthenticated ones, could launch a real vectorbt backtest run.
+    A random UUID 404s (or 401s first, before any DB lookup) either way -- what matters here is
+    that this never reaches 202/409, proving the gate runs before the handler body."""
+    response = client.post(f"/api/v1/strategies/{uuid.uuid4()}/backtest")
+    assert response.status_code == 401
+
+
+def test_backtest_trigger_requires_the_gated_role():
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    try:
+        response = client.post(
+            f"/api/v1/strategies/{uuid.uuid4()}/backtest", headers=auth_header(token)
+        )
+        assert response.status_code == 403
+    finally:
+        cleanup_user(user_id)

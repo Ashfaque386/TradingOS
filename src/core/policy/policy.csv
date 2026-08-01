@@ -86,3 +86,12 @@ p, SystemAdministrator, /api/v1/audit/export, GET
 p, ReadOnlyAuditor, /api/v1/audit/export, GET
 p, SystemAdministrator, /api/v1/observability/agent-run-durations, GET
 p, ReadOnlyAuditor, /api/v1/observability/agent-run-durations, GET
+p, SystemAdministrator, /api/v1/agents/research/trigger, POST
+p, PortfolioManager, /api/v1/agents/research/trigger, POST
+p, RiskManager, /api/v1/agents/research/trigger, POST
+p, SystemAdministrator, /api/v1/agents/prompts/{slug}/active-version, PUT
+p, PortfolioManager, /api/v1/agents/prompts/{slug}/active-version, PUT
+p, RiskManager, /api/v1/agents/prompts/{slug}/active-version, PUT
+p, SystemAdministrator, /api/v1/strategies/{strategy_id}/backtest, POST
+p, PortfolioManager, /api/v1/strategies/{strategy_id}/backtest, POST
+p, RiskManager, /api/v1/strategies/{strategy_id}/backtest, POST

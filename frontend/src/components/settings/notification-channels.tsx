@@ -5,6 +5,7 @@ import { BadgeCheck, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ALERT_LEVELS, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { Gated } from "@/components/ui/gated";
 import type { AlertLevel, ChannelType, NotificationChannel } from "@/lib/api";
 
 const CHANNEL_TYPES: ChannelType[] = ["Telegram", "Discord", "WhatsApp", "Slack", "Email"];
@@ -68,47 +69,64 @@ export function NotificationChannels() {
                 </span>
               )}
             </div>
-            <button
-              onClick={() => remove.mutate(channel.id)}
-              disabled={remove.isPending}
-              className="rounded-md p-1.5 text-zinc-600 transition hover:bg-rose-500/10 hover:text-rose-400"
-              aria-label="Remove channel"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            <Gated permission="manageNotificationChannels">
+              <button
+                onClick={() => remove.mutate(channel.id)}
+                disabled={remove.isPending}
+                className="rounded-md p-1.5 text-zinc-600 transition hover:bg-rose-500/10 hover:text-rose-400"
+                aria-label="Remove channel"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </Gated>
           </div>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {ALERT_LEVELS.map((level) => {
               const active = (channel.preferences.alert_levels ?? []).includes(level);
-              return (
-                <button
-                  key={level}
-                  onClick={() => toggleAlertLevel.mutate({ channel, level })}
+              const pill = (
+                <span
                   className={cn(
                     "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
                     active
                       ? "bg-cyan-400/15 text-cyan-200"
-                      : "bg-white/5 text-zinc-600 hover:text-zinc-400",
+                      : "bg-white/5 text-zinc-600",
                   )}
                 >
                   {ALERT_LABELS[level]}
-                </button>
+                </span>
+              );
+              return (
+                <Gated key={level} permission="manageNotificationChannels" fallback={pill}>
+                  <button
+                    onClick={() => toggleAlertLevel.mutate({ channel, level })}
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
+                      active
+                        ? "bg-cyan-400/15 text-cyan-200"
+                        : "bg-white/5 text-zinc-600 hover:text-zinc-400",
+                    )}
+                  >
+                    {ALERT_LABELS[level]}
+                  </button>
+                </Gated>
               );
             })}
           </div>
         </div>
       ))}
 
-      {adding ? (
-        <AddChannelForm onDone={() => setAdding(false)} />
-      ) : (
-        <button
-          onClick={() => setAdding(true)}
-          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/10 py-2.5 text-xs font-medium text-zinc-500 transition hover:border-white/20 hover:text-zinc-300"
-        >
-          <Plus className="h-3.5 w-3.5" /> Add channel
-        </button>
-      )}
+      <Gated permission="manageNotificationChannels">
+        {adding ? (
+          <AddChannelForm onDone={() => setAdding(false)} />
+        ) : (
+          <button
+            onClick={() => setAdding(true)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/10 py-2.5 text-xs font-medium text-zinc-500 transition hover:border-white/20 hover:text-zinc-300"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add channel
+          </button>
+        )}
+      </Gated>
     </div>
   );
 }

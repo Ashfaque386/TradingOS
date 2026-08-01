@@ -109,6 +109,7 @@ export interface AgentRunSummary {
   status: string;
   started_at: string;
   ended_at: string | null;
+  human_decision: string | null;
 }
 
 export interface AgentLogEntry {
@@ -287,6 +288,18 @@ export interface CanvasState {
   latest_agent_activity: LatestAgentActivity | null;
 }
 
+/** REL-011 E11.4a: first endpoint set needing optional query params from the frontend --
+ * builds `?a=1&b=2`, skipping undefined/null values, empty string otherwise. */
+function toQuery(params?: Record<string, string | number | undefined>): string {
+  if (!params) return "";
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : "";
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", headers: authHeaders() });
   if (!res.ok) {
@@ -338,6 +351,25 @@ async function del(path: string): Promise<void> {
   }
 }
 
+/** REL-011 E11.4a: a plain `<a href>` GET can't attach a Bearer header, and audit export
+ * (`_can_read_audit`) genuinely requires one -- fetches the file as a Blob and triggers a
+ * synthetic download instead. */
+export async function downloadAuthenticated(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  if (!res.ok) {
+    throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 // Explicit-token variant of post() -- used for the 3 MFA endpoints below, which authenticate
 // with a short-lived pending-MFA token (returned by /auth/login, not yet a real session), not
 // the module-level authToken a logged-in user's normal requests carry.
@@ -387,6 +419,60 @@ export interface CurrentUser {
   email: string;
   full_name: string | null;
   role: Role;
+}
+
+// REL-011 E11.4a -- src/api/routers/audit.py's real response models.
+export interface AuditLogEntry {
+  id: number;
+  actor_type: string;
+  actor_id: string;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  before_state: Record<string, unknown> | null;
+  after_state: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+  entry_hash: string;
+  prev_entry_hash: string;
+}
+
+export interface TradeAuditTrace {
+  entity_id: string;
+  entries: AuditLogEntry[];
+}
+
+export interface ActorAuditSummary {
+  actor_id: string;
+  total_entries: number;
+  action_counts: Record<string, number>;
+  first_entry_at: string;
+  last_entry_at: string;
+}
+
+// REL-011 E11.4b -- src/api/routers/agents.py's real HITL response models.
+export interface RetryResponse {
+  run_id: string;
+  retried_from_run_id: string;
+  thread_id: string;
+  status: string;
+}
+
+export interface HitlDecisionResponse {
+  run_id: string;
+  human_decision: string;
+  strategy_id: string | null;
+  strategy_status: string | null;
+}
+
+// REL-011 E11.1 -- src/api/routers/market_data.py's real response models.
+export interface OhlcvBar {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 export const api = {
@@ -459,4 +545,26 @@ export const api = {
   sendChatMessage: (content: string) =>
     post<ChatMessage>("/api/v1/chat/messages", { content }),
   canvasState: () => get<CanvasState>("/api/v1/canvas/state"),
+
+  auditLogs: (params?: { entity_type?: string; actor_id?: string; limit?: number }) =>
+    get<AuditLogEntry[]>(`/api/v1/audit/logs${toQuery(params)}`),
+  auditLog: (id: number) => get<AuditLogEntry>(`/api/v1/audit/logs/${id}`),
+  tradeTrace: (entityId: string) =>
+    get<TradeAuditTrace>(`/api/v1/audit/trades/${entityId}/trace`),
+  actorSummary: (actorId: string) =>
+    get<ActorAuditSummary>(`/api/v1/audit/actors/${actorId}/summary`),
+  auditExportPath: (params: {
+    export_format: "csv" | "ndjson";
+    entity_type?: string;
+    limit?: number;
+  }) => `/api/v1/audit/export${toQuery(params)}`,
+
+  retryRun: (runId: string) => post<RetryResponse>(`/api/v1/agents/runs/${runId}/retry`),
+  approveRun: (runId: string) =>
+    post<HitlDecisionResponse>(`/api/v1/agents/runs/${runId}/approve`),
+  rejectRun: (runId: string, reason: string) =>
+    post<HitlDecisionResponse>(`/api/v1/agents/runs/${runId}/reject`, { reason }),
+
+  ohlcv: (symbol: string) => get<OhlcvBar[]>(`/api/v1/market/ohlcv/${symbol}`),
+  symbols: () => get<string[]>("/api/v1/market/symbols"),
 };

@@ -6,14 +6,26 @@ import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { PERMISSIONS, type PermissionKey } from "@/lib/permissions";
+import type { Role } from "@/lib/api";
 
-const NAV_LINKS = [
+// REL-011 E11.3: `permission` is only set on links whose page is itself role-restricted
+// server-side (today just /audit) -- every other route stays visible to all roles, since the
+// roadmap's "cannot see... any mutating control" wording is about controls, not read-only pages.
+const NAV_LINKS: { href: string; label: string; permission?: PermissionKey }[] = [
   { href: "/", label: "Portfolio & Risk" },
   { href: "/agents", label: "Agent Console" },
   { href: "/strategies", label: "Strategies" },
   { href: "/chat", label: "Chat" },
+  { href: "/audit", label: "Audit", permission: "readAudit" },
   { href: "/settings", label: "Settings" },
 ];
+
+function visibleLinks(role: Role | undefined) {
+  return NAV_LINKS.filter(
+    (link) => !link.permission || (!!role && (PERMISSIONS[link.permission] as readonly string[]).includes(role)),
+  );
+}
 
 export function TopBar({ connected, subtitle }: { connected: boolean; subtitle: string }) {
   const pathname = usePathname();
@@ -49,7 +61,7 @@ export function TopBar({ connected, subtitle }: { connected: boolean; subtitle: 
       </div>
 
       <nav className="flex gap-1 rounded-lg bg-black/30 p-1">
-        {NAV_LINKS.map((link) => (
+        {visibleLinks(user?.role).map((link) => (
           <Link
             key={link.href}
             href={link.href}
