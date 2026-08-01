@@ -7,6 +7,8 @@ import { TopBar } from "@/components/layout/top-bar";
 import { GlassCard } from "@/components/ui/glass-card";
 import { IntegrationStatusGrid } from "@/components/settings/integration-status-grid";
 import { NotificationChannels } from "@/components/settings/notification-channels";
+import { BrokerCredentialsForm } from "@/components/settings/broker-credentials-form";
+import { RiskLimitsPanel } from "@/components/settings/risk-limits-panel";
 
 export default function SettingsPage() {
   const integrationsQuery = useQuery({
@@ -39,9 +41,16 @@ export default function SettingsPage() {
             <div className="h-16 animate-pulse rounded-xl bg-white/5" />
           )}
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
-            Broker credentials are designed to live in Vault, never in this database or API (see
-            DB-004) — no key material is ever exposed here, only whether each broker is wired up.
+            Broker credentials live in Vault, never in this database (see DB-004) — the status
+            above never exposes a stored value, only whether each broker is wired up. Writing a
+            new value below (REL-017 E17.2) is write-only in the same way: there is no endpoint
+            anywhere in this codebase that reads a stored credential back out to an API client.
           </p>
+          <BrokerCredentialsForm />
+        </GlassCard>
+
+        <GlassCard eyebrow="Risk" title="Risk Limits">
+          <RiskLimitsPanel />
         </GlassCard>
 
         <GlassCard eyebrow="Alerting" title="Notification Channels">

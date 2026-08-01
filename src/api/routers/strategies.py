@@ -111,6 +111,17 @@ class BacktestSummary(BaseModel):
     expectancy: float | None
     total_trades: int | None
     has_equity_curve: bool
+    # REL-017 E17.4 (DB-007): real column, real since Phase 3 -- exposed here for the first time.
+    # `None` for every historical backtest today, honestly: nothing in this pipeline ever calls
+    # persist_monte_carlo_p95_max_drawdown() outside its own test file. Running a real Monte
+    # Carlo simulation needs per-trade returns (src/engine/optimization/monte_carlo.py's
+    # run_monte_carlo_simulation(trade_returns: list[float])), which the sandboxed strategy
+    # code's return contract (PMPT-004: {"metrics": {...}, "equity_curve": [...]}) never asked
+    # for and no backtest has ever captured -- a real, structural gap this field's own presence
+    # doesn't paper over, and deliberately out of E17.4's scope to close (would mean changing the
+    # sandbox contract and re-running every historical backtest, not just adding UI on top of
+    # data that already exists).
+    monte_carlo_p95_max_drawdown: float | None
     created_at: datetime
 
 
@@ -150,6 +161,7 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         expectancy=result.expectancy,
         total_trades=result.total_trades,
         has_equity_curve=bool(result.equity_curve_path),
+        monte_carlo_p95_max_drawdown=result.monte_carlo_p95_max_drawdown,
         created_at=result.created_at,
     )
 

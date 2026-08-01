@@ -3,17 +3,49 @@
 import ReactECharts from "echarts-for-react";
 import type { EquityCurvePoint } from "@/lib/api";
 
-/** Equity curve vs Nifty 50, per Phase_7_Frontend_Architecture.md §2.3. Only the strategy's own
- * curve is real -- no Nifty 50 index data is ingested anywhere in the backend (confirmed; same
- * gap src/api/routers/portfolio.py already flags honestly for beta_vs_nifty50), so no benchmark
- * line is drawn rather than fabricating one. */
-export function EquityCurveChart({ points }: { points: EquityCurvePoint[] }) {
+/** Equity curve vs Nifty 50. REL-017 E17.3: `benchmark` is real ^NSEI OHLCV (ingested by
+ * REL-016's E16.2, src/data/ingest/pipeline.py --source yfinance --symbols ^NSEI), filtered by
+ * the caller to the backtest's own date range and passed in already-aligned to `points` by
+ * date -- both series are normalized to start at 100 here so they're comparable regardless of
+ * the strategy's actual capital base vs. the index's own price level. `benchmark` is optional
+ * and omitted (not fabricated as a flat line) whenever the caller has no overlapping real data
+ * for the period. */
+export function EquityCurveChart({
+  points,
+  benchmark,
+}: {
+  points: EquityCurvePoint[];
+  benchmark?: (number | null)[];
+}) {
   if (points.length === 0) {
     return (
       <div className="flex h-[220px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 text-center">
         <p className="text-xs text-zinc-500">No equity curve for this backtest.</p>
       </div>
     );
+  }
+
+  const baseEquity = points[0].equity;
+  const normalizedEquity = points.map((p) => (baseEquity !== 0 ? (p.equity / baseEquity) * 100 : 100));
+
+  const series: Record<string, unknown>[] = [
+    {
+      name: "Strategy",
+      type: "line",
+      data: normalizedEquity,
+      showSymbol: false,
+      lineStyle: { color: "#22d3ee", width: 2 },
+      areaStyle: { color: "rgba(34,211,238,0.08)" },
+    },
+  ];
+  if (benchmark) {
+    series.push({
+      name: "Nifty 50",
+      type: "line",
+      data: benchmark,
+      showSymbol: false,
+      lineStyle: { color: "#a78bfa", width: 1.5, type: "dashed" },
+    });
   }
 
   const option = {
@@ -30,7 +62,9 @@ export function EquityCurveChart({ points }: { points: EquityCurvePoint[] }) {
       scale: true,
       axisLine: { show: false },
       splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
-      axisLabel: { color: "#71717a", fontSize: 10 },
+      axisLabel: { color: "#71717a", fontSize: 10, formatter: "{value}" },
+      name: "Indexed to 100",
+      nameTextStyle: { color: "#52525b", fontSize: 9 },
     },
     tooltip: {
       trigger: "axis",
@@ -38,24 +72,22 @@ export function EquityCurveChart({ points }: { points: EquityCurvePoint[] }) {
       borderColor: "rgba(255,255,255,0.1)",
       textStyle: { color: "#f4f4f5", fontFamily: "var(--font-sans)", fontSize: 11 },
     },
-    series: [
-      {
-        name: "Equity",
-        type: "line",
-        data: points.map((p) => p.equity),
-        showSymbol: false,
-        lineStyle: { color: "#22d3ee", width: 2 },
-        areaStyle: { color: "rgba(34,211,238,0.08)" },
-      },
-    ],
+    legend: benchmark
+      ? { data: ["Strategy", "Nifty 50"], textStyle: { color: "#a1a1aa", fontSize: 10 }, top: 0 }
+      : undefined,
+    series,
   };
 
   return (
     <div>
       <ReactECharts option={option} style={{ height: 220 }} opts={{ renderer: "svg" }} />
-      <p className="mt-2 text-[10px] text-zinc-600">
-        No Nifty 50 benchmark line -- index data isn&apos;t ingested anywhere in the backend yet.
-      </p>
+      {!benchmark && (
+        <p className="mt-2 text-[10px] text-zinc-600">
+          No Nifty 50 overlay shown here — either this view doesn&apos;t fetch a benchmark
+          series, or this run&apos;s dates have no overlapping real ^NSEI data in the lake. See
+          the full Backtests dashboard for a benchmark-aware view.
+        </p>
+      )}
     </div>
   );
 }

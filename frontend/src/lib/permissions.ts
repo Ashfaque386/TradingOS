@@ -25,6 +25,13 @@ export const PERMISSIONS = {
   // src/api/routers/strategies.py:_can_trigger_backtest -- POST /strategies/{id}/backtest
   // (REL-011 E10.11.0).
   triggerBacktest: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
+  // src/api/routers/risk_limits.py:_can_stage_or_confirm -- POST .../change-requests,
+  // .../confirm, .../reject (REL-017 E17.1). PortfolioManager deliberately excluded, matching
+  // the router's own docstring on RiskLimit.set_by_user_id being SA/RiskManager only.
+  manageRiskLimits: [ROLES.SystemAdministrator, ROLES.RiskManager],
+  // src/api/routers/broker_config.py:_can_manage_broker_credentials -- POST/DELETE
+  // /broker/credentials/{broker} (REL-017 E17.2).
+  manageBrokerCredentials: [ROLES.SystemAdministrator],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

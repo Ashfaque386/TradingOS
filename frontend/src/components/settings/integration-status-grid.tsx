@@ -2,12 +2,12 @@ import { Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BrokerStatus, ProviderStatus } from "@/lib/api";
 
-/** Read-only, masked status -- never a raw secret, never an editable field. Provider keys and
- * broker credentials live in `.env`, read once at process start (src/core/config.py's
- * `get_settings()` is process-lifetime-cached), and DB-004 (BrokerCredential) is explicitly
- * documented as "Vault secret pointer only" with no Vault client anywhere in this codebase --
- * so there is no safe or functional write path to build here yet. Edit `.env` and restart the
- * app instead. */
+/** Read-only, masked status -- never a raw secret, never an editable field. LLM provider keys
+ * still live in `.env` only (read once at process start, src/core/config.py's `get_settings()`
+ * is process-lifetime-cached) -- edit `.env` and restart the app to change one. Broker
+ * credentials are different: REL-017 E17.2 added a real write path (BrokerCredentialsForm,
+ * src/api/routers/broker_config.py + src/core/vault.py) shown alongside this grid on the
+ * Settings page -- this component itself stays read-only/masked either way. */
 export function IntegrationStatusGrid({
   items,
 }: {

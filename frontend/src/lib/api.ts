@@ -181,6 +181,11 @@ export interface BacktestSummary {
   expectancy: number | null;
   total_trades: number | null;
   has_equity_curve: boolean;
+  // REL-017 E17.4 (DB-007): real column, always null today -- no backtest has ever had a real
+  // Monte Carlo simulation run against it (see src/api/routers/strategies.py's own comment on
+  // this field for the real structural reason: it needs per-trade returns, which the sandbox
+  // contract never captures). Exposed honestly rather than hidden, not fabricated as present.
+  monte_carlo_p95_max_drawdown: number | null;
   created_at: string;
 }
 
@@ -226,6 +231,39 @@ export interface IntegrationsStatus {
   brokers: BrokerStatus[];
   editable: boolean;
 }
+
+// REL-017 E17.1: src/api/routers/risk_limits.py's dual-control stage/confirm/reject workflow.
+export interface CurrentRiskLimit {
+  scope_type: string;
+  max_daily_loss: number;
+  max_position_size_pct: number | null;
+  max_sector_exposure_pct: number | null;
+  max_drawdown_pct: number | null;
+  effective_from: string;
+}
+
+export interface RiskLimitChangeRequest {
+  id: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  scope_type: string;
+  max_daily_loss: number;
+  staged_by_user_id: string;
+  confirmed_by_user_id: string | null;
+  resulting_risk_limit_id: string | null;
+}
+
+export interface RiskLimitChangePayload {
+  scope_type: string;
+  scope_id?: string;
+  max_daily_loss: number;
+  max_position_size_pct?: number;
+  max_sector_exposure_pct?: number;
+  max_drawdown_pct?: number;
+  effective_from: string;
+}
+
+// REL-017 E17.2: src/api/routers/broker_config.py -- write-only, never round-trips a real secret.
+export type BrokerId = "zerodha" | "upstox";
 
 export const ALERT_LEVELS = [
   "critical_errors",
@@ -306,6 +344,19 @@ async function get<T>(path: string): Promise<T> {
     throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
   }
   return res.json() as Promise<T>;
+}
+
+/** REL-017: a 204 No Content response (e.g. POST /broker/credentials/{broker}) has no body --
+ * calling res.json() on it throws, so this variant is for POST endpoints that return nothing. */
+async function postNoContent(path: string, body?: unknown): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
+  }
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
@@ -619,7 +670,10 @@ export const api = {
   rejectRun: (runId: string, reason: string) =>
     post<HitlDecisionResponse>(`/api/v1/agents/runs/${runId}/reject`, { reason }),
 
-  ohlcv: (symbol: string) => get<OhlcvBar[]>(`/api/v1/market/ohlcv/${symbol}`),
+  // encodeURIComponent: REL-017 needed this for the real "^NSEI" Nifty 50 benchmark symbol --
+  // a literal "^" in a template-string URL is not itself invalid, but this is the correct fix
+  // for any symbol containing a URL-meaningful character, not just this one.
+  ohlcv: (symbol: string) => get<OhlcvBar[]>(`/api/v1/market/ohlcv/${encodeURIComponent(symbol)}`),
   symbols: () => get<string[]>("/api/v1/market/symbols"),
 
   paperTrades: (strategyId?: string) =>
@@ -631,4 +685,20 @@ export const api = {
 
   goLiveReadiness: (strategyId: string) =>
     get<GoLiveReadiness>(`/api/v1/go-live/readiness/${strategyId}`),
+
+  currentRiskLimit: () => get<CurrentRiskLimit | null>("/api/v1/risk-limits/current"),
+  riskLimitChangeRequests: (status?: string) =>
+    get<RiskLimitChangeRequest[]>(`/api/v1/risk-limits/change-requests${toQuery({ status })}`),
+  stageRiskLimitChange: (payload: RiskLimitChangePayload) =>
+    post<RiskLimitChangeRequest>("/api/v1/risk-limits/change-requests", payload),
+  confirmRiskLimitChange: (requestId: string) =>
+    post<RiskLimitChangeRequest>(`/api/v1/risk-limits/change-requests/${requestId}/confirm`),
+  rejectRiskLimitChange: (requestId: string, reason: string) =>
+    post<RiskLimitChangeRequest>(`/api/v1/risk-limits/change-requests/${requestId}/reject`, {
+      reason,
+    }),
+
+  writeBrokerCredentials: (broker: BrokerId, credentials: Record<string, string>) =>
+    postNoContent(`/api/v1/broker/credentials/${broker}`, { credentials }),
+  deleteBrokerCredentials: (broker: BrokerId) => del(`/api/v1/broker/credentials/${broker}`),
 };
