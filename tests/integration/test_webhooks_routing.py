@@ -8,6 +8,11 @@ tests/integration/test_chat_api.py's own docstring (a real reply can take minute
 -- asserts the real synchronous state (WebhookEvent.routed_to_agent populated, a real
 "Pending" ChatMessage pair persisted scoped to this one external chat thread), not the eventual
 reply content.
+
+UPDATE 2026-08-01 (REL-014 E14.3, SEC-030): routing now also requires the sender to resolve to a
+real, verified NotificationChannel -- every "routes to CEO Agent" test below seeds one via
+`_seed_verified_sender()`; the new `test_*_unrecognized_sender_is_recorded_but_not_routed` tests
+prove the opposite case (real signature, real text, no matching sender -- not routed).
 """
 
 import json
@@ -21,10 +26,47 @@ from sqlalchemy import select
 from src.api.main import app
 from src.core import vault
 from src.core.db import get_session
+from src.core.security import hash_password
 from src.models.chat import ChatMessage
+from src.models.user import NotificationChannel, User
 from src.models.webhook import WebhookEvent
 
 client = TestClient(app)
+
+
+def _seed_verified_sender(channel: str, external_handle: str) -> uuid.UUID:
+    """SEC-030: creates a real User + a real, verified NotificationChannel binding so a webhook
+    sender resolves to a known TradingOS identity -- mirrors the real /settings/notification-
+    channels write path, just seeded directly for test speed."""
+    user_id = uuid.uuid4()
+    with get_session() as session:
+        session.add(
+            User(
+                id=user_id,
+                email=f"webhook-sender-{user_id}@example.invalid",
+                hashed_password=hash_password("test-password-123"),
+                role="ReadOnlyAuditor",
+            )
+        )
+        session.add(
+            NotificationChannel(
+                user_id=user_id,
+                channel_type=channel,
+                external_handle=external_handle,
+                is_verified=True,
+            )
+        )
+        session.commit()
+    return user_id
+
+
+def _cleanup_sender(user_id: uuid.UUID) -> None:
+    with get_session() as session:
+        session.query(NotificationChannel).filter(NotificationChannel.user_id == user_id).delete(
+            synchronize_session=False
+        )
+        session.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+        session.commit()
 
 
 def _cleanup(channel: str, chat_key: str) -> None:
@@ -57,6 +99,7 @@ def test_telegram_message_with_text_routes_to_ceo_agent_and_creates_a_pending_re
     update_id = int(uuid.uuid4().int % 1_000_000_000)
     marker = f"integration-test-{uuid.uuid4()}"
     vault.write_webhook_secret("telegram", {"secret_token": secret})
+    sender_id = _seed_verified_sender("Telegram", chat_id)
     try:
         response = client.post(
             "/api/v1/webhooks/telegram",
@@ -92,6 +135,44 @@ def test_telegram_message_with_text_routes_to_ceo_agent_and_creates_a_pending_re
     finally:
         vault.delete_webhook_secret("telegram")
         _cleanup("Telegram", chat_id)
+        _cleanup_sender(sender_id)
+
+
+def test_telegram_unrecognized_sender_is_recorded_but_not_routed():
+    """SEC-030: real signature, real text, but no verified NotificationChannel binds this
+    chat_id to any TradingOS user -- must be recorded for audit, never routed."""
+    secret = f"test-secret-{uuid.uuid4()}"
+    chat_id = str(uuid.uuid4().int % 1_000_000_000)  # deliberately never seeded as a sender
+    update_id = int(uuid.uuid4().int % 1_000_000_000)
+    marker = f"integration-test-{uuid.uuid4()}"
+    vault.write_webhook_secret("telegram", {"secret_token": secret})
+    try:
+        response = client.post(
+            "/api/v1/webhooks/telegram",
+            json={
+                "update_id": update_id,
+                "message": {"chat": {"id": chat_id}, "text": marker},
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": secret},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+        event = _latest_webhook_event("Telegram")
+        assert event.routed_to_agent is None
+
+        with get_session() as session:
+            count = (
+                session.query(ChatMessage)
+                .filter(
+                    ChatMessage.channel == "Telegram",
+                    ChatMessage.external_metadata["chat_key"].astext == chat_id,
+                )
+                .count()
+            )
+        assert count == 0, "an unrecognized sender's message must never create a ChatMessage pair"
+    finally:
+        vault.delete_webhook_secret("telegram")
 
 
 def test_telegram_message_without_text_is_recorded_but_not_routed():
@@ -129,6 +210,7 @@ def test_discord_slash_command_returns_deferred_ack_and_creates_a_pending_reply(
     public_key_hex = private_key.public_key().public_bytes_raw().hex()
     vault.write_webhook_secret("discord", {"public_key": public_key_hex})
     channel_id = str(uuid.uuid4().int % 1_000_000_000)
+    discord_user_id = str(uuid.uuid4().int % 1_000_000_000)
     marker = f"integration-test-{uuid.uuid4()}"
     body = {
         "id": str(uuid.uuid4()),
@@ -136,11 +218,13 @@ def test_discord_slash_command_returns_deferred_ack_and_creates_a_pending_reply(
         "channel_id": channel_id,
         "application_id": "test-app-id",
         "token": "test-interaction-token",
+        "member": {"user": {"id": discord_user_id}},
         "data": {"name": "ask", "options": [{"name": "message", "value": marker}]},
     }
     timestamp = str(int(time.time()))
     raw_body = json.dumps(body).encode("utf-8")
     signature = private_key.sign(timestamp.encode("utf-8") + raw_body)
+    sender_id = _seed_verified_sender("Discord", discord_user_id)
     try:
         response = client.post(
             "/api/v1/webhooks/discord",
@@ -172,6 +256,58 @@ def test_discord_slash_command_returns_deferred_ack_and_creates_a_pending_reply(
     finally:
         vault.delete_webhook_secret("discord")
         _cleanup("Discord", channel_id)
+        _cleanup_sender(sender_id)
+
+
+def test_discord_unrecognized_sender_is_recorded_but_not_routed():
+    """SEC-030: real signature, a real slash command, but no verified NotificationChannel binds
+    this Discord user ID to any TradingOS user -- must be recorded for audit, never routed."""
+    private_key = Ed25519PrivateKey.generate()
+    public_key_hex = private_key.public_key().public_bytes_raw().hex()
+    vault.write_webhook_secret("discord", {"public_key": public_key_hex})
+    channel_id = str(uuid.uuid4().int % 1_000_000_000)
+    discord_user_id = str(uuid.uuid4().int % 1_000_000_000)  # deliberately never seeded
+    marker = f"integration-test-{uuid.uuid4()}"
+    body = {
+        "id": str(uuid.uuid4()),
+        "type": 2,
+        "channel_id": channel_id,
+        "application_id": "test-app-id",
+        "token": "test-interaction-token",
+        "member": {"user": {"id": discord_user_id}},
+        "data": {"name": "ask", "options": [{"name": "message", "value": marker}]},
+    }
+    timestamp = str(int(time.time()))
+    raw_body = json.dumps(body).encode("utf-8")
+    signature = private_key.sign(timestamp.encode("utf-8") + raw_body)
+    try:
+        response = client.post(
+            "/api/v1/webhooks/discord",
+            content=raw_body,
+            headers={
+                "X-Signature-Ed25519": signature.hex(),
+                "X-Signature-Timestamp": timestamp,
+                "Content-Type": "application/json",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {"type": 4, "data": {"content": ""}}
+
+        event = _latest_webhook_event("Discord")
+        assert event.routed_to_agent is None
+
+        with get_session() as session:
+            count = (
+                session.query(ChatMessage)
+                .filter(
+                    ChatMessage.channel == "Discord",
+                    ChatMessage.external_metadata["chat_key"].astext == channel_id,
+                )
+                .count()
+            )
+        assert count == 0, "an unrecognized sender's message must never create a ChatMessage pair"
+    finally:
+        vault.delete_webhook_secret("discord")
 
 
 def test_discord_non_command_interaction_is_recorded_but_not_routed():

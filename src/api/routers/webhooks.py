@@ -9,10 +9,17 @@ recording-only (`_record_event`) -- not routed this release, per the user's expl
 decision, not silently pretended.
 
 No JWT/require_role auth on any route here -- the platform's own signature IS the
-authentication. SEC-030's "resolve to an internal TradingOS identity and enforce RBAC" step
-remains explicitly out of scope: webhook-originated chat has the same read-mostly-Q&A authority
-ceiling the dashboard chat already has (it cannot place trades or call any RBAC-gated endpoint,
-since it only ever reaches `ceo_agent_chat`'s free-text prompt, never a mutating tool call).
+authentication for "this really came from Telegram/Discord". UPDATE 2026-08-01 (REL-014 E14.3,
+SEC-030): the sender-identity step described above -- "even after signature verification
+confirms the message truly came from Telegram/Discord, the gateway still resolves the sending
+platform-user-ID to an internal TradingOS identity ... a verified message from an unrecognized
+or under-privileged chat user is rejected before reaching the CEO Agent" -- was deferred twice
+(REL-007, REL-010) and is now real: `_resolve_sender()` below looks up the inbound chat/user ID
+against `NOTIFICATION_CHANNELS` (DB-002, the same table `/settings/notification-channels`
+already writes), and a sender with no verified channel row is recorded (for audit) but never
+routed to the CEO Agent. The read-mostly-Q&A authority ceiling this docstring used to cite as
+"why this is low-risk anyway" is unchanged and still true -- this closes the identity gap on top
+of that, not instead of it.
 """
 
 import threading
@@ -39,12 +46,35 @@ from src.core.webhook_security import (
 )
 from src.memory.redis_client import get_redis_client
 from src.models.chat import ChatMessage
+from src.models.user import NotificationChannel, User
 from src.models.webhook import WebhookEvent
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
 _REPLAY_TIMESTAMP_SKEW_SECONDS = 5 * 60  # SEC-029
 _ROUTED_TO_AGENT = "ceo_agent_chat"
+
+
+def _resolve_sender(channel: str, external_handle: str) -> User | None:
+    """SEC-030: resolves a verified platform sender to an internal TradingOS identity. Returns
+    None for any sender with no matching, verified `NotificationChannel` row -- an unrecognized
+    or unverified sender, even one whose message passed real signature verification, is not a
+    known TradingOS user and must not reach the CEO Agent."""
+    with get_session() as session:
+        binding = session.scalars(
+            select(NotificationChannel).where(
+                NotificationChannel.channel_type == channel,
+                NotificationChannel.external_handle == external_handle,
+                NotificationChannel.is_verified.is_(True),
+            )
+        ).first()
+        if binding is None:
+            return None
+        user = session.get(User, binding.user_id)
+        if user is None or not user.is_active:
+            return None
+        session.expunge(user)
+        return user
 
 
 def _record_event(channel: str, raw_body: dict[str, Any]) -> uuid.UUID:
@@ -188,6 +218,14 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
         _record_event("Telegram", body)
         return {"ok": True}
 
+    if _resolve_sender("Telegram", chat_id) is None:
+        # SEC-030: a real, signature-verified Telegram message, but from a chat ID with no
+        # verified NotificationChannel binding -- recorded for audit, never routed to the CEO
+        # Agent. Acks normally rather than erroring, matching Telegram's own expectation that a
+        # webhook always returns 200 regardless of what the bot chose to do with the update.
+        _record_event("Telegram", body)
+        return {"ok": True}
+
     _record_event_and_route(
         channel="Telegram",
         raw_body=body,
@@ -244,6 +282,18 @@ async def discord_webhook(request: Request) -> dict[str, Any]:
         text = next((opt["value"] for opt in options if opt.get("name") == "message"), None)
 
     if not text:
+        _record_event("Discord", body)
+        return {"type": 4, "data": {"content": ""}}
+
+    # The interacting Discord USER's ID -- distinct from `channel_id` above (which scopes rate
+    # limiting to the channel, not the person). `member.user.id` for a guild-context interaction,
+    # `user.id` for a DM-context one; Discord sends exactly one of the two per its own API shape.
+    discord_user_id = str(
+        body.get("member", {}).get("user", {}).get("id")
+        or body.get("user", {}).get("id", "unknown")
+    )
+    if _resolve_sender("Discord", discord_user_id) is None:
+        # SEC-030: see the Telegram handler's matching check above.
         _record_event("Discord", body)
         return {"type": 4, "data": {"content": ""}}
 

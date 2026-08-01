@@ -31,6 +31,7 @@ from src.api.routers.system import router as system_router
 from src.api.routers.users import router as users_router
 from src.api.routers.webhooks import router as webhooks_router
 from src.core.config import get_settings
+from src.core.security_headers import SecurityHeadersMiddleware
 from src.core.vault_transit import VaultTransitUnavailableError, ensure_transit_key
 from src.observability.tracing import configure_tracing
 
@@ -92,6 +93,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# REL-014 E14.2 (GLH-03): HSTS/CSP/X-Content-Type-Options/Permissions-Policy/X-Frame-Options/CORP
+# on every real response -- the real gap the REL-009 E9.4 ZAP scan found and left open.
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_router)
 app.include_router(mfa_router)
 app.include_router(users_router)

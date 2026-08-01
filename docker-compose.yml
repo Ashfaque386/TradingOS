@@ -20,7 +20,14 @@ services:
       vault:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
+      # REL-014 E14.1 (GLH-05): the app now runs as tradingos_app, a genuinely non-superuser
+      # role (created by alembic/versions/u2v3w4x5y6z7) -- it cannot ALTER TABLE or disable the
+      # audit_log trigger even from inside a compromised or malicious request, closing SEC-041's
+      # real remaining gap ("a session connected as the table owner can still disable the
+      # trigger"). Schema migrations still run as the schema-owning `tradingos` role, via the
+      # separate MIGRATION_DATABASE_URL below -- never part of the running app's own connection.
+      DATABASE_URL: postgresql+psycopg://tradingos_app:tradingos_app_dev_password@postgres:5432/tradingos
+      MIGRATION_DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
       QDRANT_URL: http://qdrant:6333
       REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
@@ -91,7 +98,8 @@ services:
       vault:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
+      # REL-014 E14.1: non-superuser runtime role -- see the `app` service's own comment above.
+      DATABASE_URL: postgresql+psycopg://tradingos_app:tradingos_app_dev_password@postgres:5432/tradingos
       QDRANT_URL: http://qdrant:6333
       REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233
@@ -210,7 +218,8 @@ services:
       temporal:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+psycopg://tradingos:tradingos_dev_password@postgres:5432/tradingos
+      # REL-014 E14.1: non-superuser runtime role -- see the `app` service's own comment above.
+      DATABASE_URL: postgresql+psycopg://tradingos_app:tradingos_app_dev_password@postgres:5432/tradingos
       QDRANT_URL: http://qdrant:6333
       REDIS_URL: redis://redis:6379/0
       TEMPORAL_ADDRESS: temporal:7233

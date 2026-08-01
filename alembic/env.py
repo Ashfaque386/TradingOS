@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -10,7 +11,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# REL-014 E14.1 (GLH-05): migrations need DDL rights (CREATE ROLE, ALTER TABLE, ...) that the
+# app's own runtime role (`tradingos_app`, non-superuser as of u2v3w4x5y6z7) deliberately does
+# not have. MIGRATION_DATABASE_URL lets Alembic keep using the schema-owning `tradingos` role
+# without that role ever being part of the running application's own DATABASE_URL. Falls back to
+# database_url so any environment that hasn't set this (or predates the role split) still works.
+config.set_main_option(
+    "sqlalchemy.url", os.environ.get("MIGRATION_DATABASE_URL") or get_settings().database_url
+)
 target_metadata = Base.metadata
 
 

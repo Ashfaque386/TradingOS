@@ -15,19 +15,49 @@ production row) -- it must still report the correct `first_broken_id` for OUR ro
 proving the detection is real, not scoped to a synthetic empty table.
 
 Simulating tampering requires bypassing the b3c4d5e6f7a8 migration's own append-only trigger via
-`SET LOCAL session_replication_role = replica` -- exactly the one known gap documented in that
-migration's docstring and in src/models/audit.py's class docstring: this environment's single
-Postgres role ("tradingos") is also the table owner/superuser (the official postgres Docker
-image grants POSTGRES_USER superuser by default), so it can disable trigger firing for its own
-session. `SET LOCAL` is transaction-scoped and the trigger fires per-statement regardless of
-whether the transaction is later committed or rolled back, so the bypass is still required even
-though this test never commits.
+`SET LOCAL session_replication_role = replica`. UPDATE 2026-08-01 (REL-014 E14.1, GLH-05): the
+app's own runtime connection (`get_session()`, now `tradingos_app`) can no longer do this at
+all -- that bypass is exactly what REL-014 closed. `SET LOCAL session_replication_role` requires
+superuser, which `tradingos_app` deliberately isn't (see alembic/versions/u2v3w4x5y6z7). The two
+tamper-simulation tests below now open a second, separate connection using `tradingos`'s own
+credentials (`MIGRATION_DATABASE_URL` -- the schema-owning role, still a superuser, used only
+for migrations and this one legitimate test purpose: constructing a tamper that only a genuine
+DB owner could still perform) to construct the tamper, then verify detection through the app's
+own normal (now-restricted) session -- proving `verify_chain()` still catches a real tamper even
+though the app itself can no longer create one. `SET LOCAL` is transaction-scoped and the trigger
+fires per-statement regardless of whether the transaction is later committed or rolled back, so
+the bypass is still required even though neither connection here ever commits.
 """
 
-from sqlalchemy import text
+import os
+from contextlib import contextmanager
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
 from src.core.audit import verify_chain, write_audit_entry
 from src.core.db import get_session
+
+
+@contextmanager
+def _owner_session():
+    """A session bound to the schema-owning `tradingos` role (still a real Postgres superuser)
+    instead of the app's own `get_session()` (now `tradingos_app`, non-superuser as of REL-014
+    E14.1) -- the only role left that can still bypass the append-only trigger, which is exactly
+    what these two tests need to construct a tamper to detect. Everything (write, tamper,
+    verify) happens on this one connection/transaction, never committed, matching the module
+    docstring's "never persist" guarantee -- swapping which role the session uses doesn't change
+    that shape, it only changes whether the bypass is even possible to attempt."""
+    url = os.environ.get("MIGRATION_DATABASE_URL")
+    assert url, "MIGRATION_DATABASE_URL must be set to run the owner-bypass tamper simulation"
+    engine = create_engine(url)
+    session = Session(bind=engine)
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+        engine.dispose()
 
 
 def test_normal_role_cannot_update_or_delete_audit_log_rows():
@@ -52,8 +82,28 @@ def test_normal_role_cannot_update_or_delete_audit_log_rows():
         session.rollback()  # never persist -- see module docstring
 
 
-def test_verify_chain_detects_a_tampered_after_state_field():
+def test_app_role_cannot_bypass_the_trigger_via_replica_mode():
+    """REL-014 E14.1 (GLH-05): the real regression test for the fix itself. Before this release,
+    the app's own session ran as `tradingos` (a Postgres superuser) and could disable trigger
+    firing for itself via `SET LOCAL session_replication_role = replica` -- exactly the owner-
+    bypass gap SEC-041 documented as open. The app now runs as `tradingos_app`, which is not a
+    superuser and does not own audit_log, so this must fail with a real permission error rather
+    than silently succeeding."""
     with get_session() as session:
+        raised = False
+        try:
+            session.execute(text("SET LOCAL session_replication_role = replica"))
+        except Exception:
+            raised = True
+        assert raised, (
+            "the app's own session should no longer be able to set session_replication_role "
+            "at all -- if this passes, REL-014's non-superuser role split has regressed"
+        )
+        session.rollback()
+
+
+def test_verify_chain_detects_a_tampered_after_state_field():
+    with _owner_session() as session:
         rows = [
             write_audit_entry(
                 session,
@@ -85,7 +135,7 @@ def test_verify_chain_detects_a_tampered_after_state_field():
 
 
 def test_verify_chain_detects_a_tampered_prev_entry_hash():
-    with get_session() as session:
+    with _owner_session() as session:
         rows = [
             write_audit_entry(
                 session,
