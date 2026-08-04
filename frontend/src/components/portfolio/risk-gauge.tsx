@@ -41,7 +41,7 @@ export function RiskGauge({
   max,
   displayValue,
   unavailableReason,
-  colorVar = "var(--accent-cyan)",
+  colorVar = "var(--color-brand-via)",
   subtext,
 }: RiskGaugeProps) {
   const clamped = value === null ? null : Math.min(max, Math.max(min, value));
@@ -53,7 +53,7 @@ export function RiskGauge({
         <path
           d={ARC_PATH}
           fill="none"
-          stroke="rgba(255,255,255,0.08)"
+          stroke="var(--card-edge)"
           strokeWidth={10}
           strokeLinecap="round"
         />
@@ -74,10 +74,11 @@ export function RiskGauge({
           <path
             d={ARC_PATH}
             fill="none"
-            stroke="rgba(255,255,255,0.18)"
+            stroke="var(--text-faint)"
             strokeWidth={10}
             strokeDasharray="2 6"
             strokeLinecap="round"
+            opacity={0.4}
           />
         )}
         <text
@@ -85,7 +86,7 @@ export function RiskGauge({
           y="80"
           textAnchor="middle"
           className="font-mono-tabular"
-          fill={value === null ? "#71717a" : "#f4f4f5"}
+          fill={value === null ? "var(--text-faint)" : "var(--text)"}
           fontSize="22"
           fontFamily="var(--font-mono)"
           fontWeight={600}
@@ -94,8 +95,8 @@ export function RiskGauge({
         </text>
       </svg>
       <div className="-mt-1 text-center">
-        <div className="text-xs font-medium uppercase tracking-wider text-zinc-400">{label}</div>
-        <div className={cn("mt-0.5 text-[11px]", value === null ? "text-zinc-600" : "text-zinc-500")}>
+        <div className="text-xs font-medium uppercase tracking-wider text-text-dim">{label}</div>
+        <div className={cn("mt-0.5 text-[11px]", value === null ? "text-text-faint" : "text-text-dim")}>
           {value === null ? (unavailableReason ?? "No data") : subtext}
         </div>
       </div>

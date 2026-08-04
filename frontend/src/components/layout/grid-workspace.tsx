@@ -73,7 +73,7 @@ export function GridWorkspace({ storageKey, panels }: { storageKey: string; pane
           {panels.map((p) => (
             <div key={p.id} className="relative">
               <div
-                className="grid-drag-handle absolute right-2 top-2 z-10 cursor-grab rounded-md p-1 text-zinc-600 transition hover:bg-white/5 hover:text-zinc-300 active:cursor-grabbing"
+                className="grid-drag-handle absolute right-2 top-2 z-10 cursor-grab rounded-md p-1 text-text-faint transition hover:bg-bg hover:text-text-dim active:cursor-grabbing"
                 title="Drag to rearrange"
               >
                 <GripVertical size={14} />

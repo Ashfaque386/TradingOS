@@ -8,7 +8,8 @@ import { RequireAuth } from "@/lib/auth";
 import { usePermission } from "@/lib/usePermission";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PageHeader } from "@/components/layout/page-header";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { AuditLogTable } from "@/components/audit/audit-log-table";
 import { AuditEntryDetail } from "@/components/audit/audit-entry-detail";
 
@@ -50,25 +51,17 @@ function AuditView() {
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-      <GlassCard
+      <Card
         eyebrow="Compliance"
         title="Audit Log"
         action={
           <div className="flex gap-2">
-            <button
-              onClick={() => handleExport("csv")}
-              disabled={exporting}
-              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:bg-white/10 disabled:opacity-40"
-            >
+            <Button onClick={() => handleExport("csv")} disabled={exporting} variant="secondary" className="px-3 py-1.5 text-[11px]">
               <Download className="h-3 w-3" /> CSV
-            </button>
-            <button
-              onClick={() => handleExport("ndjson")}
-              disabled={exporting}
-              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:bg-white/10 disabled:opacity-40"
-            >
+            </Button>
+            <Button onClick={() => handleExport("ndjson")} disabled={exporting} variant="secondary" className="px-3 py-1.5 text-[11px]">
               <Download className="h-3 w-3" /> NDJSON
-            </button>
+            </Button>
           </div>
         }
       >
@@ -77,18 +70,18 @@ function AuditView() {
             value={entityType}
             onChange={(e) => setEntityType(e.target.value)}
             placeholder="Entity type (e.g. Order)"
-            className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600"
+            className="rounded-md border border-card-edge bg-bg px-2 py-1.5 text-text placeholder:text-text-faint"
           />
           <input
             value={actorId}
             onChange={(e) => setActorId(e.target.value)}
             placeholder="Actor ID / email"
-            className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600"
+            className="rounded-md border border-card-edge bg-bg px-2 py-1.5 text-text placeholder:text-text-faint"
           />
           <select
             value={limit}
             onChange={(e) => setLimit(Number(e.target.value))}
-            className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-zinc-200"
+            className="rounded-md border border-card-edge bg-bg px-2 py-1.5 text-text"
           >
             {[50, 100, 250, 500, 1000].map((n) => (
               <option key={n} value={n}>
@@ -99,16 +92,16 @@ function AuditView() {
         </div>
 
         {logsQuery.isLoading ? (
-          <div className="h-40 animate-pulse rounded-xl bg-white/5" />
+          <div className="h-40 animate-pulse rounded-xl bg-bg" />
         ) : (
           <AuditLogTable entries={entries} selectedId={selectedId} onSelect={setSelectedId} />
         )}
-      </GlassCard>
+      </Card>
 
       {selectedEntry && (
-        <GlassCard eyebrow="Entry Detail" title={`#${selectedEntry.id} — ${selectedEntry.action}`}>
+        <Card eyebrow="Entry Detail" title={`#${selectedEntry.id} — ${selectedEntry.action}`}>
           <AuditEntryDetail entry={selectedEntry} />
-        </GlassCard>
+        </Card>
       )}
     </main>
   );
@@ -127,7 +120,7 @@ export default function AuditPage() {
             <AuditView />
           ) : (
             <main className="mx-auto flex w-full max-w-[1440px] flex-1 items-center justify-center p-8">
-              <p data-testid="audit-insufficient-role" className="text-sm text-zinc-500">
+              <p data-testid="audit-insufficient-role" className="text-sm text-text-faint">
                 Your role does not have access to audit logs. Requires System Administrator or
                 Read-Only Auditor.
               </p>

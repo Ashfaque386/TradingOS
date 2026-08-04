@@ -3,14 +3,18 @@
 import ReactECharts from "echarts-for-react";
 import { useState } from "react";
 import { cn, formatCompactINR } from "@/lib/utils";
+import { useThemeStore } from "@/lib/theme-store";
+import { getChartColors } from "@/lib/chart-theme";
 import type { SymbolExposure } from "@/lib/api";
 
+// A categorical chart palette needs several visually distinct hues -- this isn't a leftover of
+// the retired dark direction, just what a multi-symbol donut requires regardless of theme.
 const PALETTE = [
-  "#22d3ee",
-  "#a78bfa",
+  "#ff9a3d",
+  "#ff5c7a",
+  "#c94bff",
   "#34d399",
   "#fbbf24",
-  "#fb7185",
   "#60a5fa",
   "#f472b6",
   "#4ade80",
@@ -39,7 +43,7 @@ export function ExposureDonut({
 
   return (
     <div>
-      <div className="mb-4 flex gap-1 rounded-lg bg-black/30 p-1">
+      <div className="mb-4 flex gap-1 rounded-lg bg-bg p-1">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -47,8 +51,8 @@ export function ExposureDonut({
             className={cn(
               "flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
               tab === t.key
-                ? "bg-white/10 text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-300",
+                ? "bg-panel text-text"
+                : "text-text-faint hover:text-text-dim",
             )}
           >
             {t.label}
@@ -68,6 +72,9 @@ export function ExposureDonut({
 }
 
 function SymbolDonut({ positions, gross }: { positions: SymbolExposure[]; gross: number }) {
+  const mode = useThemeStore((s) => s.mode);
+  const colors = getChartColors(mode);
+
   if (positions.length === 0) {
     return (
       <UnavailableState message="No open positions right now — the donut fills in as soon as positions are live." />
@@ -77,9 +84,9 @@ function SymbolDonut({ positions, gross }: { positions: SymbolExposure[]; gross:
   const option = {
     tooltip: {
       trigger: "item",
-      backgroundColor: "rgba(24,24,27,0.95)",
-      borderColor: "rgba(255,255,255,0.1)",
-      textStyle: { color: "#f4f4f5", fontFamily: "var(--font-sans)" },
+      backgroundColor: colors.panel,
+      borderColor: colors.grid,
+      textStyle: { color: colors.text, fontFamily: "var(--font-sans)" },
       formatter: (p: { name: string; value: number; percent: number }) =>
         `${p.name}<br/>${formatCompactINR(p.value)} · ${p.percent}%`,
     },
@@ -88,7 +95,7 @@ function SymbolDonut({ positions, gross }: { positions: SymbolExposure[]; gross:
         type: "pie",
         radius: ["58%", "88%"],
         avoidLabelOverlap: true,
-        itemStyle: { borderColor: "#09090b", borderWidth: 3 },
+        itemStyle: { borderColor: colors.panel, borderWidth: 3 },
         label: { show: false },
         labelLine: { show: false },
         data: positions.map((p, i) => ({
@@ -104,8 +111,8 @@ function SymbolDonut({ positions, gross }: { positions: SymbolExposure[]; gross:
     <div className="relative">
       <ReactECharts option={option} style={{ height: 220 }} opts={{ renderer: "svg" }} />
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500">Gross</div>
-        <div className="font-mono-tabular text-lg font-semibold text-zinc-100">
+        <div className="text-[10px] uppercase tracking-wider text-text-faint">Gross</div>
+        <div className="font-mono-tabular text-lg font-semibold text-text">
           {formatCompactINR(gross)}
         </div>
       </div>
@@ -115,9 +122,9 @@ function SymbolDonut({ positions, gross }: { positions: SymbolExposure[]; gross:
 
 function UnavailableState({ message }: { message: string }) {
   return (
-    <div className="flex h-[220px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 px-6 text-center">
-      <div className="h-2 w-2 rounded-full bg-amber-400/70" />
-      <p className="max-w-[220px] text-xs leading-relaxed text-zinc-500">{message}</p>
+    <div className="flex h-[220px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-card-edge px-6 text-center">
+      <div className="h-2 w-2 rounded-full bg-warn/70" />
+      <p className="max-w-[220px] text-xs leading-relaxed text-text-faint">{message}</p>
     </div>
   );
 }

@@ -6,8 +6,8 @@ import type { Position } from "@/lib/api";
 export function PositionsTable({ positions }: { positions: Position[] }) {
   if (positions.length === 0) {
     return (
-      <div className="flex h-[180px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 text-center">
-        <p className="text-xs text-zinc-500">No open positions.</p>
+      <div className="flex h-[180px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-card-edge text-center">
+        <p className="text-xs text-text-faint">No open positions.</p>
       </div>
     );
   }
@@ -16,7 +16,7 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
     <div className="overflow-x-auto">
       <table className="w-full text-left text-xs">
         <thead>
-          <tr className="text-zinc-500">
+          <tr className="text-text-faint">
             <th className="pb-2 font-medium">Symbol</th>
             <th className="pb-2 text-right font-medium">Qty</th>
             <th className="pb-2 text-right font-medium">Avg</th>
@@ -29,26 +29,26 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
             const totalPnl = p.unrealized_pnl + p.realized_pnl;
             const positive = totalPnl >= 0;
             return (
-              <tr key={p.symbol} className="border-t border-white/5">
-                <td className="py-2.5 font-medium text-zinc-200">{p.symbol}</td>
+              <tr key={p.symbol} className="border-t border-card-edge">
+                <td className="py-2.5 font-medium text-text">{p.symbol}</td>
                 <td
                   className={cn(
                     "py-2.5 text-right font-mono-tabular",
-                    p.net_quantity >= 0 ? "text-zinc-300" : "text-rose-300",
+                    p.net_quantity >= 0 ? "text-text-dim" : "text-down",
                   )}
                 >
                   {p.net_quantity}
                 </td>
-                <td className="py-2.5 text-right font-mono-tabular text-zinc-400">
+                <td className="py-2.5 text-right font-mono-tabular text-text-faint">
                   {p.average_price?.toFixed(2) ?? "—"}
                 </td>
-                <td className="py-2.5 text-right font-mono-tabular text-zinc-300">
+                <td className="py-2.5 text-right font-mono-tabular text-text-dim">
                   {p.last_price?.toFixed(2) ?? "—"}
                 </td>
                 <td
                   className={cn(
                     "py-2.5 text-right font-mono-tabular font-semibold",
-                    positive ? "text-emerald-400" : "text-rose-400",
+                    positive ? "text-up" : "text-down",
                   )}
                 >
                   {positive ? "+" : ""}

@@ -6,6 +6,7 @@ import { AlertTriangle, ChevronsRight, RotateCcw } from "lucide-react";
 import { useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { KILL_SWITCH_ROLES, useAuth } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
 
 const HANDLE_WIDTH = 52;
 const TRACK_PADDING = 8;
@@ -41,13 +42,13 @@ export function KillSwitchButton() {
     return (
       <div
         data-testid="kill-switch-tripped-banner"
-        className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-5"
+        className="rounded-card border border-down/30 bg-down/10 p-5"
       >
-        <div className="flex items-center gap-2 text-rose-300">
+        <div className="flex items-center gap-2 text-down">
           <AlertTriangle className="h-4 w-4 animate-pulse-glow" />
           <span className="text-sm font-semibold tracking-wide">SYSTEM HALTED</span>
         </div>
-        <p className="mt-1.5 text-xs text-rose-300/70">
+        <p className="mt-1.5 text-xs text-down/70">
           Tripped at{" "}
           {status.tripped_at
             ? new Date(status.tripped_at).toLocaleTimeString("en-IN", { hour12: false })
@@ -55,35 +56,33 @@ export function KillSwitchButton() {
         </p>
 
         {!canTrigger ? (
-          <p data-testid="kill-switch-insufficient-role" className="mt-4 text-[11px] text-zinc-500">
+          <p data-testid="kill-switch-insufficient-role" className="mt-4 text-[11px] text-text-faint">
             Your role ({user?.role ?? "unknown"}) cannot re-arm the system. Requires System
             Administrator, Portfolio Manager, or Risk Manager.
           </p>
         ) : !confirmingReset ? (
-          <button
+          <Button
             data-testid="kill-switch-rearm-button"
             onClick={() => setConfirmingReset(true)}
-            className="mt-4 w-full rounded-lg border border-white/10 bg-white/5 py-2 text-xs font-medium text-zinc-300 transition hover:bg-white/10"
+            variant="secondary"
+            className="mt-4 w-full"
           >
             Re-arm system
-          </button>
+          </Button>
         ) : (
           <div className="mt-4 flex gap-2">
-            <button
-              onClick={() => setConfirmingReset(false)}
-              className="flex-1 rounded-lg border border-white/10 py-2 text-xs text-zinc-400 transition hover:bg-white/5"
-            >
+            <Button onClick={() => setConfirmingReset(false)} variant="secondary" className="flex-1">
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => {
                 reset.mutate();
                 setConfirmingReset(false);
               }}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/90 py-2 text-xs font-semibold text-black transition hover:bg-emerald-400"
+              className="flex-1"
             >
               <RotateCcw className="h-3.5 w-3.5" /> Confirm re-arm
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -126,22 +125,22 @@ function SlideToHalt({
   return (
     <div
       data-testid="kill-switch-armed-panel"
-      className="rounded-2xl border border-rose-500/20 bg-gradient-to-b from-rose-500/[0.07] to-transparent p-5"
+      className="rounded-card border border-down/20 bg-gradient-to-b from-down/[0.07] to-transparent p-5"
     >
-      <div className="mb-3 flex items-center gap-2 text-zinc-300">
-        <AlertTriangle className="h-4 w-4 text-rose-400" />
+      <div className="mb-3 flex items-center gap-2 text-text-dim">
+        <AlertTriangle className="h-4 w-4 text-down" />
         <span className="text-sm font-semibold tracking-wide">EMERGENCY HALT</span>
       </div>
-      <p className="mb-4 text-[11px] leading-relaxed text-zinc-500">
+      <p className="mb-4 text-[11px] leading-relaxed text-text-faint">
         Cancels every open order and liquidates all positions across every connected broker.
       </p>
       <div
         ref={trackRef}
         data-testid="kill-switch-track"
-        className="relative h-14 w-full overflow-hidden rounded-full border border-rose-500/25 bg-black/40"
+        className="relative h-14 w-full overflow-hidden rounded-full border border-down/25 bg-bg"
       >
-        <motion.div className="pointer-events-none absolute inset-0 bg-rose-500/20" style={{ opacity: glow }} />
-        <div className="absolute inset-0 flex items-center justify-center text-xs font-medium uppercase tracking-[0.2em] text-rose-300/60">
+        <motion.div className="pointer-events-none absolute inset-0 bg-down/20" style={{ opacity: glow }} />
+        <div className="absolute inset-0 flex items-center justify-center text-xs font-medium uppercase tracking-[0.2em] text-down/60">
           {pending
             ? "Halting…"
             : triggered
@@ -158,7 +157,7 @@ function SlideToHalt({
           dragMomentum={false}
           onDragEnd={handleDragEnd}
           style={{ x, width: HANDLE_WIDTH, left: TRACK_PADDING, top: TRACK_PADDING }}
-          className="absolute flex h-12 cursor-grab items-center justify-center rounded-full bg-rose-500 text-black shadow-[0_0_20px_rgba(251,113,133,0.55)] active:cursor-grabbing"
+          className="absolute flex h-12 cursor-grab items-center justify-center rounded-full bg-down text-white shadow-[0_0_20px_rgba(244,63,94,0.55)] active:cursor-grabbing"
         >
           <ChevronsRight className="h-5 w-5" />
         </motion.div>

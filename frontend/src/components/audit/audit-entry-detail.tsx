@@ -18,14 +18,14 @@ export function AuditEntryDetail({ entry }: { entry: AuditLogEntry }) {
   });
 
   return (
-    <div className="rounded-xl border border-white/5 bg-black/20 p-3.5 text-[11px]">
-      <div className="mb-3 grid grid-cols-2 gap-2 text-zinc-400">
+    <div className="rounded-xl border border-card-edge bg-bg p-3.5 text-[11px]">
+      <div className="mb-3 grid grid-cols-2 gap-2 text-text-dim">
         <div>
-          <div className="text-[9px] uppercase tracking-wider text-zinc-600">IP Address</div>
+          <div className="text-[9px] uppercase tracking-wider text-text-faint">IP Address</div>
           {entry.ip_address ?? "—"}
         </div>
         <div>
-          <div className="text-[9px] uppercase tracking-wider text-zinc-600">Entity ID</div>
+          <div className="text-[9px] uppercase tracking-wider text-text-faint">Entity ID</div>
           <span className="font-mono-tabular">{entry.entity_id ?? "—"}</span>
         </div>
       </div>
@@ -33,9 +33,9 @@ export function AuditEntryDetail({ entry }: { entry: AuditLogEntry }) {
       {/* The real tamper-evidence property this table is worth surfacing at all -- see
        * src/core/audit.py's hash-chain (SEC-038): altering any historical row invalidates every
        * subsequent entry_hash, making silent tampering detectable. */}
-      <div className="mb-3 rounded-lg bg-black/30 p-2.5">
-        <div className="text-[9px] uppercase tracking-wider text-zinc-600">Hash Chain</div>
-        <div className="mt-1 space-y-0.5 font-mono text-[10px] text-zinc-500">
+      <div className="mb-3 rounded-lg bg-panel p-2.5">
+        <div className="text-[9px] uppercase tracking-wider text-text-faint">Hash Chain</div>
+        <div className="mt-1 space-y-0.5 font-mono text-[10px] text-text-faint">
           <div>entry: {entry.entry_hash}</div>
           <div>prev: {entry.prev_entry_hash}</div>
         </div>
@@ -43,20 +43,20 @@ export function AuditEntryDetail({ entry }: { entry: AuditLogEntry }) {
 
       {entry.before_state && (
         <div className="mb-2">
-          <div className="mb-1 text-[9px] uppercase tracking-wider text-zinc-600">
+          <div className="mb-1 text-[9px] uppercase tracking-wider text-text-faint">
             Before State
           </div>
-          <pre className="max-h-40 overflow-auto rounded-lg bg-black/40 p-2 font-mono text-[10px] text-zinc-400">
+          <pre className="max-h-40 overflow-auto rounded-lg bg-panel p-2 font-mono text-[10px] text-text-dim">
             {JSON.stringify(entry.before_state, null, 2)}
           </pre>
         </div>
       )}
       {entry.after_state && (
         <div className="mb-2">
-          <div className="mb-1 text-[9px] uppercase tracking-wider text-zinc-600">
+          <div className="mb-1 text-[9px] uppercase tracking-wider text-text-faint">
             After State
           </div>
-          <pre className="max-h-40 overflow-auto rounded-lg bg-black/40 p-2 font-mono text-[10px] text-zinc-400">
+          <pre className="max-h-40 overflow-auto rounded-lg bg-panel p-2 font-mono text-[10px] text-text-dim">
             {JSON.stringify(entry.after_state, null, 2)}
           </pre>
         </div>
@@ -64,12 +64,12 @@ export function AuditEntryDetail({ entry }: { entry: AuditLogEntry }) {
 
       {showTrace && traceQuery.data && (
         <div>
-          <div className="mb-1 text-[9px] uppercase tracking-wider text-zinc-600">
+          <div className="mb-1 text-[9px] uppercase tracking-wider text-text-faint">
             Full Trade Trace ({traceQuery.data.entries.length} entries)
           </div>
           <div className="max-h-40 space-y-1 overflow-auto">
             {traceQuery.data.entries.map((e) => (
-              <div key={e.id} className="flex justify-between text-zinc-500">
+              <div key={e.id} className="flex justify-between text-text-faint">
                 <span>{e.action}</span>
                 <span className="font-mono-tabular">
                   {new Date(e.created_at).toLocaleTimeString("en-IN", { hour12: false })}

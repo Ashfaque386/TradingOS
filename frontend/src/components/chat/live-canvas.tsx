@@ -9,9 +9,9 @@ function formatTime(iso: string): string {
 }
 
 const VALIDATION_COLOR: Record<string, string> = {
-  Passed: "text-emerald-400",
-  Failed: "text-rose-400",
-  Pending: "text-amber-400",
+  Passed: "text-up",
+  Failed: "text-down",
+  Pending: "text-warn",
 };
 
 /** Side-by-side artifact viewer per §2.5 -- polls the real /canvas/state composite (see
@@ -38,17 +38,17 @@ export function LiveCanvas() {
         {state?.latest_code ? (
           <>
             <div className="mb-2 flex items-center justify-between text-[11px]">
-              <span className="text-zinc-300">
+              <span className="text-text-dim">
                 {state.latest_code.strategy_name} · v{state.latest_code.version_no}
               </span>
-              <span className={VALIDATION_COLOR[state.latest_code.validation_status] ?? "text-zinc-500"}>
+              <span className={VALIDATION_COLOR[state.latest_code.validation_status] ?? "text-text-faint"}>
                 {state.latest_code.validation_status}
               </span>
             </div>
-            <pre className="max-h-[220px] overflow-auto rounded-lg bg-black/40 p-3 font-mono text-[10.5px] leading-relaxed text-zinc-400">
+            <pre className="max-h-[220px] overflow-auto rounded-lg bg-bg p-3 font-mono text-[10.5px] leading-relaxed text-text-dim">
               {state.latest_code.python_code}
             </pre>
-            <p className="mt-1.5 text-[10px] text-zinc-600">
+            <p className="mt-1.5 text-[10px] text-text-faint">
               Generated {formatTime(state.latest_code.created_at)}
             </p>
           </>
@@ -60,7 +60,7 @@ export function LiveCanvas() {
       <Section eyebrow="Sandbox" title="Latest Backtest">
         {state?.latest_backtest ? (
           <>
-            <p className="mb-2 text-[11px] text-zinc-300">
+            <p className="mb-2 text-[11px] text-text-dim">
               {state.latest_backtest.strategy_name}
             </p>
             <div className="mb-3 grid grid-cols-3 gap-2">
@@ -84,12 +84,12 @@ export function LiveCanvas() {
 
       <Section eyebrow="Live" title="Latest Agent Activity">
         {state?.latest_agent_activity ? (
-          <div className="rounded-lg bg-black/30 p-3 font-mono text-[11px] text-zinc-400">
-            <span className="font-semibold text-purple-300">
+          <div className="rounded-lg bg-bg p-3 font-mono text-[11px] text-text-dim">
+            <span className="font-semibold text-brand-via">
               [{state.latest_agent_activity.node}]
             </span>{" "}
             {state.latest_agent_activity.message}
-            <div className="mt-1 text-[9px] text-zinc-600">
+            <div className="mt-1 text-[9px] text-text-faint">
               {formatTime(state.latest_agent_activity.created_at)}
             </div>
           </div>
@@ -111,12 +111,12 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="glass-panel rounded-xl p-3.5">
+    <div className="rounded-xl border border-card-edge bg-panel p-3.5 shadow-card">
       <div className="mb-2">
-        <div className="text-[9px] font-medium uppercase tracking-[0.16em] text-zinc-500">
+        <div className="text-[9px] font-medium uppercase tracking-[0.16em] text-text-faint">
           {eyebrow}
         </div>
-        <div className="text-xs font-medium text-zinc-200">{title}</div>
+        <div className="text-xs font-medium text-text">{title}</div>
       </div>
       {children}
     </div>
@@ -125,17 +125,17 @@ function Section({
 
 function Empty({ text }: { text: string }) {
   return (
-    <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-white/10">
-      <p className="text-[11px] text-zinc-600">{text}</p>
+    <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-card-edge">
+      <p className="text-[11px] text-text-faint">{text}</p>
     </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-white/[0.03] p-2 text-center">
-      <div className="font-mono-tabular text-xs font-semibold text-zinc-100">{value}</div>
-      <div className="text-[8px] uppercase tracking-wider text-zinc-500">{label}</div>
+    <div className="rounded-lg bg-bg p-2 text-center">
+      <div className="font-mono-tabular text-xs font-semibold text-text">{value}</div>
+      <div className="text-[8px] uppercase tracking-wider text-text-faint">{label}</div>
     </div>
   );
 }
