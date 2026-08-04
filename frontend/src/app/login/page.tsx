@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { api, type MfaEnrollResponse } from "@/lib/api";
+import { api, API_BASE, type MfaEnrollResponse } from "@/lib/api";
 import { GlassCard } from "@/components/ui/glass-card";
 
 // REL-007 E7.1: SystemAdministrator/PortfolioManager/RiskManager now require a TOTP second
@@ -25,9 +25,27 @@ type Step = "credentials" | "enroll" | "verify";
 function isAuthRejection(err: unknown): boolean {
   return err instanceof Error && /failed: 4\d\d/.test(err.message);
 }
-const CONNECTION_ERROR_MESSAGE =
-  "Couldn't reach the server. If this is a fresh setup, you may need to open the API's own " +
-  "URL directly once and accept its certificate warning, then try again.";
+
+// A real, clickable link to the actual API origin, not just prose telling the user to go find
+// it themselves -- the exact fix for a real report: a user stuck on this message had no way to
+// know which URL to open.
+function ConnectionErrorMessage() {
+  return (
+    <p className="text-xs text-rose-400">
+      Couldn&apos;t reach the server at{" "}
+      <a
+        href={API_BASE}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2 hover:text-rose-300"
+      >
+        {API_BASE}
+      </a>
+      . If this is a fresh setup, open that link in a new tab and accept its certificate
+      warning, then try again here.
+    </p>
+  );
+}
 
 const inputClass =
   "w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-400/50";
@@ -47,12 +65,21 @@ export default function LoginPage() {
   const [totpCode, setTotpCode] = useState("");
   const [backupCode, setBackupCode] = useState("");
   const [useBackupCode, setUseBackupCode] = useState(false);
+  // `error` holds a plain-text auth-rejection message; `connectionError` is a separate flag
+  // (not folded into `error`) so the render side can show the real, clickable ConnectionErrorMessage
+  // instead of a plain string for that case -- see the module-level comment on isAuthRejection.
   const [error, setError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  function resetErrors() {
+    setError(null);
+    setConnectionError(false);
+  }
 
   async function handleCredentialsSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
+    resetErrors();
     setSubmitting(true);
     try {
       const res = await login(email, password);
@@ -70,7 +97,11 @@ export default function LoginPage() {
         setStep("enroll");
       }
     } catch (err) {
-      setError(isAuthRejection(err) ? "Incorrect email or password." : CONNECTION_ERROR_MESSAGE);
+      if (isAuthRejection(err)) {
+        setError("Incorrect email or password.");
+      } else {
+        setConnectionError(true);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -79,18 +110,18 @@ export default function LoginPage() {
   async function handleConfirmEnrollment(e: React.FormEvent) {
     e.preventDefault();
     if (!pendingToken) return;
-    setError(null);
+    resetErrors();
     setSubmitting(true);
     try {
       const session = await api.mfaConfirm(pendingToken, totpCode);
       await completeSession(session.access_token, session.refresh_token);
       router.replace("/");
     } catch (err) {
-      setError(
-        isAuthRejection(err)
-          ? "Incorrect code. Check your authenticator app and try again."
-          : CONNECTION_ERROR_MESSAGE,
-      );
+      if (isAuthRejection(err)) {
+        setError("Incorrect code. Check your authenticator app and try again.");
+      } else {
+        setConnectionError(true);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -99,7 +130,7 @@ export default function LoginPage() {
   async function handleVerify(e: React.FormEvent) {
     e.preventDefault();
     if (!pendingToken) return;
-    setError(null);
+    resetErrors();
     setSubmitting(true);
     try {
       const session = await api.mfaVerify(
@@ -110,7 +141,7 @@ export default function LoginPage() {
       router.replace("/");
     } catch (err) {
       if (!isAuthRejection(err)) {
-        setError(CONNECTION_ERROR_MESSAGE);
+        setConnectionError(true);
       } else {
         setError(useBackupCode ? "Incorrect or already-used backup code." : "Incorrect code.");
       }
@@ -145,7 +176,11 @@ export default function LoginPage() {
                 className={inputClass}
               />
             </div>
-            {error && <p className="text-xs text-rose-400">{error}</p>}
+            {connectionError ? (
+              <ConnectionErrorMessage />
+            ) : (
+              error && <p className="text-xs text-rose-400">{error}</p>
+            )}
             <button type="submit" disabled={submitting} className={buttonClass}>
               {submitting ? "Signing in…" : "Sign in"}
             </button>
@@ -193,7 +228,11 @@ export default function LoginPage() {
                   className={inputClass}
                 />
               </div>
-              {error && <p className="text-xs text-rose-400">{error}</p>}
+              {connectionError ? (
+              <ConnectionErrorMessage />
+            ) : (
+              error && <p className="text-xs text-rose-400">{error}</p>
+            )}
               <button type="submit" disabled={submitting} className={buttonClass}>
                 {submitting ? "Confirming…" : "Confirm and sign in"}
               </button>
@@ -231,7 +270,11 @@ export default function LoginPage() {
                 />
               </div>
             )}
-            {error && <p className="text-xs text-rose-400">{error}</p>}
+            {connectionError ? (
+              <ConnectionErrorMessage />
+            ) : (
+              error && <p className="text-xs text-rose-400">{error}</p>
+            )}
             <button type="submit" disabled={submitting} className={buttonClass}>
               {submitting ? "Verifying…" : "Verify and sign in"}
             </button>
@@ -239,7 +282,7 @@ export default function LoginPage() {
               type="button"
               onClick={() => {
                 setUseBackupCode(!useBackupCode);
-                setError(null);
+                resetErrors();
               }}
               className="text-xs text-zinc-500 underline underline-offset-2 hover:text-zinc-300"
             >

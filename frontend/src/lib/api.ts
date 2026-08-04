@@ -1,4 +1,8 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+// Exported so callers can build a real, actionable message when a request never reaches this
+// origin at all (e.g. a self-signed TLS cert the browser hasn't been told to trust yet) --
+// see login/page.tsx's own CONNECTION_ERROR_MESSAGE for the concrete case this closes.
+export { API_BASE };
 
 export const WS_BASE = API_BASE.replace(/^http/, "ws");
 
