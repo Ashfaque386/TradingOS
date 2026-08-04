@@ -7,6 +7,7 @@ import { useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { KILL_SWITCH_ROLES, useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { scaleIn } from "@/lib/motion";
 
 const HANDLE_WIDTH = 52;
 const TRACK_PADDING = 8;
@@ -70,7 +71,12 @@ export function KillSwitchButton() {
             Re-arm system
           </Button>
         ) : (
-          <div className="mt-4 flex gap-2">
+          <motion.div
+            initial="hidden"
+            animate="visible"
+            variants={scaleIn}
+            className="mt-4 flex gap-2"
+          >
             <Button onClick={() => setConfirmingReset(false)} variant="secondary" className="flex-1">
               Cancel
             </Button>
@@ -83,7 +89,7 @@ export function KillSwitchButton() {
             >
               <RotateCcw className="h-3.5 w-3.5" /> Confirm re-arm
             </Button>
-          </div>
+          </motion.div>
         )}
       </div>
     );

@@ -1,12 +1,17 @@
 "use client";
 
+import { Inbox } from "lucide-react";
 import { cn, formatCompactINR } from "@/lib/utils";
+import { IconBadge } from "@/components/ui/icon-badge";
 import type { Position } from "@/lib/api";
 
 export function PositionsTable({ positions }: { positions: Position[] }) {
   if (positions.length === 0) {
     return (
-      <div className="flex h-[180px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-card-edge text-center">
+      <div className="flex h-[180px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-card-edge text-center">
+        <IconBadge floating size={36}>
+          <Inbox className="h-4 w-4 text-text-faint" />
+        </IconBadge>
         <p className="text-xs text-text-faint">No open positions.</p>
       </div>
     );

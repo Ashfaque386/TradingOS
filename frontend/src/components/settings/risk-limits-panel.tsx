@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, Clock, ShieldAlert, XCircle } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
@@ -8,6 +9,7 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Gated } from "@/components/ui/gated";
 import { Button } from "@/components/ui/button";
+import { slideUp } from "@/lib/motion";
 import type { RiskLimitChangePayload, RiskLimitChangeRequest } from "@/lib/api";
 
 const QUERY_KEY_CURRENT = ["risk-limits-current"];
@@ -90,21 +92,30 @@ export function RiskLimitsPanel() {
       )}
 
       <Gated permission="manageRiskLimits">
-        {staging ? (
-          <StageChangeForm
-            onDone={() => {
-              setStaging(false);
-              queryClient.invalidateQueries({ queryKey: QUERY_KEY_PENDING });
-            }}
-          />
-        ) : (
-          <button
-            onClick={() => setStaging(true)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-card-edge py-2.5 text-xs font-medium text-text-faint transition hover:border-text-faint hover:text-text-dim"
-          >
-            <ShieldAlert className="h-3.5 w-3.5" /> Stage a risk limit change
-          </button>
-        )}
+        <AnimatePresence initial={false}>
+          {staging ? (
+            <motion.div key="stage-form" initial="hidden" animate="visible" exit="exit" variants={slideUp}>
+              <StageChangeForm
+                onDone={() => {
+                  setStaging(false);
+                  queryClient.invalidateQueries({ queryKey: QUERY_KEY_PENDING });
+                }}
+              />
+            </motion.div>
+          ) : (
+            <motion.button
+              key="stage-trigger"
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              variants={slideUp}
+              onClick={() => setStaging(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-card-edge py-2.5 text-xs font-medium text-text-faint transition hover:border-text-faint hover:text-text-dim"
+            >
+              <ShieldAlert className="h-3.5 w-3.5" /> Stage a risk limit change
+            </motion.button>
+          )}
+        </AnimatePresence>
       </Gated>
     </div>
   );

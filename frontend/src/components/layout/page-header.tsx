@@ -26,7 +26,7 @@ export function PageHeader({ connected, subtitle }: { connected: boolean; subtit
             className={cn("absolute inset-0 rounded-full", connected ? "bg-up" : "bg-warn")}
           />
           {connected && (
-            <span className="absolute inset-0 animate-ping rounded-full bg-up opacity-75" />
+            <span className="absolute inset-0 animate-pulse-glow rounded-full bg-up text-up" />
           )}
         </div>
         <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">{subtitle}</p>

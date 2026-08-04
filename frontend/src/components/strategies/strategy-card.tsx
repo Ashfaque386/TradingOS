@@ -3,6 +3,7 @@
 import { motion, type PanInfo } from "framer-motion";
 import { useRef } from "react";
 import { cn } from "@/lib/utils";
+import { staggerItem } from "@/lib/motion";
 import type { StrategySummary } from "@/lib/api";
 
 const VALIDATION_COLOR: Record<string, string> = {
@@ -31,6 +32,7 @@ export function StrategyCard({
 
   return (
     <motion.div
+      variants={staggerItem}
       drag={draggable}
       dragSnapToOrigin
       dragElastic={0.15}

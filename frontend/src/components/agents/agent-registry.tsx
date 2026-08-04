@@ -1,12 +1,14 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { Ban, CircleCheck, ShieldAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Gated } from "@/components/ui/gated";
 import { Button } from "@/components/ui/button";
+import { slideUp, staggerContainer, staggerItem } from "@/lib/motion";
 import type { AgentControlEntry } from "@/lib/api";
 
 const KIND_LABEL: Record<AgentControlEntry["kind"], string> = {
@@ -47,12 +49,18 @@ export function AgentRegistry() {
   const entries = registryQuery.data ?? [];
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <motion.div
+      initial="hidden"
+      animate="visible"
+      variants={staggerContainer}
+      className="flex flex-col gap-1.5"
+    >
       {entries.map((agent) => {
         const isPendingThis = setEnabled.isPending && setEnabled.variables?.agentName === agent.agent_name;
         return (
-          <div
+          <motion.div
             key={agent.agent_name}
+            variants={staggerItem}
             className="flex items-center justify-between gap-3 rounded-lg border border-card-edge bg-bg px-3 py-row-dense"
           >
             <div className="min-w-0 flex-1">
@@ -92,41 +100,51 @@ export function AgentRegistry() {
               }
             >
               {agent.enabled ? (
-                pendingDisable === agent.agent_name ? (
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="Reason"
-                      autoFocus
-                      className="w-28 rounded-md border border-card-edge bg-panel px-1.5 py-1 text-[10px] text-text placeholder:text-text-faint"
-                    />
-                    <Button
-                      onClick={() =>
-                        setEnabled.mutate({ agentName: agent.agent_name, enabled: false, reason: reason || null })
-                      }
-                      disabled={!reason.trim() || isPendingThis}
-                      variant="destructive"
-                      className="px-2 py-1 text-[10px]"
+                <AnimatePresence initial={false}>
+                  {pendingDisable === agent.agent_name ? (
+                    <motion.div
+                      key="disable-form"
+                      initial="hidden"
+                      animate="visible"
+                      exit="exit"
+                      variants={slideUp}
+                      className="flex items-center gap-1.5"
                     >
-                      Confirm
+                      <input
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder="Reason"
+                        autoFocus
+                        className="w-28 rounded-md border border-card-edge bg-panel px-1.5 py-1 text-[10px] text-text placeholder:text-text-faint"
+                      />
+                      <Button
+                        onClick={() =>
+                          setEnabled.mutate({ agentName: agent.agent_name, enabled: false, reason: reason || null })
+                        }
+                        disabled={!reason.trim() || isPendingThis}
+                        variant="destructive"
+                        className="px-2 py-1 text-[10px]"
+                      >
+                        Confirm
+                      </Button>
+                      <Button onClick={() => setPendingDisable(null)} variant="secondary" className="px-2 py-1 text-[10px]">
+                        Cancel
+                      </Button>
+                    </motion.div>
+                  ) : (
+                    <Button
+                      key="disable-trigger"
+                      onClick={() => {
+                        setPendingDisable(agent.agent_name);
+                        setReason("");
+                      }}
+                      variant="destructive"
+                      className="shrink-0 px-2 py-1 text-[10px]"
+                    >
+                      <Ban className="h-3 w-3" /> Disable
                     </Button>
-                    <Button onClick={() => setPendingDisable(null)} variant="secondary" className="px-2 py-1 text-[10px]">
-                      Cancel
-                    </Button>
-                  </div>
-                ) : (
-                  <Button
-                    onClick={() => {
-                      setPendingDisable(agent.agent_name);
-                      setReason("");
-                    }}
-                    variant="destructive"
-                    className="shrink-0 px-2 py-1 text-[10px]"
-                  >
-                    <Ban className="h-3 w-3" /> Disable
-                  </Button>
-                )
+                  )}
+                </AnimatePresence>
               ) : (
                 <Button
                   onClick={() =>
@@ -139,9 +157,9 @@ export function AgentRegistry() {
                 </Button>
               )}
             </Gated>
-          </div>
+          </motion.div>
         );
       })}
-    </div>
+    </motion.div>
   );
 }

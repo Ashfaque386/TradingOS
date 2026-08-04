@@ -1,12 +1,14 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import { BadgeCheck, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ALERT_LEVELS, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Gated } from "@/components/ui/gated";
 import { Button } from "@/components/ui/button";
+import { slideUp, staggerContainer, staggerItem } from "@/lib/motion";
 import type { AlertLevel, ChannelType, NotificationChannel } from "@/lib/api";
 
 const CHANNEL_TYPES: ChannelType[] = ["Telegram", "Discord", "WhatsApp", "Slack", "Email"];
@@ -54,8 +56,9 @@ export function NotificationChannels() {
         </p>
       )}
 
+      <motion.div initial="hidden" animate="visible" variants={staggerContainer} className="space-y-3">
       {channels.map((channel) => (
-        <div key={channel.id} className="rounded-xl border border-card-edge bg-bg p-3.5">
+        <motion.div key={channel.id} variants={staggerItem} className="rounded-xl border border-card-edge bg-bg p-3.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-panel px-2 py-0.5 text-[10px] font-medium text-text-dim">
@@ -113,20 +116,30 @@ export function NotificationChannels() {
               );
             })}
           </div>
-        </div>
+        </motion.div>
       ))}
+      </motion.div>
 
       <Gated permission="manageNotificationChannels">
-        {adding ? (
-          <AddChannelForm onDone={() => setAdding(false)} />
-        ) : (
-          <button
-            onClick={() => setAdding(true)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-card-edge py-2.5 text-xs font-medium text-text-faint transition hover:border-text-faint hover:text-text-dim"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add channel
-          </button>
-        )}
+        <AnimatePresence initial={false}>
+          {adding ? (
+            <motion.div key="add-form" initial="hidden" animate="visible" exit="exit" variants={slideUp}>
+              <AddChannelForm onDone={() => setAdding(false)} />
+            </motion.div>
+          ) : (
+            <motion.button
+              key="add-trigger"
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              variants={slideUp}
+              onClick={() => setAdding(true)}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-card-edge py-2.5 text-xs font-medium text-text-faint transition hover:border-text-faint hover:text-text-dim"
+            >
+              <Plus className="h-3.5 w-3.5" /> Add channel
+            </motion.button>
+          )}
+        </AnimatePresence>
       </Gated>
     </div>
   );

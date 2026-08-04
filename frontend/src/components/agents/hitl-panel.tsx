@@ -1,11 +1,13 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { Check, RotateCcw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { Gated } from "@/components/ui/gated";
 import { Button } from "@/components/ui/button";
+import { slideUp } from "@/lib/motion";
 import type { AgentRunDetail } from "@/lib/api";
 
 /** REL-011 E11.4b: retry/approve/reject for the Orchestrator HITL endpoints (REL-010 E10.8d) --
@@ -81,37 +83,47 @@ export function HitlPanel({ run }: { run: AgentRunDetail | null }) {
             >
               <Check className="h-3 w-3" /> Approve
             </Button>
-            {!rejecting ? (
-              <Button
-                onClick={() => setRejecting(true)}
-                variant="destructive"
-                className="px-3 py-1.5 text-[11px]"
-              >
-                <X className="h-3 w-3" /> Reject
-              </Button>
-            ) : (
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                <input
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="Reason for rejection"
-                  className="min-w-[200px] rounded-md border border-card-edge bg-panel px-2 py-1.5 text-[11px] text-text placeholder:text-text-faint"
-                />
-                <div className="flex gap-2">
-                  <Button onClick={() => setRejecting(false)} variant="secondary" className="px-2.5 py-1.5 text-[11px]">
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={() => reject.mutate({ runId: run.run_id, reason })}
-                    disabled={!reason.trim() || reject.isPending}
-                    variant="destructive"
-                    className="px-2.5 py-1.5 text-[11px]"
-                  >
-                    {reject.isPending ? "Rejecting…" : "Confirm reject"}
-                  </Button>
-                </div>
-              </div>
-            )}
+            <AnimatePresence initial={false}>
+              {!rejecting ? (
+                <Button
+                  key="reject-trigger"
+                  onClick={() => setRejecting(true)}
+                  variant="destructive"
+                  className="px-3 py-1.5 text-[11px]"
+                >
+                  <X className="h-3 w-3" /> Reject
+                </Button>
+              ) : (
+                <motion.div
+                  key="reject-form"
+                  initial="hidden"
+                  animate="visible"
+                  exit="exit"
+                  variants={slideUp}
+                  className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row"
+                >
+                  <input
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="Reason for rejection"
+                    className="min-w-[200px] rounded-md border border-card-edge bg-panel px-2 py-1.5 text-[11px] text-text placeholder:text-text-faint"
+                  />
+                  <div className="flex gap-2">
+                    <Button onClick={() => setRejecting(false)} variant="secondary" className="px-2.5 py-1.5 text-[11px]">
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => reject.mutate({ runId: run.run_id, reason })}
+                      disabled={!reason.trim() || reject.isPending}
+                      variant="destructive"
+                      className="px-2.5 py-1.5 text-[11px]"
+                    >
+                      {reject.isPending ? "Rejecting…" : "Confirm reject"}
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
       </div>

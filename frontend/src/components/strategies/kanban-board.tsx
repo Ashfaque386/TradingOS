@@ -1,11 +1,12 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { PanInfo } from "framer-motion";
+import { motion, type PanInfo } from "framer-motion";
 import { useRef } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { usePermission } from "@/lib/usePermission";
+import { staggerContainer } from "@/lib/motion";
 import type { StrategyStatus, StrategySummary } from "@/lib/api";
 import { StrategyCard } from "./strategy-card";
 
@@ -75,11 +76,14 @@ export function KanbanBoard({
       {COLUMNS.map((col) => {
         const items = byStatus(col.status);
         return (
-          <div
+          <motion.div
             key={col.status}
             ref={(el) => {
               columnRefs.current[col.status] = el;
             }}
+            initial="hidden"
+            animate="visible"
+            variants={staggerContainer}
             className={cn(
               "flex min-h-[200px] flex-col gap-2 rounded-2xl border border-card-edge bg-bg p-3",
               !col.promotable && "border-dashed",
@@ -108,7 +112,7 @@ export function KanbanBoard({
                 draggable={canPromote}
               />
             ))}
-          </div>
+          </motion.div>
         );
       })}
       </div>
