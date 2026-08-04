@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
-import { TopBar } from "@/components/layout/top-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
 import { GlassCard } from "@/components/ui/glass-card";
 import { OrdersTable } from "@/components/orders/orders-table";
 import { TradesTable } from "@/components/orders/trades-table";
@@ -186,8 +187,13 @@ function LiveTradeMonitoringView() {
 export default function OrdersPage() {
   return (
     <RequireAuth>
-      <TopBar connected={false} subtitle="Live Trade & Order Monitoring — Real Capital Only" />
-      <LiveTradeMonitoringView />
+      <div className="flex flex-1">
+        <Sidebar />
+        <div className="flex flex-1 flex-col">
+          <PageHeader connected={false} subtitle="Live Trade & Order Monitoring — Real Capital Only" />
+          <LiveTradeMonitoringView />
+        </div>
+      </div>
     </RequireAuth>
   );
 }

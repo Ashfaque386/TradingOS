@@ -4,7 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
-import { TopBar } from "@/components/layout/top-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
 import { GlassCard } from "@/components/ui/glass-card";
 import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
 import { DrawdownChart } from "@/components/strategies/drawdown-chart";
@@ -280,8 +281,13 @@ function BacktestComparisonTable({ rows }: { rows: { label: string; backtest: Ba
 export default function BacktestsPage() {
   return (
     <RequireAuth>
-      <TopBar connected={false} subtitle="Backtesting Dashboard — Full Metrics & Comparison" />
-      <BacktestingDashboardView />
+      <div className="flex flex-1">
+        <Sidebar />
+        <div className="flex flex-1 flex-col">
+          <PageHeader connected={false} subtitle="Backtesting Dashboard — Full Metrics & Comparison" />
+          <BacktestingDashboardView />
+        </div>
+      </div>
     </RequireAuth>
   );
 }

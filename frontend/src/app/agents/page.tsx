@@ -5,7 +5,8 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useAgentLogStream } from "@/hooks/useAgentLogStream";
 import { RequireAuth } from "@/lib/auth";
-import { TopBar } from "@/components/layout/top-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
 import { GlassCard } from "@/components/ui/glass-card";
 import { GraphFlowchart } from "@/components/agents/graph-flowchart";
 import { ThoughtStream } from "@/components/agents/thought-stream";
@@ -93,15 +94,19 @@ export default function AgentConsole() {
 
   return (
     <RequireAuth>
-      <TopBar connected={connected} subtitle="Agent Console" />
+      <div className="flex flex-1">
+        <Sidebar />
+        <div className="flex flex-1 flex-col">
+          <PageHeader connected={connected} subtitle="Agent Console" />
+          <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
+            <GlassCard eyebrow="Orchestrator" title="Research Cycle">
+              <RunControls selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
+            </GlassCard>
 
-      <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-        <GlassCard eyebrow="Orchestrator" title="Research Cycle">
-          <RunControls selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
-        </GlassCard>
-
-        <GridWorkspace storageKey="tradingos:grid:agents" panels={panels} />
-      </main>
+            <GridWorkspace storageKey="tradingos:grid:agents" panels={panels} />
+          </main>
+        </div>
+      </div>
     </RequireAuth>
   );
 }

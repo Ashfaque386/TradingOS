@@ -3,7 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
-import { TopBar } from "@/components/layout/top-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
 import { GlassCard } from "@/components/ui/glass-card";
 import { ShadowModePanel } from "@/components/paper-trading/shadow-mode-panel";
 import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
@@ -78,8 +79,13 @@ function PaperTradingDeskView() {
 export default function PaperTradingPage() {
   return (
     <RequireAuth>
-      <TopBar connected={false} subtitle="Paper Trading Desk — Simulated Fills, Zero Real Capital" />
-      <PaperTradingDeskView />
+      <div className="flex flex-1">
+        <Sidebar />
+        <div className="flex flex-1 flex-col">
+          <PageHeader connected={false} subtitle="Paper Trading Desk — Simulated Fills, Zero Real Capital" />
+          <PaperTradingDeskView />
+        </div>
+      </div>
     </RequireAuth>
   );
 }

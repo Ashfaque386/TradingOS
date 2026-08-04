@@ -5,7 +5,8 @@ import { api } from "@/lib/api";
 import { formatCompactINR } from "@/lib/utils";
 import { usePortfolioSocket } from "@/hooks/usePortfolioSocket";
 import { RequireAuth } from "@/lib/auth";
-import { TopBar } from "@/components/layout/top-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
 import { GlassCard } from "@/components/ui/glass-card";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { RiskGauge } from "@/components/portfolio/risk-gauge";
@@ -174,11 +175,15 @@ export default function PortfolioCommandCenter() {
 
   return (
     <RequireAuth>
-      <TopBar connected={connected} subtitle="Portfolio & Risk Command Center" />
-
-      <main className="mx-auto w-full max-w-[1440px] flex-1 p-6 sm:p-8">
-        <GridWorkspace storageKey="tradingos:grid:portfolio" panels={panels} />
-      </main>
+      <div className="flex flex-1">
+        <Sidebar />
+        <div className="flex flex-1 flex-col">
+          <PageHeader connected={connected} subtitle="Portfolio & Risk Command Center" />
+          <main className="mx-auto w-full max-w-[1440px] flex-1 p-6 sm:p-8">
+            <GridWorkspace storageKey="tradingos:grid:portfolio" panels={panels} />
+          </main>
+        </div>
+      </div>
     </RequireAuth>
   );
 }

@@ -6,7 +6,8 @@ import { Download } from "lucide-react";
 import { api, downloadAuthenticated } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
 import { usePermission } from "@/lib/usePermission";
-import { TopBar } from "@/components/layout/top-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
 import { GlassCard } from "@/components/ui/glass-card";
 import { AuditLogTable } from "@/components/audit/audit-log-table";
 import { AuditEntryDetail } from "@/components/audit/audit-entry-detail";
@@ -118,17 +119,22 @@ export default function AuditPage() {
 
   return (
     <RequireAuth>
-      <TopBar connected={false} subtitle="Compliance & Trade-History Audit" />
-      {canReadAudit ? (
-        <AuditView />
-      ) : (
-        <main className="mx-auto flex w-full max-w-[1440px] flex-1 items-center justify-center p-8">
-          <p data-testid="audit-insufficient-role" className="text-sm text-zinc-500">
-            Your role does not have access to audit logs. Requires System Administrator or
-            Read-Only Auditor.
-          </p>
-        </main>
-      )}
+      <div className="flex flex-1">
+        <Sidebar />
+        <div className="flex flex-1 flex-col">
+          <PageHeader connected={false} subtitle="Compliance & Trade-History Audit" />
+          {canReadAudit ? (
+            <AuditView />
+          ) : (
+            <main className="mx-auto flex w-full max-w-[1440px] flex-1 items-center justify-center p-8">
+              <p data-testid="audit-insufficient-role" className="text-sm text-zinc-500">
+                Your role does not have access to audit logs. Requires System Administrator or
+                Read-Only Auditor.
+              </p>
+            </main>
+          )}
+        </div>
+      </div>
     </RequireAuth>
   );
 }
