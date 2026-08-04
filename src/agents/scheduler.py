@@ -22,6 +22,7 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from src.agents.control import is_agent_enabled
 from src.agents.nodes.memory_agent import (
     archive_low_confidence_memories,
     generate_lessons_learned_summary,
@@ -82,8 +83,16 @@ def run_corporate_actions_ingestion() -> None:
     """REL-010 E10.7: real CSV-read + real Postgres upsert (src/data/ingest/corporate_actions.py)
     -- scheduled before the daily research cycle so a same-day corporate action is reflected
     before that cycle's own backtests run. A missing/empty CSV is a real, silent no-op (0 rows
-    written), not an error -- this dev environment has no seed data by default."""
+    written), not an error -- this dev environment has no seed data by default.
+
+    REL-019 E19.2 (ADR 11): checks the Data Ingestion Agent's real control state first -- a
+    disabled agent is skipped honestly (own log event), not silently indistinguishable from a
+    normal empty-CSV no-op."""
     try:
+        with get_session() as session:
+            if not is_agent_enabled(session, "data_ingestion_agent"):
+                logger.info("scheduler_corporate_actions_ingestion_skipped_disabled")
+                return
         rows = CorporateActionsAdapter(get_settings().corporate_actions_csv_path).fetch()
         with get_session() as session:
             written = CorporateActionsWriter().write(session, rows)
@@ -97,10 +106,29 @@ def run_news_sentiment_cycle() -> None:
     scoring persisted to Qdrant (src/agents/nodes/sentiment_agent.py). Every-30-minutes cadence
     during market hours matches the plan's own stated interval; both steps already degrade
     per-item/per-feed on failure, so this wrapper only needs to guard against a total surprise
-    (e.g. Qdrant itself being down)."""
+    (e.g. Qdrant itself being down).
+
+    REL-019 E19.2 (ADR 11): News and Sentiment are two separately controllable agents (AGT-013/
+    AGT-014) sharing one scheduled job, so each gets its own real control-state check rather than
+    one combined check that couldn't distinguish "skip ingestion" from "skip scoring"."""
     try:
-        items = ingest_news_cycle()
-        point_ids = score_and_store_sentiment(items)
+        with get_session() as session:
+            news_enabled = is_agent_enabled(session, "news_agent")
+        if news_enabled:
+            items = ingest_news_cycle()
+        else:
+            logger.info("scheduler_news_agent_skipped_disabled")
+            items = []
+
+        with get_session() as session:
+            sentiment_enabled = is_agent_enabled(session, "sentiment_agent")
+        if sentiment_enabled and items:
+            point_ids = score_and_store_sentiment(items)
+        else:
+            if not sentiment_enabled:
+                logger.info("scheduler_sentiment_agent_skipped_disabled")
+            point_ids = []
+
         logger.info(
             "scheduler_news_sentiment_cycle_completed",
             items_ingested=len(items),
@@ -111,7 +139,12 @@ def run_news_sentiment_cycle() -> None:
 
 
 def run_weekend_memory_consolidation() -> None:
+    """REL-019 E19.2 (ADR 11): checks the Memory Agent's real control state first."""
     try:
+        with get_session() as session:
+            if not is_agent_enabled(session, "memory_agent"):
+                logger.info("scheduler_weekend_memory_job_skipped_disabled")
+                return
         archived = archive_low_confidence_memories()
         summary = generate_lessons_learned_summary()
         logger.info(

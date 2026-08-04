@@ -14,9 +14,13 @@ count already reflects the prior loop iteration's rejection -- no separate incre
 re-entry gets a fresh 5-strikes budget rather than immediately re-escalating.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from src.agents.control import require_enabled
 from src.agents.nodes.backtesting import backtesting_node
 from src.agents.nodes.ceo import ceo_agent_node
 from src.agents.nodes.compliance import compliance_node
@@ -29,9 +33,27 @@ from src.agents.nodes.python_validator import python_validator_node
 from src.agents.nodes.risk_manager import risk_manager_node
 from src.agents.nodes.strategy_generator import strategy_generator_node
 from src.agents.state import TradingOSGraphState
+from src.core.db import get_session
 
 MAX_CODE_VALIDATION_RETRIES = 3
 MAX_REJECTIONS_BEFORE_ESCALATION = 5
+
+NodeFn = Callable[[TradingOSGraphState], dict[str, Any]]
+
+
+def _halt_on_entry(node_name: str, node_fn: NodeFn) -> NodeFn:
+    """ADR 11's halt-on-entry circuit breaker: checked before `node_fn`'s real logic runs, not
+    after. A disabled node raises `AgentHaltedError` here -- the run genuinely never executes
+    that node's logic, rather than being skipped-past with fabricated state (see ADR 11's
+    "Alternatives Considered" for why that was rejected, e.g. for the `compliance` node, a
+    hardcoded safety veto that must never be silently bypassed)."""
+
+    def wrapper(state: TradingOSGraphState) -> dict[str, Any]:
+        with get_session() as session:
+            require_enabled(session, node_name)
+        return node_fn(state)
+
+    return wrapper
 
 
 def route_after_validation(state: TradingOSGraphState) -> str:
@@ -65,17 +87,28 @@ def route_after_evaluation(state: TradingOSGraphState) -> str:
 def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
     graph = StateGraph(TradingOSGraphState)
 
-    graph.add_node("ceo_agent", ceo_agent_node)
-    graph.add_node("market_analyst", market_analyst_node)
-    graph.add_node("strategy_generator", strategy_generator_node)
-    graph.add_node("python_code_generator", python_code_generator_node)
-    graph.add_node("compliance", compliance_node)
-    graph.add_node("python_validator", python_validator_node)
-    graph.add_node("backtesting", backtesting_node)
-    graph.add_node("evaluator", evaluator_node)
-    graph.add_node("optimization", optimization_node)
-    graph.add_node("risk_manager", risk_manager_node)
-    graph.add_node("deployment", deployment_node)
+    # mypy --strict can resolve add_node's generic NodeInputT overloads against a directly-named
+    # node function (it reads the function's own declared signature), but not against the
+    # `_halt_on_entry` closure below -- a known mypy limitation with overloaded+generic Protocol
+    # matching on wrapped callables, not a real type-safety gap: `wrapper` is structurally a
+    # valid `_Node[TradingOSGraphState]` (single positional `state` param, any return), which is
+    # exactly what every add_node overload accepts at runtime.
+    graph.add_node("ceo_agent", _halt_on_entry("ceo_agent", ceo_agent_node))  # type: ignore[call-overload]
+    graph.add_node("market_analyst", _halt_on_entry("market_analyst", market_analyst_node))  # type: ignore[call-overload]
+    graph.add_node(
+        "strategy_generator", _halt_on_entry("strategy_generator", strategy_generator_node)
+    )  # type: ignore[call-overload]
+    graph.add_node(
+        "python_code_generator",
+        _halt_on_entry("python_code_generator", python_code_generator_node),
+    )  # type: ignore[call-overload]
+    graph.add_node("compliance", _halt_on_entry("compliance", compliance_node))  # type: ignore[call-overload]
+    graph.add_node("python_validator", _halt_on_entry("python_validator", python_validator_node))  # type: ignore[call-overload]
+    graph.add_node("backtesting", _halt_on_entry("backtesting", backtesting_node))  # type: ignore[call-overload]
+    graph.add_node("evaluator", _halt_on_entry("evaluator", evaluator_node))  # type: ignore[call-overload]
+    graph.add_node("optimization", _halt_on_entry("optimization", optimization_node))  # type: ignore[call-overload]
+    graph.add_node("risk_manager", _halt_on_entry("risk_manager", risk_manager_node))  # type: ignore[call-overload]
+    graph.add_node("deployment", _halt_on_entry("deployment", deployment_node))  # type: ignore[call-overload]
 
     graph.set_entry_point("ceo_agent")
     graph.add_edge("ceo_agent", "market_analyst")

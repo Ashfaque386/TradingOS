@@ -32,6 +32,10 @@ export const PERMISSIONS = {
   // src/api/routers/broker_config.py:_can_manage_broker_credentials -- POST/DELETE
   // /broker/credentials/{broker} (REL-017 E17.2).
   manageBrokerCredentials: [ROLES.SystemAdministrator],
+  // src/api/routers/agents.py:_can_manage_hitl -- PUT /agents/control/{agent_name}
+  // (REL-019 E19.2, ADR 11). Same role set as manageHitl since disabling a pipeline agent is an
+  // equivalent-weight operational action to approving/rejecting a run.
+  manageAgentControl: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

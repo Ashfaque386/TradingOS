@@ -10,6 +10,9 @@ const STATUS_STYLES: Record<string, string> = {
   Running: "text-cyan-300",
   Completed: "text-emerald-300",
   Failed: "text-rose-300",
+  // REL-019 E19.2 (ADR 11): a halted run is a deliberate stop (a disabled agent's real logic
+  // never ran), not a failure -- its own color keeps it visually distinct from Failed.
+  Halted: "text-amber-300",
 };
 
 export function RunControls({

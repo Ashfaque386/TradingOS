@@ -12,6 +12,7 @@ import { ThoughtStream } from "@/components/agents/thought-stream";
 import { PromptManager } from "@/components/agents/prompt-manager";
 import { RunControls } from "@/components/agents/run-controls";
 import { HitlPanel } from "@/components/agents/hitl-panel";
+import { AgentRegistry } from "@/components/agents/agent-registry";
 import { GridWorkspace, type GridPanel } from "@/components/layout/grid-workspace";
 
 export default function AgentConsole() {
@@ -53,8 +54,24 @@ export default function AgentConsole() {
       ),
     },
     {
+      id: "agent-registry",
+      defaultLayout: { x: 0, y: 6, w: 12, h: 7, minW: 6, minH: 4 },
+      node: (
+        <GlassCard eyebrow="Per-agent control" title="Agent Registry" className="h-full">
+          <p className="mb-3 text-[11px] text-zinc-600">
+            The real, durable enable/disable state for every currently-shipped agent (ADR 11,
+            Phase_1_Architecture_Decision_Record.md). A disabled pipeline node halts the next run
+            before its real logic executes; a disabled scheduled agent is skipped at its next
+            trigger. Rows marked &ldquo;not yet enforced&rdquo; store real state but no call site
+            checks it yet.
+          </p>
+          <AgentRegistry />
+        </GlassCard>
+      ),
+    },
+    {
       id: "thought-stream",
-      defaultLayout: { x: 0, y: 6, w: 7, h: 7, minW: 4, minH: 4 },
+      defaultLayout: { x: 0, y: 13, w: 7, h: 7, minW: 4, minH: 4 },
       node: (
         <GlassCard eyebrow="Reasoning" title="Thought Stream" className="h-full">
           <div className="h-[360px]">
@@ -65,7 +82,7 @@ export default function AgentConsole() {
     },
     {
       id: "prompt-manager",
-      defaultLayout: { x: 7, y: 6, w: 5, h: 7, minW: 3, minH: 4 },
+      defaultLayout: { x: 7, y: 13, w: 5, h: 7, minW: 3, minH: 4 },
       node: (
         <GlassCard eyebrow="Hot-swappable" title="Prompt Management" className="h-full">
           <PromptManager />

@@ -6,7 +6,7 @@ import type { AgentRunDetail, GraphTopology } from "@/lib/api";
 
 const STRUCTURAL_NODES = new Set(["__start__", "__end__"]);
 
-type NodeState = "pending" | "active" | "completed" | "failed";
+type NodeState = "pending" | "active" | "completed" | "failed" | "halted";
 
 /** Orders the real fetched topology into a linear display chain by walking edges from
  * `__start__`, skipping back-edges (retries) whose target was already visited -- those are
@@ -53,6 +53,11 @@ const STATE_STYLES: Record<NodeState, string> = {
   active: "border-cyan-400/50 bg-cyan-400/10 text-cyan-200 shadow-[0_0_24px_rgba(34,211,238,0.35)]",
   completed: "border-emerald-400/40 bg-emerald-400/[0.08] text-emerald-200",
   failed: "border-rose-400/40 bg-rose-400/[0.08] text-rose-200",
+  // REL-019 E19.2 (ADR 11): the halted node itself never gets its own child AgentRun row (its
+  // real logic never ran, so there's nothing to persist) -- inferred here as the same
+  // next-in-chain position a "Running" state would call "active", distinguished visually since
+  // it's a deliberate stop, not progress.
+  halted: "border-amber-400/40 bg-amber-400/[0.08] text-amber-200",
 };
 
 export function GraphFlowchart({
@@ -72,11 +77,14 @@ export function GraphFlowchart({
   );
   const activeIndex =
     run?.status === "Running" && lastCompletedIndex < chain.length - 1 ? lastCompletedIndex + 1 : -1;
+  const haltedIndex =
+    run?.status === "Halted" && lastCompletedIndex < chain.length - 1 ? lastCompletedIndex + 1 : -1;
 
   const stateFor = (id: string, index: number): NodeState => {
     if (failedIds.has(id)) return "failed";
     if (completedIds.has(id)) return "completed";
     if (index === activeIndex) return "active";
+    if (index === haltedIndex) return "halted";
     return "pending";
   };
 

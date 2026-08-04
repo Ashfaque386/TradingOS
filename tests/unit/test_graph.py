@@ -1,6 +1,9 @@
 from contextlib import ExitStack
 from unittest.mock import patch
 
+import pytest
+
+from src.agents.control import AgentHaltedError, set_agent_enabled
 from src.agents.state import (
     BacktestMetrics,
     ComplianceVerdict,
@@ -16,6 +19,10 @@ from src.agents.state import (
     TradingOSGraphState,
     ValidationResult,
 )
+from src.core.db import get_session
+from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
+from src.models.agent import AgentControlState
+from tests.auth_helpers import cleanup_user, create_authenticated_user
 
 _DIRECTIVE = ResearchDirective(
     market_regime="Bullish",
@@ -270,3 +277,76 @@ def test_graph_topology_includes_compliance_between_code_generator_and_validator
     edges = {(e.source, e.target) for e in representation.edges}
     assert ("python_code_generator", "compliance") in edges
     assert ("compliance", "python_validator") in edges
+
+
+def _clear_control_row(agent_name: str) -> None:
+    with get_session() as session:
+        session.query(AgentControlState).filter(AgentControlState.agent_name == agent_name).delete()
+        session.commit()
+
+
+def test_halt_on_entry_stops_a_disabled_node_before_its_real_logic_runs():
+    """REL-019 E19.2 (ADR 11): a disabled graph node must never execute its real logic -- proven
+    here directly (not via a real LLM-costing end-to-end run) by disabling `strategy_generator`
+    in the real agent_control_state table, then asserting build_graph().invoke() raises
+    AgentHaltedError before the mocked strategy_generator_node is ever called."""
+    call_count = {"n": 0}
+
+    def strategy_generator_side_effect(state):
+        call_count["n"] += 1
+        return {"strategy_logic": _STRATEGY, "strategy_rejection_count": 0}
+
+    user_id, _token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        with get_session() as session:
+            set_agent_enabled(
+                session,
+                agent_name="strategy_generator",
+                enabled=False,
+                reason="unit test halt",
+                updated_by_user_id=user_id,
+            )
+            session.commit()
+
+        patches = _mock_pipeline(
+            validator_side_effect=_passing_validator,
+            strategy_generator_side_effect=strategy_generator_side_effect,
+        )
+        with pytest.raises(AgentHaltedError) as exc_info:
+            _invoke_with_patches(patches, TradingOSGraphState(thread_id="t1"))
+
+        assert exc_info.value.agent_name == "strategy_generator"
+        assert exc_info.value.reason == "unit test halt"
+        assert call_count["n"] == 0  # the real node logic never ran
+    finally:
+        _clear_control_row("strategy_generator")
+        cleanup_user(user_id)
+
+
+def test_reenabling_a_halted_agent_lets_the_next_run_proceed_normally():
+    user_id, _token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        with get_session() as session:
+            set_agent_enabled(
+                session,
+                agent_name="market_analyst",
+                enabled=False,
+                reason="temporary",
+                updated_by_user_id=user_id,
+            )
+            session.commit()
+            set_agent_enabled(
+                session,
+                agent_name="market_analyst",
+                enabled=True,
+                reason=None,
+                updated_by_user_id=user_id,
+            )
+            session.commit()
+
+        patches = _mock_pipeline(validator_side_effect=_passing_validator)
+        result = _invoke_with_patches(patches, TradingOSGraphState(thread_id="t1"))
+        assert result["deployment_recommendation"].recommended_status == "PaperTrading"
+    finally:
+        _clear_control_row("market_analyst")
+        cleanup_user(user_id)

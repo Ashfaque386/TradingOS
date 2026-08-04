@@ -36,6 +36,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.agents import prompt_registry
+from src.agents.control import (
+    KNOWN_AGENTS,
+    AgentHaltedError,
+    UnknownAgentError,
+    set_agent_enabled,
+)
 from src.agents.graph import build_graph
 from src.agents.llm_router import fetch_langsmith_trace_url, pop_last_langsmith_run_id
 from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT_INITIAL_CAPITAL
@@ -50,7 +56,7 @@ from src.data.datalake.query import DataLake
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account
-from src.models.agent import AgentLog, AgentRun
+from src.models.agent import AgentControlState, AgentLog, AgentRun
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
 from src.models.user import User
 from src.observability.metrics import AGENT_RUN_DURATION_SECONDS
@@ -100,6 +106,107 @@ def get_graph_topology() -> GraphTopologyResponse:
             for e in representation.edges
         ],
     )
+
+
+# --- Per-agent control (REL-019 E19.2, ADR 11) -----------------------------------------------
+
+
+class AgentControlEntry(BaseModel):
+    agent_name: str
+    agent_id: str
+    display_name: str
+    kind: str
+    enforced: bool
+    enabled: bool
+    reason: str | None
+    updated_by: str | None
+    updated_at: datetime | None
+
+
+class SetAgentEnabledRequest(BaseModel):
+    enabled: bool
+    reason: str | None = None
+
+
+@router.get("/control", response_model=list[AgentControlEntry])
+def list_agent_control_state() -> list[AgentControlEntry]:
+    """The full real-agent registry (src/agents/control.py::KNOWN_AGENTS) joined against the
+    real `agent_control_state` table -- an agent with no row is genuinely enabled (fail-open
+    default), not a placeholder; `enforced` tells the console honestly whether a call site
+    actually checks this agent's state yet (see control.py's module docstring)."""
+    with get_session() as session:
+        rows = {row.agent_name: row for row in session.scalars(select(AgentControlState))}
+        entries = []
+        for agent in KNOWN_AGENTS:
+            row = rows.get(agent.name)
+            updated_by_email = None
+            if row is not None and row.updated_by_user_id is not None:
+                user = session.get(User, row.updated_by_user_id)
+                updated_by_email = user.email if user is not None else None
+            entries.append(
+                AgentControlEntry(
+                    agent_name=agent.name,
+                    agent_id=agent.agent_id,
+                    display_name=agent.display_name,
+                    kind=agent.kind,
+                    enforced=agent.enforced,
+                    enabled=row is None or row.enabled,
+                    reason=row.reason if row is not None else None,
+                    updated_by=updated_by_email,
+                    updated_at=row.updated_at if row is not None else None,
+                )
+            )
+        return entries
+
+
+@router.put("/control/{agent_name}", response_model=AgentControlEntry)
+def set_agent_control_state(
+    agent_name: str,
+    body: SetAgentEnabledRequest,
+    user: User = Depends(_can_manage_hitl),
+) -> AgentControlEntry:
+    """Toggles one agent's real, durable enabled/disabled state. Refuses to disable the Audit
+    Agent (Business Rule 5) -- see control.py::set_agent_enabled. Audited the same way every
+    other admin-consequential mutation in this router is (write_audit_entry)."""
+    agent = next((a for a in KNOWN_AGENTS if a.name == agent_name), None)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_name}'")
+    with get_session() as session:
+        try:
+            row = set_agent_enabled(
+                session,
+                agent_name=agent_name,
+                enabled=body.enabled,
+                reason=body.reason,
+                updated_by_user_id=user.id,
+            )
+        except UnknownAgentError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=str(user.id),
+            action="AGENT_CONTROL_STATE_CHANGED",
+            entity_type="AgentControlState",
+            entity_id=row.id,
+            after_state={"agent_name": agent_name, "enabled": body.enabled, "reason": body.reason},
+            prompt_snapshot=f"{'Disabled' if not body.enabled else 'Enabled'} {agent_name}"
+            + (f": {body.reason}" if body.reason else ""),
+        )
+        session.commit()
+        return AgentControlEntry(
+            agent_name=agent.name,
+            agent_id=agent.agent_id,
+            display_name=agent.display_name,
+            kind=agent.kind,
+            enforced=agent.enforced,
+            enabled=row.enabled,
+            reason=row.reason,
+            updated_by=user.email,
+            updated_at=row.updated_at,
+        )
 
 
 # --- Trigger a real run ---------------------------------------------------------------------
@@ -433,6 +540,35 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
                 root.status = "Completed"
                 root.ended_at = datetime.now(UTC)
                 session.commit()
+    except AgentHaltedError as exc:
+        # ADR 11: a disabled node's real logic never ran -- this is a deliberate, honest stop,
+        # not a failure. Recorded with its own status so the console/API never conflate the two.
+        halted_ts = datetime.now(UTC)
+        with get_session() as session:
+            root = session.get(AgentRun, root_run_id)
+            if root is not None:
+                root.status = "Halted"
+                root.ended_at = halted_ts
+                session.add(
+                    AgentLog(
+                        agent_run_id=root_run_id,
+                        log_level="WARNING",
+                        message=str(exc),
+                        created_at=halted_ts,
+                    )
+                )
+                session.commit()
+        publish_agent_log(
+            redis_client,
+            json.dumps(
+                {
+                    "agent_id": exc.agent_name,
+                    "node": exc.agent_name,
+                    "message": f"Run halted: {exc}",
+                    "ts": halted_ts.isoformat(),
+                }
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 -- must always close out the run row, even on failure
         error_ts = datetime.now(UTC)
         with get_session() as session:

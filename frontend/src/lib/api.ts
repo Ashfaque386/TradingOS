@@ -128,6 +128,21 @@ export interface AgentRunDetail extends AgentRunSummary {
   logs: AgentLogEntry[];
 }
 
+// REL-019 E19.2 (ADR 11): src/agents/control.py::KNOWN_AGENTS joined against the real
+// agent_control_state table -- `enforced` tells the UI honestly whether a real call site
+// checks this agent's state today, not just whether the toggle itself is real (it always is).
+export interface AgentControlEntry {
+  agent_name: string;
+  agent_id: string;
+  display_name: string;
+  kind: "graph_node" | "scheduled" | "registry_only";
+  enforced: boolean;
+  enabled: boolean;
+  reason: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
 export interface PromptSummary {
   agent_slug: string;
   prompt_id: string;
@@ -659,6 +674,10 @@ export const api = {
     get<PromptVersionContent>(`/api/v1/agents/prompts/${slug}/versions/${version}`),
   setActivePromptVersion: (slug: string, version: number) =>
     put<PromptSummary>(`/api/v1/agents/prompts/${slug}/active-version`, { version }),
+
+  agentControlList: () => get<AgentControlEntry[]>("/api/v1/agents/control"),
+  setAgentEnabled: (agentName: string, enabled: boolean, reason: string | null) =>
+    put<AgentControlEntry>(`/api/v1/agents/control/${agentName}`, { enabled, reason }),
 
   strategies: () => get<StrategySummary[]>("/api/v1/strategies"),
   strategy: (id: string) => get<StrategyDetail>(`/api/v1/strategies/${id}`),
