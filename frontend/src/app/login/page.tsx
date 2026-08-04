@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { api, API_BASE, type MfaEnrollResponse } from "@/lib/api";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 // REL-007 E7.1: SystemAdministrator/PortfolioManager/RiskManager now require a TOTP second
 // factor. `/auth/login` returns `mfa_required` (never a real token for those roles) plus a
@@ -31,13 +32,13 @@ function isAuthRejection(err: unknown): boolean {
 // know which URL to open.
 function ConnectionErrorMessage() {
   return (
-    <p className="text-xs text-rose-400">
+    <p className="text-xs text-down">
       Couldn&apos;t reach the server at{" "}
       <a
         href={API_BASE}
         target="_blank"
         rel="noreferrer"
-        className="underline underline-offset-2 hover:text-rose-300"
+        className="underline underline-offset-2 hover:brightness-110"
       >
         {API_BASE}
       </a>
@@ -47,11 +48,12 @@ function ConnectionErrorMessage() {
   );
 }
 
+// REL-012 Phase D (2026-08-04): the new design tokens' input treatment -- an inset `bg-bg` field
+// (matches the reference screenshots' recessed-input look on a white card) with a hairline
+// `card-edge` border, focusing to the brand gradient's mid stop rather than the retired cyan.
 const inputClass =
-  "w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-400/50";
-const labelClass = "mb-1 block text-[11px] uppercase tracking-wider text-zinc-500";
-const buttonClass =
-  "mt-2 rounded-lg bg-cyan-500/90 py-2 text-sm font-medium text-black transition hover:bg-cyan-400 disabled:opacity-50";
+  "w-full rounded-btn border border-card-edge bg-bg px-3 py-2 text-sm text-text outline-none focus:border-brand-via";
+const labelClass = "mb-1 block text-[11px] uppercase tracking-wider text-text-faint";
 
 export default function LoginPage() {
   const { login, completeSession } = useAuth();
@@ -151,9 +153,18 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#09090B] p-6">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-6">
+      {/* REL-012 Phase D: the reference screenshots' subtle blurred radial-gradient background
+          texture (Phase 7 §1.1) -- login is the first real page to carry it, since it's the
+          simplest, data-free surface to prove the new direction on. */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-brand-from/20 blur-3xl" />
+        <div className="absolute -right-32 top-1/3 h-96 w-96 rounded-full bg-brand-via/15 blur-3xl" />
+        <div className="absolute bottom-[-8rem] left-1/3 h-96 w-96 rounded-full bg-brand-to/15 blur-3xl" />
+      </div>
+
       {step === "credentials" && (
-        <GlassCard className="w-full max-w-sm" title="Sign in" eyebrow="TradingOS">
+        <Card className="relative w-full max-w-sm" title="Sign in" eyebrow="TradingOS">
           <form onSubmit={handleCredentialsSubmit} className="flex flex-col gap-4">
             <div>
               <label className={labelClass}>Email</label>
@@ -179,37 +190,41 @@ export default function LoginPage() {
             {connectionError ? (
               <ConnectionErrorMessage />
             ) : (
-              error && <p className="text-xs text-rose-400">{error}</p>
+              error && <p className="text-xs text-down">{error}</p>
             )}
-            <button type="submit" disabled={submitting} className={buttonClass}>
+            <Button type="submit" disabled={submitting}>
               {submitting ? "Signing in…" : "Sign in"}
-            </button>
+            </Button>
           </form>
-        </GlassCard>
+        </Card>
       )}
 
       {step === "enroll" && enrollment && (
-        <GlassCard className="w-full max-w-md" title="Set up two-factor authentication" eyebrow="TradingOS">
-          <div className="flex flex-col gap-4 text-sm text-zinc-300">
+        <Card
+          className="relative w-full max-w-md"
+          title="Set up two-factor authentication"
+          eyebrow="TradingOS"
+        >
+          <div className="flex flex-col gap-4 text-sm text-text-dim">
             <p>
               This role requires a TOTP authenticator app (Google Authenticator, Authy, 1Password,
               etc). Scan or manually add this secret, then enter a code below to finish.
             </p>
             <div>
               <div className={labelClass}>Manual entry secret</div>
-              <code className="block break-all rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-cyan-300">
+              <code className="block break-all rounded-btn border border-card-edge bg-bg px-3 py-2 text-xs text-brand-via">
                 {enrollment.secret_base32}
               </code>
             </div>
             <div>
               <div className={labelClass}>Or add via URI</div>
-              <code className="block break-all rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-zinc-400">
+              <code className="block break-all rounded-btn border border-card-edge bg-bg px-3 py-2 text-xs text-text-dim">
                 {enrollment.otpauth_uri}
               </code>
             </div>
             <div>
               <div className={labelClass}>Backup codes — save these now, shown only once</div>
-              <div className="grid grid-cols-2 gap-1 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 font-mono text-xs text-amber-200">
+              <div className="grid grid-cols-2 gap-1 rounded-btn border border-warn/30 bg-warn/10 p-3 font-mono text-xs text-warn">
                 {enrollment.backup_codes.map((code) => (
                   <span key={code}>{code}</span>
                 ))}
@@ -229,20 +244,24 @@ export default function LoginPage() {
                 />
               </div>
               {connectionError ? (
-              <ConnectionErrorMessage />
-            ) : (
-              error && <p className="text-xs text-rose-400">{error}</p>
-            )}
-              <button type="submit" disabled={submitting} className={buttonClass}>
+                <ConnectionErrorMessage />
+              ) : (
+                error && <p className="text-xs text-down">{error}</p>
+              )}
+              <Button type="submit" disabled={submitting}>
                 {submitting ? "Confirming…" : "Confirm and sign in"}
-              </button>
+              </Button>
             </form>
           </div>
-        </GlassCard>
+        </Card>
       )}
 
       {step === "verify" && (
-        <GlassCard className="w-full max-w-sm" title="Two-factor authentication" eyebrow="TradingOS">
+        <Card
+          className="relative w-full max-w-sm"
+          title="Two-factor authentication"
+          eyebrow="TradingOS"
+        >
           <form onSubmit={handleVerify} className="flex flex-col gap-4">
             {!useBackupCode ? (
               <div>
@@ -273,23 +292,23 @@ export default function LoginPage() {
             {connectionError ? (
               <ConnectionErrorMessage />
             ) : (
-              error && <p className="text-xs text-rose-400">{error}</p>
+              error && <p className="text-xs text-down">{error}</p>
             )}
-            <button type="submit" disabled={submitting} className={buttonClass}>
+            <Button type="submit" disabled={submitting}>
               {submitting ? "Verifying…" : "Verify and sign in"}
-            </button>
+            </Button>
             <button
               type="button"
               onClick={() => {
                 setUseBackupCode(!useBackupCode);
                 resetErrors();
               }}
-              className="text-xs text-zinc-500 underline underline-offset-2 hover:text-zinc-300"
+              className="text-xs text-text-faint underline underline-offset-2 hover:text-text-dim"
             >
               {useBackupCode ? "Use authenticator code instead" : "Use a backup code instead"}
             </button>
           </form>
-        </GlassCard>
+        </Card>
       )}
     </main>
   );
