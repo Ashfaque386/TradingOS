@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PageHeader } from "@/components/layout/page-header";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
 import { OrdersTable } from "@/components/orders/orders-table";
 import { TradesTable } from "@/components/orders/trades-table";
 
@@ -68,11 +68,11 @@ function LiveTradeMonitoringView() {
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-      <GlassCard eyebrow="Filter" title="Strategy">
+      <Card eyebrow="Filter" title="Strategy">
         <select
           value={selectedStrategyId}
           onChange={(e) => setSelectedStrategyId(e.target.value)}
-          className="rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs text-zinc-200"
+          className="rounded-md border border-card-edge bg-bg px-2.5 py-1.5 text-xs text-text"
         >
           <option value="">All strategies</option>
           {strategies.map((s) => (
@@ -81,79 +81,79 @@ function LiveTradeMonitoringView() {
             </option>
           ))}
         </select>
-      </GlassCard>
+      </Card>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <GlassCard eyebrow="Live" title="Total Net P&L">
+        <Card eyebrow="Live" title="Total Net P&L">
           <p
             className={`text-2xl font-semibold font-mono-tabular ${
-              totalNetPnl >= 0 ? "text-emerald-300" : "text-rose-400"
+              totalNetPnl >= 0 ? "text-up" : "text-down"
             }`}
           >
             {trades.length > 0 ? `₹${totalNetPnl.toFixed(2)}` : "—"}
           </p>
-          <p className="mt-1 text-[11px] text-zinc-500">
+          <p className="mt-1 text-[11px] text-text-faint">
             Across {trades.length} real fill{trades.length === 1 ? "" : "s"}
           </p>
-        </GlassCard>
+        </Card>
 
-        <GlassCard eyebrow="Live" title="Orders Placed">
-          <p className="text-2xl font-semibold font-mono-tabular text-zinc-200">
+        <Card eyebrow="Live" title="Orders Placed">
+          <p className="text-2xl font-semibold font-mono-tabular text-text">
             {orders.length}
           </p>
-          <p className="mt-1 text-[11px] text-zinc-500">
+          <p className="mt-1 text-[11px] text-text-faint">
             {orders.filter((o) => o.status === "REJECTED" || o.status === "CANCELLED").length}{" "}
             rejected/cancelled
           </p>
-        </GlassCard>
+        </Card>
 
-        <GlassCard eyebrow="NFR-02" title="Dispatch Latency (this process)">
+        <Card eyebrow="NFR-02" title="Dispatch Latency (this process)">
           {latencyQuery.isLoading ? (
-            <div className="h-7 animate-pulse rounded-lg bg-white/5" />
+            <div className="h-7 animate-pulse rounded-lg bg-bg" />
           ) : latency && latency.sample_count > 0 ? (
             <>
-              <p className="text-2xl font-semibold font-mono-tabular text-zinc-200">
+              <p className="text-2xl font-semibold font-mono-tabular text-text">
                 {latency.avg_ms!.toFixed(2)}ms
               </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
+              <p className="mt-1 text-[11px] text-text-faint">
                 Avg over {latency.sample_count} real dispatch{latency.sample_count === 1 ? "" : "es"}
               </p>
             </>
           ) : (
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-text-faint">
               No orders dispatched in this app process yet — this is a real, live, in-process
               histogram (not a database query), so it resets on every restart.
             </p>
           )}
-        </GlassCard>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <GlassCard eyebrow="Real Ledger" title="Order History">
+        <Card eyebrow="Real Ledger" title="Order History">
           {ordersQuery.isLoading ? (
-            <div className="h-40 animate-pulse rounded-xl bg-white/5" />
+            <div className="h-40 animate-pulse rounded-xl bg-bg" />
           ) : (
             <OrdersTable orders={orders} />
           )}
-        </GlassCard>
+        </Card>
 
-        <GlassCard eyebrow="Real Ledger" title="Recent Fills">
+        <Card eyebrow="Real Ledger" title="Recent Fills">
           {tradesQuery.isLoading ? (
-            <div className="h-40 animate-pulse rounded-xl bg-white/5" />
+            <div className="h-40 animate-pulse rounded-xl bg-bg" />
           ) : (
             <TradesTable trades={trades} />
           )}
-        </GlassCard>
+        </Card>
       </div>
 
-      <GlassCard eyebrow="Attribution" title="Net P&L by Strategy">
+      <Card eyebrow="Attribution" title="Net P&L by Strategy">
         {attribution.length === 0 ? (
-          <p className="text-xs text-zinc-500">No real trades to attribute yet.</p>
+          <p className="text-xs text-text-faint">No real trades to attribute yet.</p>
         ) : (
           <div className="overflow-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="text-zinc-500">
+                <tr className="text-text-faint">
                   <th className="pb-2 font-medium">Strategy</th>
                   <th className="pb-2 text-right font-medium">Trades</th>
                   <th className="pb-2 text-right font-medium">Net P&amp;L</th>
@@ -161,14 +161,14 @@ function LiveTradeMonitoringView() {
               </thead>
               <tbody>
                 {attribution.map(([strategyId, row]) => (
-                  <tr key={strategyId} className="border-t border-white/5">
-                    <td className="py-2 text-zinc-200">{strategyName(strategyId)}</td>
-                    <td className="py-2 text-right font-mono-tabular text-zinc-300">
+                  <tr key={strategyId} className="border-t border-card-edge">
+                    <td className="py-row-dense text-text">{strategyName(strategyId)}</td>
+                    <td className="py-row-dense text-right font-mono-tabular text-text-dim">
                       {row.trades}
                     </td>
                     <td
-                      className={`py-2 text-right font-mono-tabular font-medium ${
-                        row.netPnl >= 0 ? "text-emerald-300" : "text-rose-400"
+                      className={`py-row-dense text-right font-mono-tabular font-medium ${
+                        row.netPnl >= 0 ? "text-up" : "text-down"
                       }`}
                     >
                       ₹{row.netPnl.toFixed(2)}
@@ -179,7 +179,7 @@ function LiveTradeMonitoringView() {
             </table>
           </div>
         )}
-      </GlassCard>
+      </Card>
     </main>
   );
 }

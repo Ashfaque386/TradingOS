@@ -34,24 +34,24 @@ export function ThoughtStream({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-500">
-        <span className={cn("h-1.5 w-1.5 rounded-full", connected ? "bg-emerald-400" : "bg-amber-400")} />
+      <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-text-faint">
+        <span className={cn("h-1.5 w-1.5 rounded-full", connected ? "bg-up" : "bg-warn")} />
         {connected ? "Live" : "Reconnecting…"}
       </div>
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto rounded-xl border border-white/5 bg-black/50 p-3 font-mono text-[11px] leading-relaxed"
+        className="flex-1 overflow-y-auto rounded-xl border border-card-edge bg-bg p-3 font-mono text-[11px] leading-relaxed"
       >
         {messages.length === 0 ? (
-          <p className="text-zinc-600">
+          <p className="text-text-faint">
             No agent activity yet. Trigger a research cycle to see live reasoning here.
           </p>
         ) : (
           messages.map((m, i) => (
             <div key={i} className="mb-1.5 flex gap-2">
-              <span className="shrink-0 text-zinc-600">{formatTime(m.ts)}</span>
-              <span className="shrink-0 font-semibold text-purple-300">[{m.node}]</span>
-              <span className="text-cyan-100/90">{m.message}</span>
+              <span className="shrink-0 text-text-faint">{formatTime(m.ts)}</span>
+              <span className="shrink-0 font-semibold text-brand-via">[{m.node}]</span>
+              <span className="text-text-dim">{m.message}</span>
             </div>
           ))
         )}

@@ -5,14 +5,15 @@ import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Gated } from "@/components/ui/gated";
+import { Button } from "@/components/ui/button";
 
 const STATUS_STYLES: Record<string, string> = {
-  Running: "text-cyan-300",
-  Completed: "text-emerald-300",
-  Failed: "text-rose-300",
+  Running: "text-brand-via",
+  Completed: "text-up",
+  Failed: "text-down",
   // REL-019 E19.2 (ADR 11): a halted run is a deliberate stop (a disabled agent's real logic
   // never ran), not a failure -- its own color keeps it visually distinct from Failed.
-  Halted: "text-amber-300",
+  Halted: "text-warn",
 };
 
 export function RunControls({
@@ -41,23 +42,19 @@ export function RunControls({
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <Gated permission="triggerResearch">
-          <button
-            onClick={() => trigger.mutate()}
-            disabled={trigger.isPending}
-            className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-4 py-2 text-xs font-semibold text-black transition hover:brightness-110 disabled:opacity-50"
-          >
+          <Button onClick={() => trigger.mutate()} disabled={trigger.isPending} className="px-4 py-2 text-xs">
             <Play className="h-3.5 w-3.5" />
             {trigger.isPending ? "Starting…" : "Trigger Research Cycle"}
-          </button>
+          </Button>
         </Gated>
         {trigger.isError && (
-          <span className="text-[11px] text-rose-400">Failed to start — is the backend up?</span>
+          <span className="text-[11px] text-down">Failed to start — is the backend up?</span>
         )}
       </div>
 
       <div className="flex items-center gap-1.5 overflow-x-auto">
         {(runsQuery.data ?? []).length === 0 ? (
-          <span className="text-[11px] text-zinc-600">No runs yet</span>
+          <span className="text-[11px] text-text-faint">No runs yet</span>
         ) : (
           runsQuery.data!.map((run) => (
             <button
@@ -66,14 +63,14 @@ export function RunControls({
               className={cn(
                 "shrink-0 rounded-lg border px-2.5 py-1.5 text-left transition-colors",
                 selectedRunId === run.run_id
-                  ? "border-white/20 bg-white/10"
-                  : "border-white/5 bg-black/20 hover:bg-white/5",
+                  ? "border-text-faint bg-panel"
+                  : "border-card-edge bg-bg hover:bg-panel",
               )}
             >
-              <div className="font-mono-tabular text-[10px] text-zinc-400">
+              <div className="font-mono-tabular text-[10px] text-text-dim">
                 {new Date(run.started_at).toLocaleTimeString("en-IN", { hour12: false })}
               </div>
-              <div className={cn("text-[10px] font-medium", STATUS_STYLES[run.status] ?? "text-zinc-400")}>
+              <div className={cn("text-[10px] font-medium", STATUS_STYLES[run.status] ?? "text-text-dim")}>
                 {run.status}
               </div>
             </button>

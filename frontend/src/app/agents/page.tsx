@@ -7,7 +7,7 @@ import { useAgentLogStream } from "@/hooks/useAgentLogStream";
 import { RequireAuth } from "@/lib/auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PageHeader } from "@/components/layout/page-header";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
 import { GraphFlowchart } from "@/components/agents/graph-flowchart";
 import { ThoughtStream } from "@/components/agents/thought-stream";
 import { PromptManager } from "@/components/agents/prompt-manager";
@@ -39,27 +39,27 @@ export default function AgentConsole() {
       id: "execution-state",
       defaultLayout: { x: 0, y: 0, w: 12, h: 6, minW: 6, minH: 4 },
       node: (
-        <GlassCard eyebrow="LangGraph" title="Live Execution State" className="h-full">
+        <Card eyebrow="LangGraph" title="Live Execution State" className="h-full">
           {topologyQuery.data ? (
             <GraphFlowchart topology={topologyQuery.data} run={runDetailQuery.data ?? null} />
           ) : (
-            <div className="h-24 animate-pulse rounded-xl bg-white/5" />
+            <div className="h-24 animate-pulse rounded-xl bg-bg" />
           )}
-          <p className="mt-3 text-[11px] text-zinc-600">
+          <p className="mt-3 text-[11px] text-text-faint">
             5 real nodes (CEO → Market Analyst → Strategy Generator → Code Generator ↺ Validator)
             plus a placeholder terminal node awaiting the Phase 3 backtesting engine. Topology is
             introspected live from the compiled graph, not hand-drawn.
           </p>
           <HitlPanel run={runDetailQuery.data ?? null} />
-        </GlassCard>
+        </Card>
       ),
     },
     {
       id: "agent-registry",
       defaultLayout: { x: 0, y: 6, w: 12, h: 7, minW: 6, minH: 4 },
       node: (
-        <GlassCard eyebrow="Per-agent control" title="Agent Registry" className="h-full">
-          <p className="mb-3 text-[11px] text-zinc-600">
+        <Card eyebrow="Per-agent control" title="Agent Registry" className="h-full">
+          <p className="mb-3 text-[11px] text-text-faint">
             The real, durable enable/disable state for every currently-shipped agent (ADR 11,
             Phase_1_Architecture_Decision_Record.md). A disabled pipeline node halts the next run
             before its real logic executes; a disabled scheduled agent is skipped at its next
@@ -67,27 +67,27 @@ export default function AgentConsole() {
             checks it yet.
           </p>
           <AgentRegistry />
-        </GlassCard>
+        </Card>
       ),
     },
     {
       id: "thought-stream",
       defaultLayout: { x: 0, y: 13, w: 7, h: 7, minW: 4, minH: 4 },
       node: (
-        <GlassCard eyebrow="Reasoning" title="Thought Stream" className="h-full">
+        <Card eyebrow="Reasoning" title="Thought Stream" className="h-full">
           <div className="h-[360px]">
             <ThoughtStream messages={logs} connected={connected} />
           </div>
-        </GlassCard>
+        </Card>
       ),
     },
     {
       id: "prompt-manager",
       defaultLayout: { x: 7, y: 13, w: 5, h: 7, minW: 3, minH: 4 },
       node: (
-        <GlassCard eyebrow="Hot-swappable" title="Prompt Management" className="h-full">
+        <Card eyebrow="Hot-swappable" title="Prompt Management" className="h-full">
           <PromptManager />
-        </GlassCard>
+        </Card>
       ),
     },
   ];
@@ -99,9 +99,9 @@ export default function AgentConsole() {
         <div className="flex flex-1 flex-col">
           <PageHeader connected={connected} subtitle="Agent Console" />
           <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-            <GlassCard eyebrow="Orchestrator" title="Research Cycle">
+            <Card eyebrow="Orchestrator" title="Research Cycle">
               <RunControls selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
-            </GlassCard>
+            </Card>
 
             <GridWorkspace storageKey="tradingos:grid:agents" panels={panels} />
           </main>

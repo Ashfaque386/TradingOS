@@ -49,15 +49,15 @@ function nodeLabel(id: string): string {
 }
 
 const STATE_STYLES: Record<NodeState, string> = {
-  pending: "border-white/10 bg-white/[0.02] text-zinc-600",
-  active: "border-cyan-400/50 bg-cyan-400/10 text-cyan-200 shadow-[0_0_24px_rgba(34,211,238,0.35)]",
-  completed: "border-emerald-400/40 bg-emerald-400/[0.08] text-emerald-200",
-  failed: "border-rose-400/40 bg-rose-400/[0.08] text-rose-200",
+  pending: "border-card-edge bg-bg text-text-faint",
+  active: "border-brand-via/50 bg-brand-via/10 text-brand-via shadow-[0_0_24px_rgba(255,92,122,0.35)]",
+  completed: "border-up/40 bg-up/[0.08] text-up",
+  failed: "border-down/40 bg-down/[0.08] text-down",
   // REL-019 E19.2 (ADR 11): the halted node itself never gets its own child AgentRun row (its
   // real logic never ran, so there's nothing to persist) -- inferred here as the same
   // next-in-chain position a "Running" state would call "active", distinguished visually since
   // it's a deliberate stop, not progress.
-  halted: "border-amber-400/40 bg-amber-400/[0.08] text-amber-200",
+  halted: "border-warn/40 bg-warn/[0.08] text-warn",
 };
 
 export function GraphFlowchart({
@@ -106,12 +106,12 @@ export function GraphFlowchart({
                 )}
               >
                 {state === "active" && (
-                  <span className="absolute -top-1.5 -right-1.5 h-2.5 w-2.5 animate-pulse-glow rounded-full bg-cyan-400" />
+                  <span className="absolute -top-1.5 -right-1.5 h-2.5 w-2.5 animate-pulse-glow rounded-full bg-brand-via" />
                 )}
                 <span className="text-[11px] font-medium leading-tight">{nodeLabel(id)}</span>
                 <span className="text-[9px] uppercase tracking-wider opacity-60">{state}</span>
                 {hasRetry && (
-                  <span className="absolute -bottom-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wider text-amber-300">
+                  <span className="absolute -bottom-2 rounded-full border border-warn/30 bg-warn/10 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wider text-warn">
                     ↺ retry
                   </span>
                 )}
@@ -120,7 +120,7 @@ export function GraphFlowchart({
                 <div
                   className={cn(
                     "h-px w-6 shrink-0 transition-colors duration-500",
-                    completedIds.has(id) ? "bg-emerald-400/40" : "bg-white/10",
+                    completedIds.has(id) ? "bg-up/40" : "bg-card-edge",
                   )}
                 />
               )}
