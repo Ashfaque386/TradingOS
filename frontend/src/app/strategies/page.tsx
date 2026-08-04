@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PageHeader } from "@/components/layout/page-header";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
 import { KanbanBoard } from "@/components/strategies/kanban-board";
 import { ReviewPanel } from "@/components/strategies/review-panel";
 
@@ -30,10 +30,10 @@ export default function StrategiesPage() {
           <PageHeader connected={strategiesQuery.isSuccess} subtitle="Strategy Deployment & Backtest Review" />
 
           <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-            <GlassCard eyebrow="Pipeline" title="Strategy Kanban">
+            <Card eyebrow="Pipeline" title="Strategy Kanban">
               {strategies.length === 0 && !strategiesQuery.isLoading ? (
-                <div className="flex h-32 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/10 text-center">
-                  <p className="text-xs text-zinc-500">
+                <div className="flex h-32 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-card-edge text-center">
+                  <p className="text-xs text-text-faint">
                     No strategies yet — trigger a research cycle from the Agent Console to generate
                     one.
                   </p>
@@ -45,7 +45,7 @@ export default function StrategiesPage() {
                   onSelect={setSelectedId}
                 />
               )}
-            </GlassCard>
+            </Card>
 
             {effectiveSelectedId && <ReviewPanel strategyId={effectiveSelectedId} />}
           </main>

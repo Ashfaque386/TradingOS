@@ -8,22 +8,34 @@ import type { ThemeMode } from "@/lib/theme-store";
 // `:root[data-mode="light"|"dark"]` blocks by hand -- there are only 4 values per mode.
 export interface ChartColors {
   text: string;
+  textDim: string;
   textFaint: string;
+  /** Card border strength -- matches --card-edge. */
   grid: string;
+  /** A visually stronger line than `grid`, for axis lines that need to read clearly. */
+  axisLine: string;
+  /** A visually weaker line than `grid`, for internal split-lines that shouldn't compete. */
+  splitLine: string;
   panel: string;
 }
 
 const LIGHT: ChartColors = {
   text: "#111111",
+  textDim: "#666666",
   textFaint: "#999999",
   grid: "rgba(17, 17, 17, 0.08)",
+  axisLine: "rgba(17, 17, 17, 0.15)",
+  splitLine: "rgba(17, 17, 17, 0.05)",
   panel: "#ffffff",
 };
 
 const DARK: ChartColors = {
   text: "#f5f5f7",
+  textDim: "#a1a1aa",
   textFaint: "#71717a",
   grid: "rgba(255, 255, 255, 0.08)",
+  axisLine: "rgba(255, 255, 255, 0.15)",
+  splitLine: "rgba(255, 255, 255, 0.06)",
   panel: "#16161c",
 };
 

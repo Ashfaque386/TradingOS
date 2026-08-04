@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { RequireAuth } from "@/lib/auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PageHeader } from "@/components/layout/page-header";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
 import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
 import { DrawdownChart } from "@/components/strategies/drawdown-chart";
 import type { BacktestSummary, OhlcvBar, StrategyDetail } from "@/lib/api";
@@ -73,11 +73,11 @@ function BacktestingDashboardView() {
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-      <GlassCard eyebrow="Select" title="Strategy">
+      <Card eyebrow="Select" title="Strategy">
         {strategiesQuery.isLoading ? (
-          <div className="h-9 animate-pulse rounded-lg bg-white/5" />
+          <div className="h-9 animate-pulse rounded-lg bg-bg" />
         ) : strategies.length === 0 ? (
-          <p className="text-xs text-zinc-500">No strategies exist yet.</p>
+          <p className="text-xs text-text-faint">No strategies exist yet.</p>
         ) : (
           <select
             value={effectiveStrategyId ?? ""}
@@ -85,7 +85,7 @@ function BacktestingDashboardView() {
               setSelectedStrategyId(e.target.value);
               setSelectedBacktestId(null);
             }}
-            className="rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs text-zinc-200"
+            className="rounded-md border border-card-edge bg-bg px-2.5 py-1.5 text-xs text-text"
           >
             {strategies.map((s) => (
               <option key={s.id} value={s.id}>
@@ -94,13 +94,13 @@ function BacktestingDashboardView() {
             ))}
           </select>
         )}
-      </GlassCard>
+      </Card>
 
       {detailQuery.data && (
         <>
-          <GlassCard eyebrow={detailQuery.data.status} title={detailQuery.data.name}>
+          <Card eyebrow={detailQuery.data.status} title={detailQuery.data.name}>
             {backtests.length === 0 ? (
-              <p className="text-xs text-zinc-500">No backtests run yet for this strategy.</p>
+              <p className="text-xs text-text-faint">No backtests run yet for this strategy.</p>
             ) : (
               <>
                 <div className="mb-3 flex flex-wrap gap-1.5">
@@ -110,8 +110,8 @@ function BacktestingDashboardView() {
                       onClick={() => setSelectedBacktestId(b.id)}
                       className={
                         b.id === effectiveBacktestId
-                          ? "rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-medium text-zinc-100"
-                          : "rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-medium text-zinc-500 hover:text-zinc-300"
+                          ? "rounded-full bg-panel px-2.5 py-1 text-[10px] font-medium text-text"
+                          : "rounded-full bg-bg px-2.5 py-1 text-[10px] font-medium text-text-faint hover:text-text-dim"
                       }
                     >
                       {new Date(b.created_at).toLocaleDateString("en-IN")}
@@ -121,32 +121,32 @@ function BacktestingDashboardView() {
                 {selectedBacktest && <FullMetricGrid backtest={selectedBacktest} />}
               </>
             )}
-          </GlassCard>
+          </Card>
 
           {selectedBacktest && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <GlassCard eyebrow="Performance" title="Equity Curve vs Nifty 50">
+              <Card eyebrow="Performance" title="Equity Curve vs Nifty 50">
                 <EquityCurveChart points={points} benchmark={benchmarkOverlay} />
-              </GlassCard>
-              <GlassCard eyebrow="Risk" title="Drawdown from Peak">
+              </Card>
+              <Card eyebrow="Risk" title="Drawdown from Peak">
                 <DrawdownChart points={points} />
-              </GlassCard>
+              </Card>
             </div>
           )}
 
-          <GlassCard eyebrow="Cross-run" title="All backtests for this strategy">
+          <Card eyebrow="Cross-run" title="All backtests for this strategy">
             {backtests.length === 0 ? (
-              <p className="text-xs text-zinc-500">No backtests to compare yet.</p>
+              <p className="text-xs text-text-faint">No backtests to compare yet.</p>
             ) : (
               <BacktestComparisonTable rows={backtests.map((b) => ({ label: fmtDate(b.created_at), backtest: b }))} />
             )}
-          </GlassCard>
+          </Card>
         </>
       )}
 
-      <GlassCard eyebrow="Cross-strategy" title="Latest backtest per strategy">
+      <Card eyebrow="Cross-strategy" title="Latest backtest per strategy">
         {allDetailsQuery.isLoading ? (
-          <div className="h-32 animate-pulse rounded-xl bg-white/5" />
+          <div className="h-32 animate-pulse rounded-xl bg-bg" />
         ) : (
           <BacktestComparisonTable
             rows={(allDetailsQuery.data ?? [])
@@ -154,35 +154,35 @@ function BacktestingDashboardView() {
               .map((d) => ({ label: d.name, backtest: d.backtests[0] }))}
           />
         )}
-      </GlassCard>
+      </Card>
 
-      <GlassCard eyebrow="Scope note" title="No per-run trade list">
-        <p className="text-[11px] leading-relaxed text-zinc-500">
+      <Card eyebrow="Scope note" title="No per-run trade list">
+        <p className="text-[11px] leading-relaxed text-text-faint">
           A backtest here only ever returns aggregate metrics and an equity curve (the sandboxed
           strategy code&apos;s own return contract, PMPT-004) — individual trade records were
           never computed or persisted anywhere in this pipeline, so there is no real per-trade
           list to show without fabricating one. Real, per-trade fills do exist for the Paper
           Trading Desk (a live, ongoing ledger, not a backtest artifact) — see{" "}
-          <code className="text-zinc-400">/paper-trading</code>.
+          <code className="text-text-dim">/paper-trading</code>.
         </p>
-      </GlassCard>
+      </Card>
 
-      <GlassCard eyebrow="Scope note" title="Monte Carlo p95 drawdown reads blank; no Walk-Forward view">
-        <p className="text-[11px] leading-relaxed text-zinc-500">
-          <code className="text-zinc-400">MC p95 DD</code> above is a real database column
+      <Card eyebrow="Scope note" title="Monte Carlo p95 drawdown reads blank; no Walk-Forward view">
+        <p className="text-[11px] leading-relaxed text-text-faint">
+          <code className="text-text-dim">MC p95 DD</code> above is a real database column
           (DB-007) exposed here for the first time, not a fabricated one — but it reads blank for
           every backtest today because nothing in this pipeline has ever populated it outside its
           own test file. Running a real simulation (
-          <code className="text-zinc-400">run_monte_carlo_simulation()</code>) needs per-trade
+          <code className="text-text-dim">run_monte_carlo_simulation()</code>) needs per-trade
           returns, which the sandbox contract above never captures either — closing this for real
           means extending that contract and re-running backtests, not just adding UI on top of
           data that already exists, so it&apos;s deliberately left as an honest gap rather than
           stretched into this pass. Walk-Forward Optimization results have the same real gap one
           level deeper: no persistence layer or API endpoint exists for{" "}
-          <code className="text-zinc-400">walk_forward.py</code>&apos;s output at all (only unit
+          <code className="text-text-dim">walk_forward.py</code>&apos;s output at all (only unit
           tests call it directly) — there is nothing yet to build this view against.
         </p>
-      </GlassCard>
+      </Card>
     </main>
   );
 }
@@ -229,11 +229,11 @@ function FullMetricGrid({ backtest }: { backtest: BacktestSummary }) {
       {METRICS.map(({ key, label, fmt }) => {
         const raw = backtest[key];
         return (
-          <div key={key} className="rounded-lg bg-white/[0.03] p-2 text-center">
-            <div className="font-mono-tabular text-sm font-semibold text-zinc-100">
+          <div key={key} className="rounded-lg bg-bg p-2 text-center">
+            <div className="font-mono-tabular text-sm font-semibold text-text">
               {typeof raw === "number" ? fmt(raw) : "—"}
             </div>
-            <div className="text-[9px] uppercase tracking-wider text-zinc-500">{label}</div>
+            <div className="text-[9px] uppercase tracking-wider text-text-faint">{label}</div>
           </div>
         );
       })}
@@ -243,13 +243,13 @@ function FullMetricGrid({ backtest }: { backtest: BacktestSummary }) {
 
 function BacktestComparisonTable({ rows }: { rows: { label: string; backtest: BacktestSummary }[] }) {
   if (rows.length === 0) {
-    return <p className="text-xs text-zinc-500">Nothing to compare yet.</p>;
+    return <p className="text-xs text-text-faint">Nothing to compare yet.</p>;
   }
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-[11px]">
         <thead>
-          <tr className="text-[9px] uppercase tracking-wider text-zinc-600">
+          <tr className="text-[9px] uppercase tracking-wider text-text-faint">
             <th className="pb-2 pr-3">Run</th>
             {METRICS.map((m) => (
               <th key={m.key} className="pb-2 pr-3 text-right">
@@ -260,12 +260,12 @@ function BacktestComparisonTable({ rows }: { rows: { label: string; backtest: Ba
         </thead>
         <tbody>
           {rows.map(({ label, backtest }) => (
-            <tr key={backtest.id} className="border-t border-white/5">
-              <td className="py-1.5 pr-3 text-zinc-300">{label}</td>
+            <tr key={backtest.id} className="border-t border-card-edge">
+              <td className="py-1.5 pr-3 text-text-dim">{label}</td>
               {METRICS.map(({ key, fmt }) => {
                 const raw = backtest[key];
                 return (
-                  <td key={key} className="py-1.5 pr-3 text-right font-mono-tabular text-zinc-400">
+                  <td key={key} className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                     {typeof raw === "number" ? fmt(raw) : "—"}
                   </td>
                 );

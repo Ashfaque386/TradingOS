@@ -65,7 +65,7 @@ export function KanbanBoard({
       {!canPromote && (
         <p
           data-testid="kanban-readonly-banner"
-          className="mb-3 text-[11px] text-zinc-500"
+          className="mb-3 text-[11px] text-text-faint"
         >
           Your role can view strategy status but cannot drag a card to promote it. Requires
           System Administrator or Portfolio Manager.
@@ -81,20 +81,20 @@ export function KanbanBoard({
               columnRefs.current[col.status] = el;
             }}
             className={cn(
-              "flex min-h-[200px] flex-col gap-2 rounded-2xl border border-white/5 bg-black/20 p-3",
+              "flex min-h-[200px] flex-col gap-2 rounded-2xl border border-card-edge bg-bg p-3",
               !col.promotable && "border-dashed",
             )}
           >
             <div className="mb-1 flex items-center justify-between px-0.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-text-dim">
                 {col.label}
               </span>
-              <span className="rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] text-zinc-500">
+              <span className="rounded-full bg-panel px-1.5 py-0.5 text-[10px] text-text-faint">
                 {items.length}
               </span>
             </div>
             {items.length === 0 && (
-              <div className="flex flex-1 items-center justify-center py-6 text-center text-[10px] text-zinc-600">
+              <div className="flex flex-1 items-center justify-center py-6 text-center text-[10px] text-text-faint">
                 Empty
               </div>
             )}

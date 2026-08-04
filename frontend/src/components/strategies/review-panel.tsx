@@ -6,7 +6,8 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useBacktestJob } from "@/hooks/useBacktestJob";
-import { GlassCard } from "@/components/ui/glass-card";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Gated } from "@/components/ui/gated";
 import { CodeDiff } from "./code-diff";
 import { EquityCurveChart } from "./equity-curve-chart";
@@ -61,42 +62,42 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
   });
 
   if (!detailQuery.data) {
-    return <div className="h-64 animate-pulse rounded-2xl bg-white/5" />;
+    return <div className="h-64 animate-pulse rounded-2xl bg-bg" />;
   }
   const strategy = detailQuery.data;
 
   return (
     <div className="flex flex-col gap-4">
-      <GlassCard eyebrow={strategy.status} title={strategy.name}>
-        <p className="text-xs leading-relaxed text-zinc-400">
+      <Card eyebrow={strategy.status} title={strategy.name}>
+        <p className="text-xs leading-relaxed text-text-dim">
           {strategy.hypothesis ?? "No hypothesis recorded."}
         </p>
-        <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-zinc-500">
-          <span className="rounded-full bg-white/5 px-2 py-0.5">{strategy.asset_class}</span>
-          <span className="rounded-full bg-white/5 px-2 py-0.5">{strategy.style}</span>
+        <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-text-faint">
+          <span className="rounded-full bg-bg px-2 py-0.5">{strategy.asset_class}</span>
+          <span className="rounded-full bg-bg px-2 py-0.5">{strategy.style}</span>
           {strategy.universe?.map((sym) => (
-            <span key={sym} className="rounded-full bg-cyan-400/10 px-2 py-0.5 text-cyan-300">
+            <span key={sym} className="rounded-full bg-brand-via/10 px-2 py-0.5 text-brand-via">
               {sym}
             </span>
           ))}
         </div>
-      </GlassCard>
+      </Card>
 
-      <GlassCard eyebrow="Code Review" title="Version Diff">
+      <Card eyebrow="Code Review" title="Version Diff">
         {strategy.versions.length === 0 ? (
-          <p className="text-xs text-zinc-500">No code generated yet.</p>
+          <p className="text-xs text-text-faint">No code generated yet.</p>
         ) : (
           <>
             <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
               {strategy.versions.map((v) => (
-                <span key={v.id} className={cn("rounded-full bg-white/5 px-2 py-1", VALIDATION_COLOR[v.validation_status] ?? "text-zinc-400")}>
+                <span key={v.id} className={cn("rounded-full bg-bg px-2 py-1", VALIDATION_COLOR[v.validation_status] ?? "text-text-dim")}>
                   v{v.version_no} · {v.validation_status}
                 </span>
               ))}
             </div>
-            <div className="mb-3 flex items-center gap-2 text-[11px] text-zinc-500">
+            <div className="mb-3 flex items-center gap-2 text-[11px] text-text-faint">
               <select
-                className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-zinc-300"
+                className="rounded-md border border-card-edge bg-bg px-2 py-1 text-text-dim"
                 value={diffA ?? ""}
                 onChange={(e) => setDiffA(e.target.value ? Number(e.target.value) : null)}
               >
@@ -109,7 +110,7 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
               </select>
               <span>vs</span>
               <select
-                className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-zinc-300"
+                className="rounded-md border border-card-edge bg-bg px-2 py-1 text-text-dim"
                 value={diffB ?? ""}
                 onChange={(e) => setDiffB(e.target.value ? Number(e.target.value) : null)}
               >
@@ -124,7 +125,7 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
             {diffA !== null && diffB !== null && codeAQuery.data && codeBQuery.data ? (
               <CodeDiff before={codeAQuery.data.python_code} after={codeBQuery.data.python_code} />
             ) : (
-              <pre className="max-h-[300px] overflow-auto rounded-xl border border-white/5 bg-black/40 p-3 font-mono text-[11px] text-zinc-400">
+              <pre className="max-h-[300px] overflow-auto rounded-xl border border-card-edge bg-bg p-3 font-mono text-[11px] text-text-dim">
                 {strategy.versions.length > 0
                   ? "Pick two versions above to see a diff, or view the latest code below."
                   : ""}
@@ -132,36 +133,36 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
             )}
           </>
         )}
-      </GlassCard>
+      </Card>
 
-      <GlassCard
+      <Card
         eyebrow="Sandbox"
         title="Backtest"
         action={
           <Gated permission="triggerBacktest">
-            <button
+            <Button
               onClick={() => trigger.mutate()}
               disabled={trigger.isPending || jobRunning || !strategy.current_version_id}
-              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-3 py-1.5 text-[11px] font-semibold text-black transition hover:brightness-110 disabled:opacity-40"
+              className="px-3 py-1.5 text-[11px]"
             >
               <Play className="h-3 w-3" />
               {jobRunning ? "Running…" : "Run Backtest"}
-            </button>
+            </Button>
           </Gated>
         }
       >
         {jobRunning && (
-          <p className="mb-3 text-[11px] text-cyan-300">
+          <p className="mb-3 text-[11px] text-brand-via">
             Executing real vectorbt backtest in the sandbox against real historical data — cold
             runs take ~60-90s (numba JIT compiles fresh each time).
           </p>
         )}
         {jobQuery.data?.status === "Failed" && (
-          <p className="mb-3 text-[11px] text-rose-400">Backtest failed: {jobQuery.data.error}</p>
+          <p className="mb-3 text-[11px] text-down">Backtest failed: {jobQuery.data.error}</p>
         )}
 
         {strategy.backtests.length === 0 ? (
-          <p className="text-xs text-zinc-500">No backtests run yet.</p>
+          <p className="text-xs text-text-faint">No backtests run yet.</p>
         ) : (
           <>
             <div className="mb-3 flex flex-wrap gap-1.5">
@@ -172,8 +173,8 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
                   className={cn(
                     "rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors",
                     b.id === effectiveBacktestId
-                      ? "bg-white/10 text-zinc-100"
-                      : "bg-white/5 text-zinc-500 hover:text-zinc-300",
+                      ? "bg-panel text-text"
+                      : "bg-bg text-text-faint hover:text-text-dim",
                   )}
                 >
                   {new Date(b.created_at).toLocaleDateString("en-IN")}
@@ -208,7 +209,7 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
             )}
           </>
         )}
-      </GlassCard>
+      </Card>
 
       <GoLiveGatePanel strategyId={strategyId} />
     </div>
@@ -217,9 +218,9 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-white/[0.03] p-2 text-center">
-      <div className="font-mono-tabular text-sm font-semibold text-zinc-100">{value}</div>
-      <div className="text-[9px] uppercase tracking-wider text-zinc-500">{label}</div>
+    <div className="rounded-lg bg-bg p-2 text-center">
+      <div className="font-mono-tabular text-sm font-semibold text-text">{value}</div>
+      <div className="text-[9px] uppercase tracking-wider text-text-faint">{label}</div>
     </div>
   );
 }

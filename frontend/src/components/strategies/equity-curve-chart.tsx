@@ -1,6 +1,8 @@
 "use client";
 
 import ReactECharts from "echarts-for-react";
+import { useThemeStore } from "@/lib/theme-store";
+import { getChartColors } from "@/lib/chart-theme";
 import type { EquityCurvePoint } from "@/lib/api";
 
 /** Equity curve vs Nifty 50. REL-017 E17.3: `benchmark` is real ^NSEI OHLCV (ingested by
@@ -17,10 +19,13 @@ export function EquityCurveChart({
   points: EquityCurvePoint[];
   benchmark?: (number | null)[];
 }) {
+  const mode = useThemeStore((s) => s.mode);
+  const colors = getChartColors(mode);
+
   if (points.length === 0) {
     return (
-      <div className="flex h-[220px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 text-center">
-        <p className="text-xs text-zinc-500">No equity curve for this backtest.</p>
+      <div className="flex h-[220px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-card-edge text-center">
+        <p className="text-xs text-text-faint">No equity curve for this backtest.</p>
       </div>
     );
   }
@@ -34,8 +39,8 @@ export function EquityCurveChart({
       type: "line",
       data: normalizedEquity,
       showSymbol: false,
-      lineStyle: { color: "#22d3ee", width: 2 },
-      areaStyle: { color: "rgba(34,211,238,0.08)" },
+      lineStyle: { color: "#ff5c7a", width: 2 },
+      areaStyle: { color: "rgba(255,92,122,0.08)" },
     },
   ];
   if (benchmark) {
@@ -44,7 +49,7 @@ export function EquityCurveChart({
       type: "line",
       data: benchmark,
       showSymbol: false,
-      lineStyle: { color: "#a78bfa", width: 1.5, type: "dashed" },
+      lineStyle: { color: "#c94bff", width: 1.5, type: "dashed" },
     });
   }
 
@@ -53,27 +58,27 @@ export function EquityCurveChart({
     xAxis: {
       type: "category",
       data: points.map((p) => p.date),
-      axisLine: { lineStyle: { color: "rgba(255,255,255,0.15)" } },
-      axisLabel: { color: "#71717a", fontSize: 10, formatter: (v: string) => v.slice(0, 7) },
+      axisLine: { lineStyle: { color: colors.axisLine } },
+      axisLabel: { color: colors.textFaint, fontSize: 10, formatter: (v: string) => v.slice(0, 7) },
       splitLine: { show: false },
     },
     yAxis: {
       type: "value",
       scale: true,
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
-      axisLabel: { color: "#71717a", fontSize: 10, formatter: "{value}" },
+      splitLine: { lineStyle: { color: colors.splitLine } },
+      axisLabel: { color: colors.textFaint, fontSize: 10, formatter: "{value}" },
       name: "Indexed to 100",
-      nameTextStyle: { color: "#52525b", fontSize: 9 },
+      nameTextStyle: { color: colors.textFaint, fontSize: 9 },
     },
     tooltip: {
       trigger: "axis",
-      backgroundColor: "rgba(24,24,27,0.95)",
-      borderColor: "rgba(255,255,255,0.1)",
-      textStyle: { color: "#f4f4f5", fontFamily: "var(--font-sans)", fontSize: 11 },
+      backgroundColor: colors.panel,
+      borderColor: colors.grid,
+      textStyle: { color: colors.text, fontFamily: "var(--font-sans)", fontSize: 11 },
     },
     legend: benchmark
-      ? { data: ["Strategy", "Nifty 50"], textStyle: { color: "#a1a1aa", fontSize: 10 }, top: 0 }
+      ? { data: ["Strategy", "Nifty 50"], textStyle: { color: colors.textDim, fontSize: 10 }, top: 0 }
       : undefined,
     series,
   };
@@ -82,7 +87,7 @@ export function EquityCurveChart({
     <div>
       <ReactECharts option={option} style={{ height: 220 }} opts={{ renderer: "svg" }} />
       {!benchmark && (
-        <p className="mt-2 text-[10px] text-zinc-600">
+        <p className="mt-2 text-[10px] text-text-faint">
           No Nifty 50 overlay shown here — either this view doesn&apos;t fetch a benchmark
           series, or this run&apos;s dates have no overlapping real ^NSEI data in the lake. See
           the full Backtests dashboard for a benchmark-aware view.

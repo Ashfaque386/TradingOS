@@ -1,6 +1,8 @@
 "use client";
 
 import ReactECharts from "echarts-for-react";
+import { useThemeStore } from "@/lib/theme-store";
+import { getChartColors } from "@/lib/chart-theme";
 import type { EquityCurvePoint } from "@/lib/api";
 
 /** REL-017 E17.3: a real drawdown-from-running-peak chart computed client-side from the same
@@ -8,10 +10,13 @@ import type { EquityCurvePoint } from "@/lib/api";
  * running peak equity - 1), not a separate backend endpoint, since the equity curve is the only
  * real data this needs and is already fetched. */
 export function DrawdownChart({ points }: { points: EquityCurvePoint[] }) {
+  const mode = useThemeStore((s) => s.mode);
+  const colors = getChartColors(mode);
+
   if (points.length === 0) {
     return (
-      <div className="flex h-[140px] items-center justify-center rounded-xl border border-dashed border-white/10">
-        <p className="text-xs text-zinc-500">No equity curve for this backtest.</p>
+      <div className="flex h-[140px] items-center justify-center rounded-xl border border-dashed border-card-edge">
+        <p className="text-xs text-text-faint">No equity curve for this backtest.</p>
       </div>
     );
   }
@@ -30,22 +35,22 @@ export function DrawdownChart({ points }: { points: EquityCurvePoint[] }) {
     xAxis: {
       type: "category",
       data: points.map((p) => p.date),
-      axisLine: { lineStyle: { color: "rgba(255,255,255,0.15)" } },
-      axisLabel: { color: "#71717a", fontSize: 10, formatter: (v: string) => v.slice(0, 7) },
+      axisLine: { lineStyle: { color: colors.axisLine } },
+      axisLabel: { color: colors.textFaint, fontSize: 10, formatter: (v: string) => v.slice(0, 7) },
       splitLine: { show: false },
     },
     yAxis: {
       type: "value",
       max: 0,
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
-      axisLabel: { color: "#71717a", fontSize: 10, formatter: "{value}%" },
+      splitLine: { lineStyle: { color: colors.splitLine } },
+      axisLabel: { color: colors.textFaint, fontSize: 10, formatter: "{value}%" },
     },
     tooltip: {
       trigger: "axis",
-      backgroundColor: "rgba(24,24,27,0.95)",
-      borderColor: "rgba(255,255,255,0.1)",
-      textStyle: { color: "#f4f4f5", fontFamily: "var(--font-sans)", fontSize: 11 },
+      backgroundColor: colors.panel,
+      borderColor: colors.grid,
+      textStyle: { color: colors.text, fontFamily: "var(--font-sans)", fontSize: 11 },
       valueFormatter: (v: number) => `${v.toFixed(2)}%`,
     },
     series: [
@@ -54,8 +59,8 @@ export function DrawdownChart({ points }: { points: EquityCurvePoint[] }) {
         type: "line",
         data: drawdownPct,
         showSymbol: false,
-        lineStyle: { color: "#fb7185", width: 1.5 },
-        areaStyle: { color: "rgba(251,113,133,0.12)" },
+        lineStyle: { color: "#f43f5e", width: 1.5 },
+        areaStyle: { color: "rgba(244,63,94,0.12)" },
       },
     ],
   };
