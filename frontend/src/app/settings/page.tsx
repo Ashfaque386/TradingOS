@@ -6,6 +6,7 @@ import { RequireAuth } from "@/lib/auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
+import { AppearanceToggle } from "@/components/settings/appearance-toggle";
 import { IntegrationStatusGrid } from "@/components/settings/integration-status-grid";
 import { NotificationChannels } from "@/components/settings/notification-channels";
 import { BrokerCredentialsForm } from "@/components/settings/broker-credentials-form";
@@ -25,6 +26,15 @@ export default function SettingsPage() {
           <PageHeader connected={integrationsQuery.isSuccess} subtitle="Global Settings & Integrations" />
 
           <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
+            <Card eyebrow="Preferences" title="Appearance">
+              <p className="mb-3 text-[11px] leading-relaxed text-text-faint">
+                Both modes are variants of the same design -- there is no separate accent picker
+                to choose (retired with the 2026-08-01 direction). Takes effect immediately,
+                persists across reloads, and needs no page refresh.
+              </p>
+              <AppearanceToggle />
+            </Card>
+
             <Card eyebrow="LLM Providers" title="API Key Management">
               {integrationsQuery.data ? (
                 <IntegrationStatusGrid items={integrationsQuery.data.llm_providers} />
