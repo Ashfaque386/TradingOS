@@ -63,6 +63,13 @@
   --shadow-glow-brand: 0 8px 20px rgba(255, 110, 170, 0.12);
 
   --font-heading: var(--font-plex-jakarta);
+
+  /* REL-012 Phase B (2026-08-04): row-padding scale for the dense-vs-default table rule (Phase
+     7 §1.2) -- default matches the card padding rhythm, dense is for data-heavy screens
+     (Orders, Backtests, Agent Registry) per the "everything, same visual language, tighter
+     spacing on dense screens" scope decision. */
+  --spacing-row: 12px;
+  --spacing-row-dense: 8px;
 }
 
 @theme inline {
@@ -91,6 +98,24 @@
   --radius-card: var(--radius-card);
   --radius-btn: var(--radius-btn);
   --font-heading: var(--font-heading);
+  --spacing-row: var(--spacing-row);
+  --spacing-row-dense: var(--spacing-row-dense);
+}
+
+/* REL-012 Phase B: brand-gradient utilities -- the one primitive Tailwind's own from-/via-/to-
+   gradient utilities can't express exactly (they default to a limited set of directions, not a
+   precise 135deg), so these two are real, hand-written CSS rather than @theme-generated. Every
+   other Phase B primitive (Card, Button, IconBadge) composes these with plain Tailwind classes
+   reading the tokens above -- these are the only two that need their own class at all. */
+.bg-brand-gradient {
+  background-image: linear-gradient(var(--brand-gradient));
+}
+
+.text-brand-gradient {
+  background-image: linear-gradient(var(--brand-gradient));
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
 }
 
 * {
