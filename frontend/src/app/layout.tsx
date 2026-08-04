@@ -53,7 +53,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable} ${plexJakarta.variable} h-full antialiased dark`}
+      className={`${plexSans.variable} ${plexMono.variable} ${plexJakarta.variable} h-full antialiased`}
       // REL-012 Phase A: the anti-flash script below sets `data-mode` on this element before
       // React hydrates, which the server-rendered markup never included -- the standard,
       // documented fix for this exact "attribute set by a pre-hydration script" pattern
@@ -66,7 +66,7 @@ export default function RootLayout({
           {ANTI_FLASH_SCRIPT}
         </Script>
       </head>
-      <body className="min-h-full flex flex-col bg-[#09090B] text-zinc-100">
+      <body className="min-h-full flex flex-col bg-bg text-text">
         <Providers>
           <ThemeProvider>{children}</ThemeProvider>
         </Providers>

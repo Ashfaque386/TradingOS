@@ -5,6 +5,7 @@ import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { Gated } from "@/components/ui/gated";
+import { Button } from "@/components/ui/button";
 import type { BrokerId } from "@/lib/api";
 
 /** REL-017 E17.2: write-only credential management against src/api/routers/broker_config.py.
@@ -18,17 +19,17 @@ export function BrokerCredentialsForm() {
     <Gated
       permission="manageBrokerCredentials"
       fallback={
-        <p className="mt-3 text-[11px] text-zinc-600">
+        <p className="mt-3 text-[11px] text-text-faint">
           Only a SystemAdministrator can write or remove broker credentials.
         </p>
       }
     >
-      <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3.5">
+      <div className="mt-3 rounded-xl border border-card-edge bg-bg p-3.5">
         <div className="flex items-center gap-2">
           <select
             value={broker}
             onChange={(e) => setBroker(e.target.value as BrokerId)}
-            className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-zinc-200"
+            className="rounded-md border border-card-edge bg-panel px-2 py-1.5 text-xs text-text"
           >
             <option value="zerodha">Zerodha (Kite Connect)</option>
             <option value="upstox">Upstox</option>
@@ -56,7 +57,7 @@ function DeleteButton({ broker }: { broker: BrokerId }) {
       onClick={() => remove.mutate()}
       disabled={remove.isPending}
       title={`Remove stored ${broker} credentials from Vault`}
-      className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-zinc-500 transition hover:bg-rose-500/10 hover:text-rose-400"
+      className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-text-faint transition hover:bg-down/10 hover:text-down"
     >
       <Trash2 className="h-3 w-3" /> Remove
     </button>
@@ -138,17 +139,13 @@ function CredentialFields({
           onChange={(e) => field.onChange(e.target.value)}
           placeholder={field.placeholder}
           autoComplete="off"
-          className="min-w-[160px] flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600"
+          className="min-w-[160px] flex-1 rounded-md border border-card-edge bg-panel px-2 py-1.5 text-xs text-text placeholder:text-text-faint"
         />
       ))}
-      <button
-        onClick={onSubmit}
-        disabled={!canSubmit || pending}
-        className="rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 px-3 py-1.5 text-[11px] font-semibold text-black transition hover:brightness-110 disabled:opacity-40"
-      >
+      <Button onClick={onSubmit} disabled={!canSubmit || pending} className="px-3 py-1.5 text-[11px]">
         {pending ? "Saving…" : "Save to Vault"}
-      </button>
-      {isError && <p className="w-full text-[10px] text-rose-400">Failed to write credentials.</p>}
+      </Button>
+      {isError && <p className="w-full text-[10px] text-down">Failed to write credentials.</p>}
     </div>
   );
 }

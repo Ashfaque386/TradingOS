@@ -2,13 +2,12 @@
 
 // REL-012 Phase C (2026-08-04): the persistent sidebar/nav replacing TopBar's horizontal pill
 // nav (Phase_7_Frontend_Architecture.md §1.1/E12.3) -- tying all 9 authenticated routes into one
-// shell, closing the "doesn't feel like one product" gap the 2026-08-01 audit named. Deliberately
-// keeps the current dark, unrestyled palette everywhere except the active-route indicator (the
-// one thing this epic's own spec calls out by name: "uses the brand gradient"). A full re-theme
-// of the sidebar itself is Phase D's job, done together with each page's own restyle -- doing it
-// here would mean re-touching this file twice. TopBar's brand mark, nav links, and user/logout
-// controls move here; TopBar itself is retired by this pass (see PageHeader for what's left of
-// it: subtitle, connected-status dot, clock).
+// shell, closing the "doesn't feel like one product" gap the 2026-08-01 audit named.
+// REL-012 Phase D (2026-08-04): restyled onto the new tokens as part of the first real
+// shell-consuming page's restyle (`/settings`) -- doing it here, once, means every remaining
+// route inherits the new shell colors the moment its own content gets restyled, rather than
+// re-touching this file 8 times. TopBar's brand mark, nav links, and user/logout controls live
+// here; PageHeader carries what's left of TopBar (subtitle, connected-status dot, clock).
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -42,10 +41,10 @@ export function Sidebar() {
   const { user, logout } = useAuth();
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-white/5 px-3 py-5">
+    <aside className="flex w-56 shrink-0 flex-col border-r border-card-edge bg-panel px-3 py-5">
       <div className="mb-6 px-2">
-        <h1 className="text-sm font-semibold tracking-[0.08em] text-zinc-100">
-          TRADING<span className="text-cyan-400">OS</span>
+        <h1 className="font-heading text-sm font-bold tracking-[0.04em] text-brand-gradient">
+          TRADINGOS
         </h1>
       </div>
 
@@ -58,7 +57,7 @@ export function Sidebar() {
               href={link.href}
               className={cn(
                 "relative rounded-md px-3 py-2 text-xs font-medium transition-colors",
-                active ? "text-zinc-100" : "text-zinc-500 hover:text-zinc-300",
+                active ? "text-text" : "text-text-faint hover:text-text-dim",
               )}
             >
               {active && (
@@ -74,10 +73,10 @@ export function Sidebar() {
       </nav>
 
       {user && (
-        <div className="mt-4 border-t border-white/5 px-2 pt-4">
-          <div className="text-xs text-zinc-300">{user.email}</div>
+        <div className="mt-4 border-t border-card-edge px-2 pt-4">
+          <div className="text-xs text-text-dim">{user.email}</div>
           <div className="mt-0.5 flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-wider text-cyan-400/80">
+            <span className="text-[10px] uppercase tracking-wider text-text-faint">
               {user.role}
             </span>
             <button
@@ -86,7 +85,7 @@ export function Sidebar() {
                 router.replace("/login");
               }}
               title="Sign out"
-              className="rounded-md p-1.5 text-zinc-500 transition hover:bg-white/5 hover:text-zinc-300"
+              className="rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text-dim"
             >
               <LogOut className="h-3.5 w-3.5" />
             </button>

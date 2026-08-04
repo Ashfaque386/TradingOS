@@ -118,48 +118,37 @@
   color: transparent;
 }
 
-* {
-  border-color: rgba(255, 255, 255, 0.08);
+/* Pre-existing global default border color, scoped into @layer base so it only applies as a
+   fallback for elements that don't specify their own border color utility -- unlayered, this
+   rule silently beat every `@layer utilities` Tailwind class (border-card-edge, border-up/20,
+   etc.) regardless of specificity, since unlayered CSS always wins over layered CSS per the
+   Cascade Layers spec. Discovered 2026-08-04 verifying REL-012 Phase D's /settings restyle:
+   every border-color utility across the whole app (not just this page) was silently rendering
+   as this flat rgba(255,255,255,0.08) instead of its intended token/semantic color. */
+@layer base {
+  * {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  /* background/color removed 2026-08-04: layout.tsx's <body> now carries bg-bg/text-text
+     utility classes directly -- this unlayered rule (same class of bug as the border-color fix
+     above) was silently beating them regardless, since unlayered CSS always wins over the
+     @layer utilities Tailwind's classes live in. */
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   position: relative;
   min-height: 100vh;
 }
 
-/* Ambient depth: a faint gradient mesh + grain, so the terminal reads as deep obsidian rather
-   than a flat black rectangle -- per §1.1's "deep slate/obsidian" direction. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 900px 500px at 12% -10%, rgba(34, 211, 238, 0.09), transparent 60%),
-    radial-gradient(ellipse 800px 600px at 100% 0%, rgba(167, 139, 250, 0.07), transparent 55%),
-    radial-gradient(ellipse 1000px 700px at 50% 120%, rgba(52, 211, 153, 0.04), transparent 60%);
-}
-
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.035;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-#__next,
-main {
-  position: relative;
-  z-index: 1;
-}
+/* REL-012 Phase D (2026-08-04): the body-level cyan/purple/emerald ambient gradient mesh + grain
+   texture that used to sit here was part of the retired "deep slate/obsidian" direction (see the
+   Phase A note at the top of this file) -- unconditional on data-mode, it rendered its old neon
+   accent colors behind every page regardless of theme, contradicting the light-first direction
+   once body's own background actually became data-mode-aware. Removed rather than reworked:
+   /login already established the pattern of a per-page brand-gradient blob texture where an
+   ambient background is actually wanted, scoped to that page's own tokens instead of a global,
+   theme-blind effect. */
 
 ::selection {
   background: rgba(34, 211, 238, 0.25);

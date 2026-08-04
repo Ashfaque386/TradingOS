@@ -20,31 +20,31 @@ export function IntegrationStatusGrid({
           key={item.name}
           className={cn(
             "flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5",
-            item.configured ? "border-emerald-400/20 bg-emerald-400/[0.04]" : "border-white/5 bg-white/[0.02]",
+            item.configured ? "border-up/20 bg-up/[0.04]" : "border-card-edge bg-bg",
           )}
         >
           <div className="flex items-center gap-2.5">
             <div
               className={cn(
                 "flex h-5 w-5 items-center justify-center rounded-full",
-                item.configured ? "bg-emerald-400/15 text-emerald-300" : "bg-white/5 text-zinc-600",
+                item.configured ? "bg-up/15 text-up" : "bg-bg text-text-faint",
               )}
             >
               {item.configured ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
             </div>
-            <span className="text-xs font-medium text-zinc-200">{item.name}</span>
+            <span className="text-xs font-medium text-text">{item.name}</span>
             {"sandbox" in item && item.sandbox !== null && (
               <span
                 className={cn(
                   "rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider",
-                  item.sandbox ? "bg-amber-400/10 text-amber-300" : "bg-rose-400/10 text-rose-300",
+                  item.sandbox ? "bg-warn/10 text-warn" : "bg-down/10 text-down",
                 )}
               >
                 {item.sandbox ? "Sandbox" : "Live"}
               </span>
             )}
           </div>
-          <span className="font-mono-tabular text-[11px] text-zinc-500">
+          <span className="font-mono-tabular text-[11px] text-text-faint">
             {item.masked_hint ?? "—"}
           </span>
         </div>

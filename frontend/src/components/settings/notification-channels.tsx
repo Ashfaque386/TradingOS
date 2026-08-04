@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ALERT_LEVELS, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Gated } from "@/components/ui/gated";
+import { Button } from "@/components/ui/button";
 import type { AlertLevel, ChannelType, NotificationChannel } from "@/lib/api";
 
 const CHANNEL_TYPES: ChannelType[] = ["Telegram", "Discord", "WhatsApp", "Slack", "Email"];
@@ -47,24 +48,24 @@ export function NotificationChannels() {
   return (
     <div className="space-y-3">
       {channels.length === 0 && !adding && (
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-text-faint">
           No notification channels configured. Add one to route alerts to Telegram, Discord, and
           more.
         </p>
       )}
 
       {channels.map((channel) => (
-        <div key={channel.id} className="rounded-xl border border-white/5 bg-black/20 p-3.5">
+        <div key={channel.id} className="rounded-xl border border-card-edge bg-bg p-3.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-zinc-300">
+              <span className="rounded-full bg-panel px-2 py-0.5 text-[10px] font-medium text-text-dim">
                 {channel.channel_type}
               </span>
-              <span className="font-mono-tabular text-xs text-zinc-300">
+              <span className="font-mono-tabular text-xs text-text-dim">
                 {channel.external_handle}
               </span>
               {channel.is_verified && (
-                <span className="flex items-center gap-1 text-[10px] text-emerald-300">
+                <span className="flex items-center gap-1 text-[10px] text-up">
                   <BadgeCheck className="h-3 w-3" /> Verified
                 </span>
               )}
@@ -73,7 +74,7 @@ export function NotificationChannels() {
               <button
                 onClick={() => remove.mutate(channel.id)}
                 disabled={remove.isPending}
-                className="rounded-md p-1.5 text-zinc-600 transition hover:bg-rose-500/10 hover:text-rose-400"
+                className="rounded-md p-1.5 text-text-faint transition hover:bg-down/10 hover:text-down"
                 aria-label="Remove channel"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -88,8 +89,8 @@ export function NotificationChannels() {
                   className={cn(
                     "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
                     active
-                      ? "bg-cyan-400/15 text-cyan-200"
-                      : "bg-white/5 text-zinc-600",
+                      ? "bg-brand-via/15 text-brand-via"
+                      : "bg-panel text-text-faint",
                   )}
                 >
                   {ALERT_LABELS[level]}
@@ -102,8 +103,8 @@ export function NotificationChannels() {
                     className={cn(
                       "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
                       active
-                        ? "bg-cyan-400/15 text-cyan-200"
-                        : "bg-white/5 text-zinc-600 hover:text-zinc-400",
+                        ? "bg-brand-via/15 text-brand-via"
+                        : "bg-panel text-text-faint hover:text-text-dim",
                     )}
                   >
                     {ALERT_LABELS[level]}
@@ -121,7 +122,7 @@ export function NotificationChannels() {
         ) : (
           <button
             onClick={() => setAdding(true)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/10 py-2.5 text-xs font-medium text-zinc-500 transition hover:border-white/20 hover:text-zinc-300"
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-card-edge py-2.5 text-xs font-medium text-text-faint transition hover:border-text-faint hover:text-text-dim"
           >
             <Plus className="h-3.5 w-3.5" /> Add channel
           </button>
@@ -151,12 +152,12 @@ function AddChannelForm({ onDone }: { onDone: () => void }) {
   });
 
   return (
-    <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.03] p-3.5">
+    <div className="rounded-xl border border-brand-via/20 bg-brand-via/[0.03] p-3.5">
       <div className="flex flex-wrap gap-2">
         <select
           value={channelType}
           onChange={(e) => setChannelType(e.target.value as ChannelType)}
-          className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-zinc-200"
+          className="rounded-md border border-card-edge bg-panel px-2 py-1.5 text-xs text-text"
         >
           {CHANNEL_TYPES.map((t) => (
             <option key={t} value={t}>
@@ -168,7 +169,7 @@ function AddChannelForm({ onDone }: { onDone: () => void }) {
           value={handle}
           onChange={(e) => setHandle(e.target.value)}
           placeholder="Chat ID, webhook, or address"
-          className="min-w-[180px] flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600"
+          className="min-w-[180px] flex-1 rounded-md border border-card-edge bg-panel px-2 py-1.5 text-xs text-text placeholder:text-text-faint"
         />
       </div>
       <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -183,8 +184,8 @@ function AddChannelForm({ onDone }: { onDone: () => void }) {
             className={cn(
               "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
               levels.includes(level)
-                ? "bg-cyan-400/15 text-cyan-200"
-                : "bg-white/5 text-zinc-600 hover:text-zinc-400",
+                ? "bg-brand-via/15 text-brand-via"
+                : "bg-panel text-text-faint hover:text-text-dim",
             )}
           >
             {ALERT_LABELS[level]}
@@ -192,22 +193,19 @@ function AddChannelForm({ onDone }: { onDone: () => void }) {
         ))}
       </div>
       <div className="mt-3 flex gap-2">
-        <button
-          onClick={onDone}
-          className="flex-1 rounded-lg border border-white/10 py-1.5 text-[11px] text-zinc-400 hover:bg-white/5"
-        >
+        <Button onClick={onDone} variant="secondary" className="flex-1 py-1.5 text-[11px]">
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={() => create.mutate()}
           disabled={!handle.trim() || create.isPending}
-          className="flex-1 rounded-lg bg-gradient-to-r from-cyan-500 to-purple-500 py-1.5 text-[11px] font-semibold text-black transition hover:brightness-110 disabled:opacity-40"
+          className="flex-1 py-1.5 text-[11px]"
         >
           {create.isPending ? "Adding…" : "Add channel"}
-        </button>
+        </Button>
       </div>
       {create.isError && (
-        <p className="mt-2 text-[10px] text-rose-400">Failed to add channel. Check the handle format.</p>
+        <p className="mt-2 text-[10px] text-down">Failed to add channel. Check the handle format.</p>
       )}
     </div>
   );
