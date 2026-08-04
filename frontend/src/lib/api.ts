@@ -554,6 +554,44 @@ export interface PaperPosition {
   trade_count: number;
 }
 
+// REL-018 E18.1 -- src/api/routers/orders.py's real response models, over the real (live)
+// ORDERS/TRADES tables (DB-008/009), not the paper ledger above.
+export interface LiveOrder {
+  id: string;
+  strategy_id: string;
+  symbol: string;
+  side: string;
+  order_type: string;
+  quantity: number;
+  limit_price: number | null;
+  status: string;
+  requested_at: string;
+  acknowledged_at: string | null;
+  latency_ms: number | null;
+  rejection_reason: string | null;
+}
+
+export interface LiveTrade {
+  id: string;
+  order_id: string;
+  strategy_id: string;
+  symbol: string;
+  side: string;
+  price: number;
+  quantity: number;
+  brokerage: number;
+  stt: number;
+  gst: number;
+  net_pnl: number | null;
+  executed_at: string;
+}
+
+export interface ExecutionLatencySummary {
+  sample_count: number;
+  total_seconds: number;
+  avg_ms: number | null;
+}
+
 // REL-013 -- src/api/routers/shadow_mode.py's real response models. Broker-honest: Upstox
 // attempts hit a real sandbox order call, Zerodha attempts are local-only payload validation
 // (Kite Connect has no sandbox at all) -- see src/brokers/shadow_mode.py.
@@ -684,6 +722,12 @@ export const api = {
     get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),
   paperPositions: (strategyId?: string) =>
     get<PaperPosition[]>(`/api/v1/paper-trading/positions${toQuery({ strategy_id: strategyId })}`),
+
+  orders: (strategyId?: string) =>
+    get<LiveOrder[]>(`/api/v1/orders${toQuery({ strategy_id: strategyId })}`),
+  trades: (strategyId?: string) =>
+    get<LiveTrade[]>(`/api/v1/trades${toQuery({ strategy_id: strategyId })}`),
+  executionLatency: () => get<ExecutionLatencySummary>("/api/v1/orders/execution-latency"),
 
   shadowModeStatus: () => get<ShadowModeStatus>("/api/v1/shadow-mode/status"),
 

@@ -19,6 +19,7 @@ from src.api.routers.market_data import router as market_data_router
 from src.api.routers.memory import router as memory_router
 from src.api.routers.metrics import router as metrics_router
 from src.api.routers.mfa import router as mfa_router
+from src.api.routers.orders import router as orders_router
 from src.api.routers.paper_trading import router as paper_trading_router
 from src.api.routers.portfolio import router as portfolio_router
 from src.api.routers.risk_limits import router as risk_limits_router
@@ -130,6 +131,7 @@ app.include_router(skills_router)
 app.include_router(market_data_router)
 app.include_router(broker_config_router)
 app.include_router(memory_router)
+app.include_router(orders_router)
 configure_tracing(app)
 
 

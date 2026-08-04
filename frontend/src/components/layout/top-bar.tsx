@@ -18,6 +18,7 @@ const NAV_LINKS: { href: string; label: string; permission?: PermissionKey }[] =
   { href: "/strategies", label: "Strategies" },
   { href: "/backtests", label: "Backtests" },
   { href: "/paper-trading", label: "Paper Trading" },
+  { href: "/orders", label: "Orders" },
   { href: "/chat", label: "Chat" },
   { href: "/audit", label: "Audit", permission: "readAudit" },
   { href: "/settings", label: "Settings" },
