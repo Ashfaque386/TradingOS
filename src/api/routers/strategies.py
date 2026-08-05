@@ -36,7 +36,7 @@ as agents.py's Orchestrator HITL endpoints), a real fix, not a pre-existing docu
 
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Literal
 
@@ -299,6 +299,11 @@ def _run_backtest_job(
             profit_factor=outcome.metrics.get("profit_factor"),
             expectancy=outcome.metrics.get("expectancy"),
             total_trades=outcome.metrics.get("total_trades"),
+            # REL-022: whatever _extract_trades parsed -- an empty list either way for a
+            # pre-v3-contract strategy or a real v3 strategy with zero closed trades in the
+            # window (backtest_runner.py can't distinguish the two, same limitation
+            # _extract_equity_curve already has for a missing-vs-malformed equity curve).
+            trades=[asdict(t) for t in outcome.trades],
         )
         session.add(result)
         session.flush()

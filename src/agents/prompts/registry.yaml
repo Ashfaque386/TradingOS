@@ -9,7 +9,7 @@ strategy_generator_agent:
   active_version: 1
 python_code_generator_agent:
   prompt_id: PMPT-004
-  active_version: 2
+  active_version: 3
 python_validator_agent:
   prompt_id: PMPT-005
   active_version: 1

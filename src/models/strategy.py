@@ -86,6 +86,13 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     monte_carlo_p95_max_drawdown: Mapped[float | None] = mapped_column(Numeric(6, 3))
     recommendation: Mapped[str | None] = mapped_column(String(20))
     equity_curve_path: Mapped[str | None] = mapped_column(String(255))
+    # REL-022: the real per-trade ledger (PMPT-004 v3's "trades" field). NULL only for rows
+    # created before this migration ran -- every row created after it gets a real list, possibly
+    # empty (a pre-v3-contract strategy and a real v3 strategy with zero closed trades in the
+    # window both parse to [], the same missing-vs-malformed limitation
+    # backtest_runner.py::_extract_equity_curve already has). Not retroactively backfilled for
+    # older rows. See backtest_runner.py's Trade dataclass for the 8-field shape each entry has.
+    trades: Mapped[list[dict[str, float | str]] | None] = mapped_column(JSONB)
     # REL-005: extends this one row to carry the whole downstream pipeline's outcome for the
     # run it belongs to (Evaluator/Optimization/RiskManager/Deployment) -- Phase_11's DB design
     # doc has no dedicated tables for these, and one backtest_results row per run is already the

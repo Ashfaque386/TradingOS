@@ -43,7 +43,33 @@ def run_backtest(data: pl.DataFrame, config: dict) -> dict:
         "total_trades": int(pf.trades.count()),
     }
     equity_curve = [{"date": str(d.date()), "equity": float(v)} for d, v in pf.value().items()]
-    return {"metrics": metrics, "equity_curve": equity_curve}
+
+    trades = []
+    for _, row in pf.trades.records_readable.iterrows():
+        trades.append(
+            {
+                "entry_date": str(row["Entry Timestamp"].date()),
+                "exit_date": str(row["Exit Timestamp"].date()),
+                "side": "long" if str(row["Direction"]).lower() == "long" else "short",
+                "size": float(row["Size"]),
+                "entry_price": float(row["Avg Entry Price"]),
+                "exit_price": float(row["Avg Exit Price"]),
+                "pnl": float(row["PnL"]),
+                "return_pct": float(row["Return"]),
+            }
+        )
+
+    entries_exits = [
+        {"date": str(d.date()), "entry": bool(en), "exit": bool(ex)}
+        for d, en, ex in zip(entries.index, entries.values, exits.values, strict=True)
+    ]
+
+    return {
+        "metrics": metrics,
+        "equity_curve": equity_curve,
+        "trades": trades,
+        "entries_exits": entries_exits,
+    }
 """
 
 
@@ -63,6 +89,16 @@ def test_real_backtest_runs_against_real_tcs_data():
     assert len(outcome.equity_curve) > 200  # a full year of real trading days
     assert outcome.equity_curve[0].equity > 0
 
+    # REL-022: the real trade ledger and entries/exits signal series (PMPT-004 v3).
+    assert len(outcome.trades) == outcome.metrics["total_trades"]
+    if outcome.trades:
+        trade = outcome.trades[0]
+        assert trade.side in ("long", "short")
+        assert trade.entry_date <= trade.exit_date
+        assert isinstance(trade.pnl, float)
+    assert len(outcome.entries_exits) == len(outcome.equity_curve)
+    assert any(p.entry for p in outcome.entries_exits) == (outcome.metrics["total_trades"] > 0)
+
 
 def test_real_backtest_reports_missing_data_honestly_not_as_a_crash():
     outcome = run_real_backtest(
@@ -75,3 +111,5 @@ def test_real_backtest_reports_missing_data_honestly_not_as_a_crash():
     assert not outcome.passed
     assert outcome.error is not None and "no historical data" in outcome.error
     assert outcome.equity_curve == []
+    assert outcome.trades == []
+    assert outcome.entries_exits == []
