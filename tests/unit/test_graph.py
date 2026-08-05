@@ -85,6 +85,7 @@ def _mock_pipeline(
     strategy_generator_side_effect=None,
     evaluator_side_effect=None,
     compliance_side_effect=None,
+    memory_ingest_side_effect=None,
 ):
     compliance_kwargs = (
         {"side_effect": compliance_side_effect}
@@ -106,6 +107,11 @@ def _mock_pipeline(
         if evaluator_side_effect
         else {"return_value": {"evaluation_verdict": _PASS_VERDICT}}
     )
+    memory_ingest_kwargs = (
+        {"side_effect": memory_ingest_side_effect}
+        if memory_ingest_side_effect
+        else {"return_value": {}}
+    )
     return (
         patch("src.agents.graph.ceo_agent_node", **ceo_kwargs),
         patch("src.agents.graph.market_analyst_node", return_value={"market_context": _CONTEXT}),
@@ -118,6 +124,10 @@ def _mock_pipeline(
             return_value={"backtest_metrics": _BACKTEST_METRICS, "equity_curve": _EQUITY_CURVE},
         ),
         patch("src.agents.graph.evaluator_node", **evaluator_kwargs),
+        # REL-025: memory_ingest_node calls the real ingest_strategy_outcome (real Qdrant/
+        # embeddings) -- mocked here like every other node in this unit-test harness; the real
+        # graph wiring is proven for real in tests/integration/test_memory_ingestion_graph.py.
+        patch("src.agents.graph.memory_ingest_node", **memory_ingest_kwargs),
         patch(
             "src.agents.graph.optimization_node",
             return_value={"optimization_result": _OPTIMIZATION_RESULT},
@@ -199,7 +209,7 @@ def test_graph_escalates_to_ceo_after_five_consecutive_rejections():
     verdict it receives; once that count reaches 5, route_after_evaluation escalates back to
     ceo_agent_node instead of looping strategy_generator again -- and ceo_agent_node resets the
     counter on that re-entry, giving the escalated cycle a fresh 5-strikes budget."""
-    tracker = {"ceo_calls": 0}
+    tracker = {"ceo_calls": 0, "memory_ingest_calls": 0}
 
     def ceo_side_effect(state):
         tracker["ceo_calls"] += 1
@@ -224,15 +234,26 @@ def test_graph_escalates_to_ceo_after_five_consecutive_rejections():
             )
         }
 
+    def memory_ingest_side_effect(state):
+        # REL-025: every one of the FAIL verdicts above must pass through memory_ingest before
+        # the graph decides retry-vs-escalate -- proven by counting real invocations here.
+        tracker["memory_ingest_calls"] += 1
+        return {}
+
     patches = _mock_pipeline(
         validator_side_effect=_passing_validator,
         ceo_side_effect=ceo_side_effect,
         strategy_generator_side_effect=strategy_generator_side_effect,
         evaluator_side_effect=evaluator_side_effect,
+        memory_ingest_side_effect=memory_ingest_side_effect,
     )
     result = _invoke_with_patches(patches, TradingOSGraphState(thread_id="t1"))
 
     assert tracker["ceo_calls"] == 2
+    # 6 real FAIL verdicts occur before the first escalation (ceo_agent's own reset lands one
+    # cycle before strategy_generator's mock next observes it, so the count crosses the >=5
+    # threshold on the 6th, not the 5th, FAIL) -- every one of them ingests first.
+    assert tracker["memory_ingest_calls"] == 6
     assert result["deployment_recommendation"].recommended_status == "PaperTrading"
 
 
@@ -277,6 +298,23 @@ def test_graph_topology_includes_compliance_between_code_generator_and_validator
     edges = {(e.source, e.target) for e in representation.edges}
     assert ("python_code_generator", "compliance") in edges
     assert ("compliance", "python_validator") in edges
+
+
+def test_graph_topology_routes_every_evaluator_fail_through_memory_ingest():
+    """REL-025: both of route_after_evaluation's old FAIL targets (strategy_generator's retry
+    loop, ceo_agent's escalation) must now be reached only via memory_ingest -- a rejected
+    strategy can no longer skip real Qdrant ingestion on either path."""
+    from src.agents.graph import build_graph
+
+    representation = build_graph().get_graph()
+    node_ids = set(representation.nodes)
+    assert "memory_ingest" in node_ids
+
+    edges = {(e.source, e.target) for e in representation.edges}
+    assert ("evaluator", "strategy_generator") not in edges
+    assert ("evaluator", "ceo_agent") not in edges
+    assert ("memory_ingest", "strategy_generator") in edges
+    assert ("memory_ingest", "ceo_agent") in edges
 
 
 def _clear_control_row(agent_name: str) -> None:

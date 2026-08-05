@@ -1,9 +1,10 @@
 """Per-agent control state (REL-019 E19.2, ADR 11).
 
 ADR 11 (Phase_1_Architecture_Decision_Record.md) decided per-agent disable means a halt-on-entry
-circuit breaker for the 11 LangGraph pipeline nodes (the run stops before a disabled node's real
-logic executes -- src/agents/graph.py wraps every `add_node()` registration with
-`require_enabled()` below) and a real skip-this-call check for agents invoked outside the graph
+circuit breaker for the LangGraph pipeline nodes (11 originally, 12 since REL-025's `memory_ingest`
+node -- the run stops before a disabled node's real logic executes -- src/agents/graph.py wraps
+every `add_node()` registration with `require_enabled()` below) and a real skip-this-call check
+for agents invoked outside the graph
 (src/agents/scheduler.py checks `is_agent_enabled()` before dispatching News/Sentiment/Memory/
 Data Ingestion). This module is the one shared primitive both call.
 
@@ -12,6 +13,12 @@ a given `agent_name` means enabled (fail-open default; only an explicit disable 
 `set_agent_enabled()` writes it, refusing to disable `AUDIT_AGENT_NAME`: Business Rule 5
 (immutable AI/trade audit trail) makes turning off the audit trail a compliance violation, not an
 operational convenience.
+
+UPDATE 2026-08-05 (REL-025): a 12th graph_node entry, `memory_ingest`, was added -- a real second
+call site for AGT-009 (Memory Agent), distinct from the `memory_agent` scheduled weekend-archival
+entry below. Both write to the same `trading_strategies` Qdrant collection but are operationally
+independent (one is a per-FAIL real-time graph node, the other a batch job), so they get separate
+toggleable control-state rows rather than sharing one lever.
 
 `KNOWN_AGENTS` is the full real-agent registry backing the E19.3 console UI: every agent the
 ERDTM AI Agent Traceability sheet currently marks REAL and still-shipped (AGT-017/018/019 -- the
@@ -64,6 +71,9 @@ KNOWN_AGENTS: tuple[AgentDescriptor, ...] = (
     AgentDescriptor("python_validator", "AGT-005", "Python Validator Agent", "graph_node", True),
     AgentDescriptor("backtesting", "AGT-006", "Backtesting Agent", "graph_node", True),
     AgentDescriptor("evaluator", "AGT-011", "Evaluator Agent", "graph_node", True),
+    AgentDescriptor(
+        "memory_ingest", "AGT-009", "Memory Agent (Failure Ingestion)", "graph_node", True
+    ),
     AgentDescriptor(
         "optimization", "AGT-007", "Optimization Agent (Walk-Forward)", "graph_node", True
     ),

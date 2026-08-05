@@ -212,6 +212,12 @@ class TradingOSGraphState(StrictModel):
     market_context: MarketContext | None = None
     strategy_logic: StrategyLogic | None = None
     python_code: PythonCode | None = None
+    # REL-025: a real, stable identifier for this run's current code version -- set by
+    # python_code_generator_node from thread_id+version_no (no node has a real Postgres
+    # StrategyVersion.id to use; nodes are pure functions with no DB session, per this
+    # codebase's own established convention -- see backtesting_node's own docstring). Used by
+    # memory_ingest_node as Qdrant traceability metadata, not an enforced foreign key.
+    strategy_version_id: str | None = None
     compliance_verdict: ComplianceVerdict | None = None
     validation_result: ValidationResult | None = None
     backtest_metrics: BacktestMetrics | None = None

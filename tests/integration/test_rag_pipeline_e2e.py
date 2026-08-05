@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from qdrant_client import QdrantClient
 
 from src.agents.nodes.strategy_generator import strategy_generator_node
-from src.agents.state import TradingOSGraphState
+from src.agents.state import ResearchDirective, TradingOSGraphState
 from src.agents.tools.skills import QdrantStrategyMemorySkill
 from src.core.config import get_settings
 from src.memory.collections import bootstrap_collections
@@ -88,12 +88,31 @@ def test_failed_strategy_is_surfaced_to_next_strategy_generator_pass():
         '"confidence_score": 0.6}'
     )
 
+    # REL-025 fix: a real, reproducible flake found while adding memory-ingestion graph tests --
+    # this test's own default query_text ("general Indian equity strategy", used when no
+    # research_directive is supplied) doesn't rank the just-seeded point in the top 5 against this
+    # shared dev Qdrant instance's accumulated cruft from other/prior test runs, so the assertion
+    # below failed even in complete isolation, unrelated to any REL-025 code change. A
+    # research_directive whose expected_outcomes closely matches the seeded hypothesis text makes
+    # the real cosine-similarity ranking reliable, the same fix applied in the new
+    # tests/integration/test_memory_ingestion_graph.py.
+    retrieval_directive = ResearchDirective(
+        market_regime="Bullish",
+        priority_sectors=["Banking"],
+        strategy_themes=["Mean Reversion"],
+        risk_tolerance="Medium",
+        participating_agents=["MarketAnalystAgent"],
+        expected_outcomes="Overfitted RSI mean reversion on Bank Nifty, failed out-of-sample",
+    )
+
     try:
         with patch(
             "src.agents.nodes.strategy_generator.complete",
             return_value=_fake_response(valid_strategy_json),
         ) as mock_complete:
-            strategy_generator_node(TradingOSGraphState(thread_id="t1"))
+            strategy_generator_node(
+                TradingOSGraphState(thread_id="t1", research_directive=retrieval_directive)
+            )
 
         sent_messages = mock_complete.call_args.kwargs["messages"]
         user_content = sent_messages[1]["content"]

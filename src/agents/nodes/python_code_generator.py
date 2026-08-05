@@ -15,7 +15,7 @@ PROMPT_SLUG = "python_code_generator_agent"
 TASK_PROMPT_SLUG = "python_code_generator_agent_task"
 
 
-def python_code_generator_node(state: TradingOSGraphState) -> dict[str, PythonCode]:
+def python_code_generator_node(state: TradingOSGraphState) -> dict[str, object]:
     if state.strategy_logic is None:
         raise ValueError("python_code_generator_node requires state.strategy_logic")
 
@@ -45,4 +45,10 @@ def python_code_generator_node(state: TradingOSGraphState) -> dict[str, PythonCo
 
     formatted = get_skill_registry().execute("format_python_code", code=code)
     version_no = (state.python_code.version_no + 1) if state.python_code else 1
-    return {"python_code": PythonCode(code=formatted, version_no=version_no)}
+    return {
+        "python_code": PythonCode(code=formatted, version_no=version_no),
+        # REL-025: a real, stable identifier memory_ingest_node uses for Qdrant traceability --
+        # see TradingOSGraphState.strategy_version_id's own docstring for why this isn't a real
+        # Postgres UUID.
+        "strategy_version_id": f"{state.thread_id}-v{version_no}",
+    }

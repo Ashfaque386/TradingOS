@@ -49,6 +49,9 @@ def test_python_code_generator_node_strips_fences_and_formats():
 
     assert result["python_code"].code == "def run_backtest(data, config):\n    return {}\n"
     assert result["python_code"].version_no == 1
+    # REL-025: memory_ingest_node's traceability identifier, derived purely from state (no node
+    # has a real Postgres StrategyVersion.id to use).
+    assert result["strategy_version_id"] == "t1-v1"
 
 
 def test_python_code_generator_node_increments_version_on_regeneration():

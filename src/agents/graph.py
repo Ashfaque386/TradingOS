@@ -7,11 +7,19 @@ Phase_3_Low_Level_Design.md §2:
 REL-005 closes the loop that used to terminate at `await_backtesting`, a Phase 2 placeholder --
 Backtesting, Evaluator, Optimization, Risk Manager, and Deployment now all run for real. The
 Backtest_Loop's escalation rule (5 consecutive strategy rejections -> escalate to CEO) is enforced
-below by `route_after_evaluation`: `strategy_generator_node` increments `strategy_rejection_count`
-on every FAIL verdict it receives, so by the time this routing function runs after a FAIL, the
-count already reflects the prior loop iteration's rejection -- no separate increment happens here.
-`ceo_agent_node` resets the counter to 0 on every entry (see its own docstring), so an escalated
-re-entry gets a fresh 5-strikes budget rather than immediately re-escalating.
+below by `route_after_memory_ingest` (moved there by REL-025, see below -- was originally
+`route_after_evaluation`'s own FAIL branch): `strategy_generator_node` increments
+`strategy_rejection_count` on every FAIL verdict it receives, so by the time this routing function
+runs after a FAIL, the count already reflects the prior loop iteration's rejection -- no separate
+increment happens here. `ceo_agent_node` resets the counter to 0 on every entry (see its own
+docstring), so an escalated re-entry gets a fresh 5-strikes budget rather than immediately
+re-escalating.
+
+REL-025: every FAIL verdict now passes through a real `memory_ingest` node before the graph
+decides retry-vs-escalate, so a rejected strategy is never silently dropped without a Qdrant
+record (`route_after_evaluation`'s FAIL branch used to go straight to `strategy_generator`/
+`ceo_agent`; it now always goes to `memory_ingest` first, which then routes onward via
+`route_after_memory_ingest`).
 """
 
 from collections.abc import Callable
@@ -27,6 +35,7 @@ from src.agents.nodes.compliance import compliance_node
 from src.agents.nodes.deployment import deployment_node
 from src.agents.nodes.evaluator import evaluator_node
 from src.agents.nodes.market_analyst import market_analyst_node
+from src.agents.nodes.memory_ingest import memory_ingest_node
 from src.agents.nodes.optimization import optimization_node
 from src.agents.nodes.python_code_generator import python_code_generator_node
 from src.agents.nodes.python_validator import python_validator_node
@@ -79,6 +88,12 @@ def route_after_evaluation(state: TradingOSGraphState) -> str:
         raise ValueError("route_after_evaluation called before evaluator_node ran")
     if state.evaluation_verdict.verdict == "PASS":
         return "optimization"
+    # REL-025: every FAIL ingests into memory first -- route_after_memory_ingest (below) makes
+    # the retry-vs-escalate decision that used to happen directly here.
+    return "memory_ingest"
+
+
+def route_after_memory_ingest(state: TradingOSGraphState) -> str:
     if state.strategy_rejection_count >= MAX_REJECTIONS_BEFORE_ESCALATION:
         return "ceo_agent"  # escalate: loosen constraints per Phase_4 §11/§3
     return "strategy_generator"
@@ -106,6 +121,7 @@ def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
     graph.add_node("python_validator", _halt_on_entry("python_validator", python_validator_node))  # type: ignore[call-overload]
     graph.add_node("backtesting", _halt_on_entry("backtesting", backtesting_node))  # type: ignore[call-overload]
     graph.add_node("evaluator", _halt_on_entry("evaluator", evaluator_node))  # type: ignore[call-overload]
+    graph.add_node("memory_ingest", _halt_on_entry("memory_ingest", memory_ingest_node))  # type: ignore[call-overload]
     graph.add_node("optimization", _halt_on_entry("optimization", optimization_node))  # type: ignore[call-overload]
     graph.add_node("risk_manager", _halt_on_entry("risk_manager", risk_manager_node))  # type: ignore[call-overload]
     graph.add_node("deployment", _halt_on_entry("deployment", deployment_node))  # type: ignore[call-overload]
@@ -133,11 +149,12 @@ def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
     graph.add_conditional_edges(
         "evaluator",
         route_after_evaluation,
-        {
-            "optimization": "optimization",
-            "strategy_generator": "strategy_generator",
-            "ceo_agent": "ceo_agent",
-        },
+        {"optimization": "optimization", "memory_ingest": "memory_ingest"},
+    )
+    graph.add_conditional_edges(
+        "memory_ingest",
+        route_after_memory_ingest,
+        {"strategy_generator": "strategy_generator", "ceo_agent": "ceo_agent"},
     )
     graph.add_edge("optimization", "risk_manager")
     graph.add_edge("risk_manager", "deployment")
