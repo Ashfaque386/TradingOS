@@ -248,6 +248,20 @@ export interface TradeSummary {
   return_pct: number;
 }
 
+// REL-024 E24.3: real Walk-Forward Optimization window summaries (src/engine/optimization/
+// walk_forward_adapter.py), stored directly on the BacktestResult row like TradeSummary above.
+export interface WalkForwardWindow {
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  train_expectancy: number | null;
+  test_expectancy: number | null;
+  test_sharpe_ratio: number | null;
+  test_total_trades: number | null;
+  out_of_sample_passed: boolean;
+}
+
 export interface ProviderStatus {
   name: string;
   configured: boolean;
@@ -713,6 +727,8 @@ export const api = {
     get<EquityCurvePoint[]>(`/api/v1/strategies/backtests/${backtestId}/equity-curve`),
   backtestTrades: (backtestId: string) =>
     get<TradeSummary[]>(`/api/v1/strategies/backtests/${backtestId}/trades`),
+  backtestWalkForward: (backtestId: string) =>
+    get<WalkForwardWindow[]>(`/api/v1/strategies/backtests/${backtestId}/walk-forward`),
   promoteStrategy: (id: string, toStatus: StrategyStatus) =>
     post<StrategySummary>(`/api/v1/strategies/${id}/promote`, { to_status: toStatus }),
 

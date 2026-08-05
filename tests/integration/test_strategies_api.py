@@ -232,6 +232,9 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
             trades = list(result_row.trades)
             mc_p95 = result_row.monte_carlo_p95_max_drawdown
             historical_max_dd = result_row.max_drawdown
+            walk_forward_results = (
+                list(result_row.walk_forward_results) if result_row.walk_forward_results else None
+            )
         if trades:
             total_trade_pnl = sum(t["pnl"] for t in trades)
             net_equity_change = points[-1]["equity"] - points[0]["equity"]
@@ -256,6 +259,26 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         trades_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/trades")
         assert trades_response.status_code == 200
         assert trades_response.json() == trades
+
+        # REL-024 exit criterion: real Walk-Forward Optimization windows, computed from the real
+        # entries_exits/close_curve this same backtest run captured -- the real 365-day window
+        # this endpoint always requests comfortably covers walk_forward_adapter.py's real
+        # train=4mo/test=1mo/step=1mo sizing (>= 3 rolling windows, verified empirically in
+        # tests/unit/test_walk_forward_adapter.py), so this should never be honestly empty for a
+        # v3-contract strategy with real historical data, unlike Monte Carlo/trades above which
+        # can legitimately be empty for a zero-trade window.
+        assert walk_forward_results is not None
+        assert len(walk_forward_results) >= 3
+        for window in walk_forward_results:
+            assert window["train_start"] < window["train_end"] == window["test_start"]
+            assert window["test_start"] < window["test_end"]
+            assert isinstance(window["out_of_sample_passed"], bool)
+
+        # REL-024 E24.3: the new walk-forward endpoint reconciles exactly against the same DB
+        # row -- same discipline as the trades endpoint above.
+        wf_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/walk-forward")
+        assert wf_response.status_code == 200
+        assert wf_response.json() == walk_forward_results
 
         promote_response = client.post(
             f"/api/v1/strategies/{strategy_id}/promote", json={"to_status": "Live"}, headers=headers

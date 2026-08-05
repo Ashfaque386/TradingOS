@@ -9,7 +9,13 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
 import { DrawdownChart } from "@/components/strategies/drawdown-chart";
-import type { BacktestSummary, OhlcvBar, StrategyDetail, TradeSummary } from "@/lib/api";
+import type {
+  BacktestSummary,
+  OhlcvBar,
+  StrategyDetail,
+  TradeSummary,
+  WalkForwardWindow,
+} from "@/lib/api";
 
 const BENCHMARK_SYMBOL = "^NSEI";
 
@@ -26,6 +32,12 @@ const BENCHMARK_SYMBOL = "^NSEI";
  * exist -- REL-022 extended the sandboxed contract to capture a real per-trade ledger, and this
  * page now renders it via GET .../trades. Empty (not missing) for a backtest that predates that
  * contract or genuinely closed zero trades in its window.
+ *
+ * REL-024 E24.3: the Walk-Forward Optimization view this component's own scope-note card used to
+ * say had nothing to build against -- an adapter now exists from the sandboxed strategy's real
+ * entries/exits signals to walk_forward.py's rolling-window contract, and this page renders the
+ * real per-window pass/fail results via GET .../walk-forward. Empty (not missing) for a backtest
+ * that predates the contract, or one with too little real history for even one rolling window.
  */
 function BacktestingDashboardView() {
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
@@ -60,6 +72,12 @@ function BacktestingDashboardView() {
   const tradesQuery = useQuery({
     queryKey: ["backtest-trades", effectiveBacktestId],
     queryFn: () => api.backtestTrades(effectiveBacktestId!),
+    enabled: !!effectiveBacktestId,
+  });
+
+  const walkForwardQuery = useQuery({
+    queryKey: ["backtest-walk-forward", effectiveBacktestId],
+    queryFn: () => api.backtestWalkForward(effectiveBacktestId!),
     enabled: !!effectiveBacktestId,
   });
 
@@ -167,20 +185,101 @@ function BacktestingDashboardView() {
         </Card>
       )}
 
-      <Card eyebrow="Scope note" title="No Walk-Forward view yet">
-        <p className="text-[11px] leading-relaxed text-text-faint">
-          <code className="text-text-dim">MC p95 DD</code> above is a real Monte Carlo simulation
-          now (REL-023), run against the real per-trade returns above for every newly-triggered
-          backtest — still blank for backtests run before this release, since the contract that
-          captures those returns (REL-022) isn&apos;t retroactive. Walk-Forward Optimization has a
-          real gap one level deeper: no adapter exists from this pipeline&apos;s sandboxed
-          strategy code to the vectorized signal shape{" "}
-          <code className="text-text-dim">walk_forward.py</code> needs, and no persistence layer
-          or API endpoint exists for its output at all (only unit tests call it directly) — there
-          is nothing yet to build this view against.
-        </p>
-      </Card>
+      {selectedBacktest && (
+        <Card eyebrow="Rolling out-of-sample" title="Walk-Forward Optimization">
+          <WalkForwardTable
+            windows={walkForwardQuery.data}
+            isLoading={walkForwardQuery.isLoading}
+          />
+        </Card>
+      )}
     </main>
+  );
+}
+
+function WalkForwardTable({
+  windows,
+  isLoading,
+}: {
+  windows: WalkForwardWindow[] | undefined;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return <div className="h-24 animate-pulse rounded-xl bg-bg" />;
+  }
+  if (!windows || windows.length === 0) {
+    return (
+      <p className="text-[11px] leading-relaxed text-text-faint">
+        No Walk-Forward windows for this backtest — either its real entries/exits and price
+        history don&apos;t span enough time for even one full rolling window, or it predates the
+        real Walk-Forward contract (REL-024, 2026-08-05) and can&apos;t be backfilled.
+      </p>
+    );
+  }
+  const passedCount = windows.filter((w) => w.out_of_sample_passed).length;
+  return (
+    <div>
+      <p className="mb-2 text-[11px] text-text-faint">
+        {passedCount} / {windows.length} rolling windows passed the Phase 6 out-of-sample
+        positive-expectancy rule.
+      </p>
+      <div className="max-h-80 overflow-y-auto overflow-x-auto">
+        <table className="w-full text-left text-[11px]">
+          <thead className="sticky top-0 bg-panel">
+            <tr className="text-[9px] uppercase tracking-wider text-text-faint">
+              <th className="pb-2 pr-3">Train Window</th>
+              <th className="pb-2 pr-3">Test Window</th>
+              <th className="pb-2 pr-3 text-right">Train Expectancy</th>
+              <th className="pb-2 pr-3 text-right">Test Expectancy</th>
+              <th className="pb-2 pr-3 text-right">Test Sharpe</th>
+              <th className="pb-2 pr-3 text-right">Test Trades</th>
+              <th className="pb-2 text-right">Out-of-Sample</th>
+            </tr>
+          </thead>
+          <tbody>
+            {windows.map((w, i) => (
+              <tr key={`${w.train_start}-${i}`} className="border-t border-card-edge">
+                <td className="py-1.5 pr-3 text-text-dim">
+                  {w.train_start} → {w.train_end}
+                </td>
+                <td className="py-1.5 pr-3 text-text-dim">
+                  {w.test_start} → {w.test_end}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                  {w.train_expectancy !== null ? `₹${w.train_expectancy.toFixed(2)}` : "—"}
+                </td>
+                <td
+                  className={
+                    w.test_expectancy !== null && w.test_expectancy >= 0
+                      ? "py-1.5 pr-3 text-right font-mono-tabular text-up"
+                      : w.test_expectancy !== null
+                        ? "py-1.5 pr-3 text-right font-mono-tabular text-down"
+                        : "py-1.5 pr-3 text-right font-mono-tabular text-text-faint"
+                  }
+                >
+                  {w.test_expectancy !== null ? `₹${w.test_expectancy.toFixed(2)}` : "—"}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                  {w.test_sharpe_ratio !== null ? w.test_sharpe_ratio.toFixed(2) : "—"}
+                </td>
+                <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                  {w.test_total_trades ?? "—"}
+                </td>
+                <td
+                  className={
+                    w.out_of_sample_passed
+                      ? "py-1.5 text-right font-medium text-up"
+                      : "py-1.5 text-right font-medium text-down"
+                  }
+                >
+                  {w.out_of_sample_passed ? "Pass" : "Fail"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

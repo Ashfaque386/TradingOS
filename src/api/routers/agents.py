@@ -424,6 +424,10 @@ def _persist_strategy_progress(
         if result_row is not None:
             result_row.optimization_best_params = opt.best_params or None
             result_row.optimization_robustness_score = opt.robustness_score
+            # REL-024: real Walk-Forward window summaries, when optimization_node had enough
+            # real entries_exits/close_curve data to run them -- None (not []), matching every
+            # other honestly-nothing-here JSONB column on this row, when it didn't.
+            result_row.walk_forward_results = opt.walk_forward_results or None
         strategy_row = session.get(Strategy, tracking.strategy_id)
         if strategy_row is not None:
             strategy_row.status = "RiskReview"

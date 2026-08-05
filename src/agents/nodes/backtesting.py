@@ -14,7 +14,13 @@ the orchestration layer tracks that lineage.
 
 from datetime import date, timedelta
 
-from src.agents.state import BacktestMetrics, EquityCurvePoint, TradingOSGraphState
+from src.agents.state import (
+    BacktestMetrics,
+    ClosePricePoint,
+    EntryExitSignal,
+    EquityCurvePoint,
+    TradingOSGraphState,
+)
 from src.core.config import get_settings
 from src.data.datalake.freshness import require_fresh
 from src.data.datalake.query import DataLake
@@ -67,4 +73,16 @@ def backtesting_node(state: TradingOSGraphState) -> dict[str, object]:
         total_trades=int(total_trades) if total_trades is not None else None,
     )
     equity_curve = [EquityCurvePoint(date=p.date, equity=p.equity) for p in outcome.equity_curve]
-    return {"backtest_metrics": metrics, "equity_curve": equity_curve}
+    # REL-024: real per-window Walk-Forward input for the Optimization Agent, from this same
+    # backtest run's outcome -- empty for a pre-v3-contract strategy (outcome.entries_exits==[]),
+    # honestly so rather than fabricated.
+    entries_exits = [
+        EntryExitSignal(date=p.date, entry=p.entry, exit=p.exit) for p in outcome.entries_exits
+    ]
+    close_curve = [ClosePricePoint(date=p.date, close=p.close) for p in outcome.close_curve]
+    return {
+        "backtest_metrics": metrics,
+        "equity_curve": equity_curve,
+        "entries_exits": entries_exits,
+        "close_curve": close_curve,
+    }

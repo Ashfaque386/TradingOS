@@ -93,6 +93,12 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     # backtest_runner.py::_extract_equity_curve already has). Not retroactively backfilled for
     # older rows. See backtest_runner.py's Trade dataclass for the 8-field shape each entry has.
     trades: Mapped[list[dict[str, float | str]] | None] = mapped_column(JSONB)
+    # REL-024: real Walk-Forward Optimization window summaries (Phase_6 §3), from
+    # src/engine/optimization/walk_forward_adapter.py -- NULL for rows created before this
+    # migration ran, or a real run with too little entries_exits/close_curve history for even
+    # one rolling window (see that module's own docstring). See
+    # WalkForwardWindowSummary for the per-window shape each list entry has.
+    walk_forward_results: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB)
     # REL-005: extends this one row to carry the whole downstream pipeline's outcome for the
     # run it belongs to (Evaluator/Optimization/RiskManager/Deployment) -- Phase_11's DB design
     # doc has no dedicated tables for these, and one backtest_results row per run is already the

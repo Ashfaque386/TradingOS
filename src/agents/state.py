@@ -128,12 +128,38 @@ class EquityCurvePoint(StrictModel):
     equity: float
 
 
+class EntryExitSignal(StrictModel):
+    """REL-024: one day's real entry/exit signal from the sandboxed strategy's own
+    `Portfolio.from_signals` call (PMPT-004 v3's `entries_exits`, REL-022) -- carried in state so
+    the Optimization Agent's Walk-Forward adapter has the real signal series to re-run against
+    rolling windows, without re-executing the LLM's sandboxed code once per window."""
+
+    date: str
+    entry: bool
+    exit: bool
+
+
+class ClosePricePoint(StrictModel):
+    """REL-024: one day's real OHLCV close price for the backtest's symbol/window -- carried in
+    state alongside `EntryExitSignal` so Walk-Forward has real prices to re-simulate against,
+    not just the strategy's own equity curve (which is a function of its P&L, not the raw
+    market)."""
+
+    date: str
+    close: float
+
+
 class OptimizationResult(StrictModel):
     """Optimization Agent output (AGT-007) — WFO + Monte Carlo + Optuna sweep."""
 
     passed: bool
     best_params: dict[str, float] = Field(default_factory=dict)
     robustness_score: float | None = None  # Monte Carlo P95 max drawdown
+    # REL-024: per-window Walk-Forward summaries (src/engine/optimization/walk_forward_adapter.py
+    # ::WalkForwardWindowSummary, serialized), empty when there wasn't enough real data for even
+    # one rolling window -- see that module's own docstring for why, not fabricated as a pass.
+    walk_forward_results: list[dict[str, object]] = Field(default_factory=list)
+    walk_forward_passed: bool | None = None  # None: WFO didn't run at all (see notes)
     notes: str | None = None
 
 
@@ -190,6 +216,11 @@ class TradingOSGraphState(StrictModel):
     validation_result: ValidationResult | None = None
     backtest_metrics: BacktestMetrics | None = None
     equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
+    # REL-024: populated by backtesting_node alongside equity_curve, from the same real backtest
+    # run's outcome.entries_exits/outcome.close_curve -- the Optimization Agent's Walk-Forward
+    # adapter input.
+    entries_exits: list[EntryExitSignal] = Field(default_factory=list)
+    close_curve: list[ClosePricePoint] = Field(default_factory=list)
     evaluation_verdict: EvaluationVerdict | None = None
     optimization_result: OptimizationResult | None = None
     risk_assessment: RiskAssessment | None = None

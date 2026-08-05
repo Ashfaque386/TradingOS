@@ -13,6 +13,10 @@ Phase_7_Frontend_Architecture.md §2.3:
     JIT compiles fresh in every sandboxed subprocess).
   - GET  /strategies/backtests/{job_id}/status    -- poll a backtest job.
   - GET  /strategies/backtests/{backtest_id}/equity-curve -- the persisted equity curve.
+  - GET  /strategies/backtests/{backtest_id}/trades       -- the real per-trade ledger (REL-022).
+  - GET  /strategies/backtests/{backtest_id}/walk-forward -- real Walk-Forward Optimization
+    window summaries (REL-024), when there was enough real history for at least one rolling
+    window.
   - POST /strategies/{id}/promote                 -- the human-approval action: Kanban
     drag-to-column maps directly to this, moving `status` to Backtesting/PaperTrading/Live/
     Deprecated (never back to the agent-only Ideation/Coding states).
@@ -52,6 +56,7 @@ from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SY
 from src.data.datalake.query import DataLake
 from src.engine.optimization.monte_carlo import run_monte_carlo_simulation
 from src.engine.optimization.monte_carlo_persistence import persist_monte_carlo_p95_max_drawdown
+from src.engine.optimization.walk_forward_adapter import run_walk_forward_from_real_backtest
 from src.engine.sandbox.backtest_runner import (
     EquityPoint,
     RealBacktestOutcome,
@@ -314,6 +319,18 @@ def _run_backtest_job(
             # window (backtest_runner.py can't distinguish the two, same limitation
             # _extract_equity_curve already has for a missing-vs-malformed equity curve).
             trades=[asdict(t) for t in outcome.trades],
+            # REL-024: real Walk-Forward window summaries, when there was enough real
+            # entries_exits/close_curve history for at least one rolling window -- None (not an
+            # empty list) otherwise, matching every other honestly-nothing-here JSONB column on
+            # this row.
+            walk_forward_results=[
+                asdict(w)
+                for w in run_walk_forward_from_real_backtest(
+                    [(p.date, p.close) for p in outcome.close_curve],
+                    [(p.date, p.entry, p.exit) for p in outcome.entries_exits],
+                )
+            ]
+            or None,
         )
         session.add(result)
         session.flush()
@@ -467,6 +484,34 @@ def get_trades(backtest_id: uuid.UUID) -> list[TradeSummary]:
         if not result.trades:
             return []
         return [TradeSummary(**trade) for trade in result.trades]
+
+
+class WalkForwardWindowResponse(BaseModel):
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    train_expectancy: float | None
+    test_expectancy: float | None
+    test_sharpe_ratio: float | None
+    test_total_trades: int | None
+    out_of_sample_passed: bool
+
+
+@router.get("/backtests/{backtest_id}/walk-forward", response_model=list[WalkForwardWindowResponse])
+def get_walk_forward(backtest_id: uuid.UUID) -> list[WalkForwardWindowResponse]:
+    """REL-024 E24.3. Mirrors get_trades's shape -- `walk_forward_results` lives directly on the
+    `BacktestResult` row as JSONB, no extra I/O. Empty list (not a 404) for a real backtest with
+    too little real entries/exits or price history for even one rolling window, or one that
+    predates the v3 sandbox contract / this release -- same "honestly nothing here" convention as
+    the trades and equity curve endpoints above."""
+    with get_session() as session:
+        result = session.get(BacktestResult, backtest_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        if not result.walk_forward_results:
+            return []
+        return [WalkForwardWindowResponse(**window) for window in result.walk_forward_results]
 
 
 # --- Promote (human approval) ------------------------------------------------------------------

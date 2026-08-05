@@ -15,6 +15,13 @@ entries/exits signal series the sandboxed code already computes internally to bu
 `vbt.Portfolio`, previously discarded. Not retroactive: a `BacktestResult` row created under v2
 has `trades=None`, not a backfilled/fabricated list -- there is no way to reconstruct a real
 trade ledger from a v2-era result that never captured one.
+
+REL-024 (2026-08-05): `RealBacktestOutcome` also now carries `close_curve` -- the real OHLCV
+close price series this function already reads from the data lake before handing it to the
+sandbox, previously discarded once the sandbox run completed. Walk-Forward Optimization
+(src/engine/optimization/walk_forward_adapter.py) needs real close prices alongside
+`entries_exits` to re-run the strategy's own signals against rolling windows; re-reading the
+data lake a second time for that would be redundant I/O for data this function already has.
 """
 
 import tempfile
@@ -75,6 +82,15 @@ class EntryExitPoint:
     exit: bool
 
 
+# REL-024: the real OHLCV close price series for the requested [date_from, date_to] window --
+# read from the data lake before the sandbox even runs, so this is always populated whenever
+# real historical data was found, regardless of what the sandboxed code itself returns.
+@dataclass(frozen=True)
+class ClosePricePoint:
+    date: str
+    close: float
+
+
 @dataclass(frozen=True)
 class RealBacktestOutcome:
     passed: bool
@@ -84,6 +100,7 @@ class RealBacktestOutcome:
     equity_curve: list[EquityPoint] = field(default_factory=list)
     trades: list[Trade] = field(default_factory=list)
     entries_exits: list[EntryExitPoint] = field(default_factory=list)
+    close_curve: list[ClosePricePoint] = field(default_factory=list)
     duration_seconds: float = 0.0
 
 
@@ -166,6 +183,17 @@ def _extract_trades(raw: Any) -> list[Trade]:
     return trades
 
 
+def _close_curve_from_data(data: pl.DataFrame) -> list[ClosePricePoint]:
+    """REL-024. Unlike the other extractors, `data` is this function's own real data lake read
+    (src/data/datalake/query.py's fixed `date`/`close` schema), not an LLM-controlled return
+    value -- no defensive type-narrowing needed, matching how the rest of this module already
+    trusts its own DataLake reads."""
+    return [
+        ClosePricePoint(date=str(row["date"]), close=float(row["close"]))
+        for row in data.iter_rows(named=True)
+    ]
+
+
 def _extract_entries_exits(raw: Any) -> list[EntryExitPoint]:
     """REL-022. Same defensive posture as _extract_trades/_extract_equity_curve."""
     if not isinstance(raw, list):
@@ -237,6 +265,7 @@ def run_real_backtest(
         equity_curve=_extract_equity_curve(summary.get("equity_curve")),
         trades=_extract_trades(summary.get("trades")),
         entries_exits=_extract_entries_exits(summary.get("entries_exits")),
+        close_curve=_close_curve_from_data(data),
         duration_seconds=result.duration_seconds,
     )
 
