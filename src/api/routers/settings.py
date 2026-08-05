@@ -6,16 +6,19 @@ Phase_7_Frontend_Architecture.md §2.4:
 
 Two very different trust levels live in this one screen, so they get very different treatment:
 
-1. LLM provider keys (src/core/config.py) and broker credentials are read from `.env` via
-   `get_settings()`, which is `@lru_cache`d -- the process reads `.env` once at startup and never
-   again, so even if this router *could* write a new key to `.env`, nothing would pick it up
-   without a restart. More importantly, `BrokerCredential` (DB-004) is explicitly documented as
-   "Vault secret pointer only -- actual key material never lives in Postgres" (NFR-04), and no
-   Vault client exists anywhere in this codebase yet (confirmed by grep). So this router only
-   ever returns *masked* status (`configured: bool`, a last-4-chars hint) -- never a raw secret,
-   never a write path for one. Building a "paste your API key here" form against a database that
-   was explicitly designed to never hold key material, backed by a settings object that can't
-   even be hot-reloaded, would be the wrong kind of real feature to fake into existing.
+1. LLM provider keys and broker credentials are both real, write-capable Vault-backed secrets
+   (src/core/vault.py's `write_llm_provider_key`/`write_broker_credentials`, real since REL-002/
+   REL-007) -- never read from `.env` directly by anything that resolves a key at call time.
+   `src/agents/llm_router.py::resolve_api_key` and `src/brokers/factory.py` both check Vault
+   first on every real call, falling back to the `.env`-sourced `Settings` object (still
+   `@lru_cache`d, so a `.env` edit alone would need a restart -- Vault doesn't). UPDATE 2026-08-05
+   (REL-021, correcting a stale claim in this docstring): "no Vault client exists anywhere in
+   this codebase yet" was wrong even when this router stayed read-only for LLM keys -- the write
+   endpoints below simply hadn't been built yet, matching what `broker_config.py` already did for
+   brokers since REL-017. `GET /integrations` still only ever returns *masked* status
+   (`configured: bool`, a last-4-chars hint), never a raw secret -- there is still no endpoint
+   anywhere that reads a stored value back out, for either LLM keys or broker credentials, by
+   design.
 2. Notification channels (DB-002, `NotificationChannel`) carry no secrets at all -- a channel
    type, an external handle (e.g. a Telegram chat id), a verified flag, and a JSONB preferences
    blob for which alert levels route there. Confirmed unused before this router (exhaustive grep
@@ -37,6 +40,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from src.api.deps import require_role
+from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
@@ -45,6 +49,13 @@ from src.models.user import NotificationChannel, User
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 
 _can_manage_channels = require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER)
+_can_manage_llm_keys = require_role(ROLE_SYSTEM_ADMINISTRATOR, audit_denials=True)
+
+# REL-021: the exact provider identifiers src/agents/llm_router.py::resolve_api_key /
+# src/core/vault.py's llm-provider-keys/<provider> paths already use. "ollama" is deliberately
+# excluded -- it's a local model server, never needs an API key (resolve_api_key returns None for
+# it unconditionally).
+LLM_PROVIDER_IDS = ("openai", "anthropic", "deepseek", "gemini", "huggingface", "opencode")
 
 ALERT_LEVELS = ("critical_errors", "executed_trades", "risk_warnings", "strategy_promotions")
 ChannelType = Literal["Telegram", "Discord", "WhatsApp", "Slack", "Email"]
@@ -80,43 +91,56 @@ class IntegrationsStatusResponse(BaseModel):
     editable: bool = Field(
         default=False,
         description=(
-            "Always false: these are read from .env via a process-lifetime-cached Settings "
-            "object, and broker credentials are designed to live in Vault (not Postgres, not "
-            "this API) per DB-004's own documentation. Edit .env and restart the app instead."
+            "Not read by anything today -- kept for API-shape stability. Both llm_providers and "
+            "brokers are genuinely write-capable via dedicated endpoints (POST/DELETE "
+            "/settings/llm-provider-keys/{provider}, /broker/credentials/{broker}) as of REL-021 "
+            "-- a single flag on this combined response can't represent that per-category "
+            "distinction, which is why the write forms gate on a real permission check "
+            "(SystemAdministrator) client-side instead of this field."
         ),
     )
+
+
+_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic (Claude)",
+    "deepseek": "DeepSeek",
+    "gemini": "Gemini",
+    "huggingface": "HuggingFace",
+    "opencode": "OpenCode Zen",
+}
+
+_SETTINGS_FIELD_FOR_PROVIDER: dict[str, str] = {
+    "openai": "openai_api_key",
+    "anthropic": "anthropic_api_key",
+    "deepseek": "deepseek_api_key",
+    "gemini": "gemini_api_key",
+    "huggingface": "hf_token",
+    "opencode": "opencode_api_key",
+}
 
 
 @router.get("/integrations", response_model=IntegrationsStatusResponse)
 def get_integrations_status() -> IntegrationsStatusResponse:
     s = get_settings()
-    llm_providers = [
-        ProviderStatus(
-            name="OpenAI", configured=bool(s.openai_api_key), masked_hint=_mask(s.openai_api_key)
-        ),
-        ProviderStatus(
-            name="Anthropic (Claude)",
-            configured=bool(s.anthropic_api_key),
-            masked_hint=_mask(s.anthropic_api_key),
-        ),
-        ProviderStatus(
-            name="DeepSeek",
-            configured=bool(s.deepseek_api_key),
-            masked_hint=_mask(s.deepseek_api_key),
-        ),
-        ProviderStatus(
-            name="Gemini", configured=bool(s.gemini_api_key), masked_hint=_mask(s.gemini_api_key)
-        ),
-        ProviderStatus(
-            name="HuggingFace", configured=bool(s.hf_token), masked_hint=_mask(s.hf_token)
-        ),
-        ProviderStatus(
-            name="OpenCode Zen",
-            configured=bool(s.opencode_api_key),
-            masked_hint=_mask(s.opencode_api_key),
-        ),
-        ProviderStatus(name="Ollama", configured=True, masked_hint=s.ollama_base_url),
-    ]
+    # REL-021: Vault-first, falling back to the .env-sourced Settings field -- same precedence
+    # llm_router.py::resolve_api_key already uses for the real call, so this status grid reflects
+    # a real write immediately instead of only ever showing the .env value.
+    llm_providers = []
+    for provider_id in LLM_PROVIDER_IDS:
+        key = vault.read_llm_provider_key(provider_id) or getattr(
+            s, _SETTINGS_FIELD_FOR_PROVIDER[provider_id]
+        )
+        llm_providers.append(
+            ProviderStatus(
+                name=_PROVIDER_DISPLAY_NAMES[provider_id],
+                configured=bool(key),
+                masked_hint=_mask(key),
+            )
+        )
+    llm_providers.append(
+        ProviderStatus(name="Ollama", configured=True, masked_hint=s.ollama_base_url)
+    )
     brokers = [
         BrokerStatus(
             name="Zerodha (Kite Connect)",
@@ -131,6 +155,42 @@ def get_integrations_status() -> IntegrationsStatusResponse:
         ),
     ]
     return IntegrationsStatusResponse(llm_providers=llm_providers, brokers=brokers)
+
+
+class LlmProviderKeyRequest(BaseModel):
+    api_key: str
+
+
+@router.post("/llm-provider-keys/{provider}", status_code=204)
+def set_llm_provider_key(
+    provider: str,
+    body: LlmProviderKeyRequest,
+    _user: User = Depends(_can_manage_llm_keys),
+) -> None:
+    """REL-021 E21.1. Mirrors `broker_config.py::set_broker_credentials` exactly -- writes to the
+    real Vault via `vault.write_llm_provider_key`, which `llm_router.py::resolve_api_key` already
+    reads from first on every real LLM call, before falling back to `.env`. A 503 here means
+    Vault is genuinely unreachable, not a fabricated success."""
+    if provider not in LLM_PROVIDER_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown provider '{provider}'. Must be one of {LLM_PROVIDER_IDS}.",
+        )
+    if not vault.write_llm_provider_key(provider, body.api_key):
+        raise HTTPException(status_code=503, detail="Vault unreachable -- key not stored")
+
+
+@router.delete("/llm-provider-keys/{provider}", status_code=204)
+def remove_llm_provider_key(provider: str, _user: User = Depends(_can_manage_llm_keys)) -> None:
+    """REL-021 E21.1. Deletes the stored Vault key -- the next real call for this provider falls
+    back to the `.env`-sourced `Settings` value (or fails clearly if none exists), matching
+    `resolve_api_key`'s own fallback precedence."""
+    if provider not in LLM_PROVIDER_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown provider '{provider}'. Must be one of {LLM_PROVIDER_IDS}.",
+        )
+    vault.delete_llm_provider_key(provider)
 
 
 # --- Notification channels (real CRUD) ---------------------------------------------------------

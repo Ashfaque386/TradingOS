@@ -10,6 +10,7 @@ import { AppearanceToggle } from "@/components/settings/appearance-toggle";
 import { IntegrationStatusGrid } from "@/components/settings/integration-status-grid";
 import { NotificationChannels } from "@/components/settings/notification-channels";
 import { BrokerCredentialsForm } from "@/components/settings/broker-credentials-form";
+import { LlmProviderKeyForm } from "@/components/settings/llm-provider-key-form";
 import { RiskLimitsPanel } from "@/components/settings/risk-limits-panel";
 
 export default function SettingsPage() {
@@ -42,10 +43,13 @@ export default function SettingsPage() {
                 <div className="h-24 animate-pulse rounded-xl bg-bg" />
               )}
               <p className="mt-3 text-[11px] leading-relaxed text-text-faint">
-                Read-only: keys are loaded from <code className="text-text-dim">.env</code> once at
-                process start and are never returned in full. To change a key, edit{" "}
-                <code className="text-text-dim">.env</code> and restart the app.
+                Keys live in Vault, never in this database — the status above never exposes a
+                stored value, only whether each provider is wired up. Writing a new value below
+                (REL-021 E21.1) is write-only in the same way: there is no endpoint anywhere in
+                this codebase that reads a stored key back out. Takes effect on the very next LLM
+                call, no restart needed.
               </p>
+              <LlmProviderKeyForm />
             </Card>
 
             <Card eyebrow="Execution" title="Broker Configuration">

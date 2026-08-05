@@ -284,6 +284,15 @@ export interface RiskLimitChangePayload {
 // REL-017 E17.2: src/api/routers/broker_config.py -- write-only, never round-trips a real secret.
 export type BrokerId = "zerodha" | "upstox";
 
+// REL-021 E21.1: src/api/routers/settings.py::LLM_PROVIDER_IDS -- write-only, same as BrokerId.
+export type LlmProviderId =
+  | "openai"
+  | "anthropic"
+  | "deepseek"
+  | "gemini"
+  | "huggingface"
+  | "opencode";
+
 export const ALERT_LEVELS = [
   "critical_errors",
   "executed_trades",
@@ -768,4 +777,9 @@ export const api = {
   writeBrokerCredentials: (broker: BrokerId, credentials: Record<string, string>) =>
     postNoContent(`/api/v1/broker/credentials/${broker}`, { credentials }),
   deleteBrokerCredentials: (broker: BrokerId) => del(`/api/v1/broker/credentials/${broker}`),
+
+  writeLlmProviderKey: (provider: LlmProviderId, apiKey: string) =>
+    postNoContent(`/api/v1/settings/llm-provider-keys/${provider}`, { api_key: apiKey }),
+  deleteLlmProviderKey: (provider: LlmProviderId) =>
+    del(`/api/v1/settings/llm-provider-keys/${provider}`),
 };

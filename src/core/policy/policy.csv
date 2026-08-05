@@ -71,6 +71,8 @@ p, SystemAdministrator, /api/v1/portfolio/allocation-recommendation/{recommendat
 p, PortfolioManager, /api/v1/portfolio/allocation-recommendation/{recommendation_id}/reject, POST
 p, SystemAdministrator, /api/v1/broker/credentials/{broker}, POST
 p, SystemAdministrator, /api/v1/broker/credentials/{broker}, DELETE
+p, SystemAdministrator, /api/v1/settings/llm-provider-keys/{provider}, POST
+p, SystemAdministrator, /api/v1/settings/llm-provider-keys/{provider}, DELETE
 p, SystemAdministrator, /api/v1/agents/runs/{run_id}/retry, POST
 p, PortfolioManager, /api/v1/agents/runs/{run_id}/retry, POST
 p, RiskManager, /api/v1/agents/runs/{run_id}/retry, POST
