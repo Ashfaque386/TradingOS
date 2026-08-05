@@ -1,0 +1,63 @@
+# REL-020 E20.1/E20.2: the real market-hours downtime alert (NFR-03), provisioned as code.
+#
+# Queries `tradingos:market_hours_up` (monitoring/rules/availability.yml), which is ABSENT
+# outside real NSE market hours by design -- so `noDataState: OK` below is not "ignore missing
+# data" sloppiness, it's the mechanism that makes this alert market-hours-only with zero
+# day/time logic duplicated here. During market hours the series is 0 or 1 (Prometheus's own
+# scrape-health signal, gated), so `lt 1` fires exactly when the real scrape is genuinely
+# failing while the market is genuinely open.
+#
+# Detection SLA: Prometheus scrapes every 15s and evaluates the recording rule every 30s: this
+# rule evaluates every 1m and requires the condition to hold for 1m (`for: 1m`) before firing --
+# worst case, a real outage starting right after an evaluation is caught within ~2 minutes.
+#
+# datasourceUid below (PBFA97CFB590B2093) is this instance's real, already-assigned Prometheus
+# datasource uid (GET /api/datasources), hardcoded rather than a clean name like "prometheus" --
+# tried adding an explicit `uid:` to the datasource provisioning file first, which broke it
+# ("Datasource provisioning error: data source not found") because Grafana's datasource
+# provisioner doesn't rename an already-provisioned datasource's uid in place. Matches this
+# project's single-environment-forever posture (Phase 1 ADR 10): fine for one fixed Grafana
+# instance, but re-verify this value via the API above if grafana_data is ever wiped/recreated.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: tradingos_availability
+    folder: TradingOS Availability
+    interval: 1m
+    rules:
+      - uid: tradingos-market-hours-downtime
+        title: "TradingOS down during NSE/BSE market hours"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              refId: A
+              expr: tradingos:market_hours_up
+              instant: true
+          - refId: C
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+        noDataState: OK
+        execErrState: Alerting
+        for: 1m
+        labels:
+          rel: REL-020
+          severity: critical
+        annotations:
+          summary: "TradingOS is unreachable during real NSE/BSE market hours."
+          description: "Prometheus's own scrape of job=tradingos-app (GET /metrics) is failing right now, and tradingos:market_hours_indicator confirms the real market is genuinely open -- this is real trading-hours downtime, not a quiet period. Check the app/app-tls containers immediately."

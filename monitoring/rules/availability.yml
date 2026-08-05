@@ -1,0 +1,56 @@
+# REL-020 E20.1: real market-hours uptime SLO recording rules.
+#
+# NFR-03 targets 99.99% uptime during NSE/BSE market hours specifically (09:15-15:30 IST,
+# Mon-Fri, excluding real NSE trading holidays -- src/data/reference/nse_holiday_calendar.py),
+# not general 24/7 uptime. Prometheus's own `up{job="tradingos-app"}` (set by the scrape itself,
+# not self-reported by the app -- so it stays correct even if the app is fully down/unreachable)
+# is the real signal; these rules gate it to the market-hours window instead of averaging it
+# across a day that's mostly outside trading hours, which would make the ratio look artificially
+# healthy no matter when the app is actually down.
+#
+# `hour()`/`minute()`/`day_of_week()` operate in UTC on the evaluation timestamp (Prometheus
+# built-in, no timezone support) -- 09:15-15:30 IST == 03:45-10:00 UTC (IST offset never crosses
+# a UTC midnight boundary during this window, so no date-shift edge case to handle). The `on()`
+# modifier is required on every cross-metric op below: `hour()`/`day_of_week()` each return a
+# single sample with an EMPTY label set, while `up{job="tradingos-app"}` carries job/instance
+# labels -- `on()` matches ignoring all labels (both sides reduce to at most one series), which is
+# what turns these into a plain boolean gate instead of a Prometheus "vector cannot contain
+# metrics with the same labelset" / unmatched-series error.
+groups:
+  - name: tradingos_availability
+    interval: 30s
+    rules:
+      # Present (value 1) only during real NSE market hours on a real trading day; ABSENT
+      # (no data) at all other times -- deliberate, not a bug: an absent series means "not
+      # applicable right now" for both the ratio below and the Grafana alert rule (§ E20.2),
+      # which is exactly "only evaluate/alert during market hours" with zero extra logic needed
+      # in the alert rule itself. Note for anyone spot-checking with an ad-hoc /api/v1/query
+      # right after market close: Prometheus doesn't retroactively delete the last real sample
+      # when a recording rule stops matching -- it just stops writing NEW ones -- so an instant
+      # query (implicit time=now, default 5m lookback) can keep echoing the last real in-window
+      # value for up to ~5 minutes after close before it goes stale. Confirmed real, not a caching
+      # bug, during REL-020's own live verification: an ad-hoc query of the raw filter expression
+      # alone (no recording-rule involved) returned genuinely empty at that same instant.
+      - record: tradingos:market_hours_indicator
+        expr: >
+          vector(1)
+          and on() (day_of_week() >= 1 and day_of_week() <= 5)
+          and on() ((hour() * 60 + minute()) >= 225 and (hour() * 60 + minute()) < 600)
+          unless on() (sum(tradingos_trading_holiday_today) > 0)
+
+      # The real scrape-health signal, gated to market hours -- absent outside the window (same
+      # semantics as the indicator above), 0 during market hours iff the real scrape genuinely
+      # failed, 1 iff it genuinely succeeded.
+      - record: tradingos:market_hours_up
+        expr: up{job="tradingos-app"} and on() tradingos:market_hours_indicator
+
+      # Real trailing-24h SLO ratio: fraction of market-hours evaluations where the app was
+      # genuinely reachable. Denominator only counts evaluations that occurred DURING market
+      # hours (via count_over_time on an already-gated series), so weekends/nights/holidays
+      # don't dilute the ratio -- this is a market-hours-specific SLO, not general uptime with a
+      # market-hours label slapped on it.
+      - record: tradingos:market_hours_uptime_ratio_1d
+        expr: >
+          sum_over_time(tradingos:market_hours_up[1d])
+          /
+          count_over_time(tradingos:market_hours_up[1d])

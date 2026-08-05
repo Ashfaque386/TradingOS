@@ -4,11 +4,13 @@ after the code paths that observe them run, not just that the endpoint exists.""
 
 import asyncio
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.brokers.base import BrokerAdapter, Margin, OrderRequest, OrderResponse, Position, Quote
+from src.data.reference.nse_holiday_calendar import is_trading_holiday
 from src.engine.live.execution_pipeline import LiveExecutionPipeline, Tick, TradeSignal
 from src.engine.risk.kill_switch import MaxDrawdownKillSwitch
 
@@ -85,3 +87,17 @@ def test_order_execution_latency_metric_increments_on_a_real_dispatched_signal()
         client.get("/metrics").text, "tradingos_order_execution_latency_seconds_count"
     )
     assert after == before + 1
+
+
+def test_trading_holiday_gauge_matches_the_real_holiday_calendar_for_today() -> None:
+    """REL-020 E20.1: proves the gauge the market-hours SLO recording rule gates on
+    (monitoring/rules/availability.yml) is set from the real calendar for the real current IST
+    date, not a stale/default value -- independently recomputes the expected value from
+    src/data/reference/nse_holiday_calendar.py rather than asserting a hardcoded 0 or 1, so this
+    test stays correct on both trading days and weekends/holidays without editing."""
+    today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    expected = 1.0 if is_trading_holiday(today_ist) else 0.0
+
+    value = _extract_count(client.get("/metrics").text, "tradingos_trading_holiday_today")
+
+    assert value == expected

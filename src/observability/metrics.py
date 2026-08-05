@@ -41,3 +41,13 @@ HF_TOKENS_USED_TODAY = Gauge(
     "tradingos_hf_tokens_used_today",
     "Real cumulative HuggingFace Inference token usage tracked so far today (UTC)",
 )
+
+# REL-020 E20.1: whether *today* (IST calendar date) is an NSE trading holiday, per the real
+# holiday table in src/data/reference/nse_holiday_calendar.py -- set on every /metrics scrape
+# (src/api/routers/metrics.py) rather than on a background timer, so it's always current as of
+# the most recent scrape with no extra process/thread. Consumed by monitoring/rules/availability.yml
+# to gate the market-hours uptime SLO so a holiday doesn't get counted as downtime.
+TRADING_HOLIDAY_TODAY = Gauge(
+    "tradingos_trading_holiday_today",
+    "1 if today (IST calendar date) is a real NSE trading holiday or weekend, else 0",
+)

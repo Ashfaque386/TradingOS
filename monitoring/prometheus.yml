@@ -4,6 +4,12 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# REL-020 E20.1: real market-hours uptime SLO recording rules (see the file itself for the
+# full rationale). Loaded from a mounted directory, not a single file, so a future rule group
+# doesn't require another docker-compose volume edit.
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
 scrape_configs:
   - job_name: "tradingos-app"
     static_configs:

@@ -384,6 +384,7 @@ services:
       ]
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
@@ -403,6 +404,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
+      # REL-020 E20.2: real Slack Incoming Webhook URL, read from the host .env (gitignored,
+      # never committed) and expanded into the alerting contact-point provisioning YAML via
+      # Grafana's own $__env{...} syntax -- see monitoring/grafana/provisioning/alerting/.
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - grafana_data:/var/lib/grafana
