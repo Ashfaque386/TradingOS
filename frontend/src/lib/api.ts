@@ -200,10 +200,10 @@ export interface BacktestSummary {
   expectancy: number | null;
   total_trades: number | null;
   has_equity_curve: boolean;
-  // REL-017 E17.4 (DB-007): real column, always null today -- no backtest has ever had a real
-  // Monte Carlo simulation run against it (see src/api/routers/strategies.py's own comment on
-  // this field for the real structural reason: it needs per-trade returns, which the sandbox
-  // contract never captures). Exposed honestly rather than hidden, not fabricated as present.
+  // REL-017 E17.4 (DB-007): real column. UPDATE 2026-08-05 (REL-023): a real Monte Carlo
+  // simulation now runs against real per-trade returns (REL-022) for every newly-triggered
+  // backtest -- still null for backtests created before this release (not backfilled) or with
+  // fewer than 2 usable returns either way, exposed honestly rather than hidden.
   monte_carlo_p95_max_drawdown: number | null;
   created_at: string;
 }
@@ -233,6 +233,19 @@ export interface BacktestJobStatus {
 export interface EquityCurvePoint {
   date: string;
   equity: number;
+}
+
+// REL-023 E23.2: real per-trade ledger (REL-022's sandbox contract extension), stored directly
+// on the BacktestResult row -- no separate file, unlike the equity curve.
+export interface TradeSummary {
+  entry_date: string;
+  exit_date: string;
+  side: "long" | "short";
+  size: number;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  return_pct: number;
 }
 
 export interface ProviderStatus {
@@ -698,6 +711,8 @@ export const api = {
     get<BacktestJobStatus>(`/api/v1/strategies/backtests/jobs/${jobId}/status`),
   equityCurve: (backtestId: string) =>
     get<EquityCurvePoint[]>(`/api/v1/strategies/backtests/${backtestId}/equity-curve`),
+  backtestTrades: (backtestId: string) =>
+    get<TradeSummary[]>(`/api/v1/strategies/backtests/${backtestId}/trades`),
   promoteStrategy: (id: string, toStatus: StrategyStatus) =>
     post<StrategySummary>(`/api/v1/strategies/${id}/promote`, { to_status: toStatus }),
 

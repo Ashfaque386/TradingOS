@@ -50,7 +50,10 @@ from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake
+from src.engine.optimization.monte_carlo import run_monte_carlo_simulation
+from src.engine.optimization.monte_carlo_persistence import persist_monte_carlo_p95_max_drawdown
 from src.engine.sandbox.backtest_runner import (
+    EquityPoint,
     RealBacktestOutcome,
     run_real_backtest,
     write_equity_curve_parquet,
@@ -111,16 +114,12 @@ class BacktestSummary(BaseModel):
     expectancy: float | None
     total_trades: int | None
     has_equity_curve: bool
-    # REL-017 E17.4 (DB-007): real column, real since Phase 3 -- exposed here for the first time.
-    # `None` for every historical backtest today, honestly: nothing in this pipeline ever calls
-    # persist_monte_carlo_p95_max_drawdown() outside its own test file. Running a real Monte
-    # Carlo simulation needs per-trade returns (src/engine/optimization/monte_carlo.py's
-    # run_monte_carlo_simulation(trade_returns: list[float])), which the sandboxed strategy
-    # code's return contract (PMPT-004: {"metrics": {...}, "equity_curve": [...]}) never asked
-    # for and no backtest has ever captured -- a real, structural gap this field's own presence
-    # doesn't paper over, and deliberately out of E17.4's scope to close (would mean changing the
-    # sandbox contract and re-running every historical backtest, not just adding UI on top of
-    # data that already exists).
+    # REL-017 E17.4 (DB-007): real column, real since Phase 3, exposed here since that release.
+    # UPDATE 2026-08-05 (REL-023 E23.1): _run_backtest_job now calls run_monte_carlo_simulation()
+    # with real per-trade returns (REL-022's trades ledger) and persists the result via
+    # persist_monte_carlo_p95_max_drawdown() -- the gap this comment used to describe ("nothing
+    # in this pipeline ever calls" it) is closed. Still `None` for backtests created before this
+    # release (not backfilled) or ones with fewer than 2 usable returns either way.
     monte_carlo_p95_max_drawdown: float | None
     created_at: datetime
 
@@ -259,6 +258,17 @@ class BacktestJobStatusResponse(BaseModel):
     backtest_result_id: uuid.UUID | None
 
 
+def _equity_curve_returns(equity_curve: list[EquityPoint]) -> list[float]:
+    """REL-023: the same daily-return derivation src/agents/nodes/optimization.py's own
+    LangGraph path already uses for its Monte Carlo input -- duplicated rather than imported
+    from that agent-node module (a different layer of this codebase) since it's 3 lines with no
+    real shared state to couple on."""
+    values = [point.equity for point in equity_curve]
+    return [
+        (curr - prev) / prev for prev, curr in zip(values, values[1:], strict=False) if prev != 0
+    ]
+
+
 def _run_backtest_job(
     *,
     job_id: str,
@@ -312,6 +322,21 @@ def _run_backtest_job(
             result.equity_curve_path = str(equity_path)
         session.commit()
         result_id = result.id
+
+        # REL-023 E23.1: real per-trade returns when a real trade ledger exists (REL-022),
+        # falling back to the coarser daily-equity-curve-derived returns
+        # optimization_node's own LangGraph path already uses when it doesn't (pre-v3-contract
+        # strategies, or zero real trades in the window) -- same >=2-usable-returns gate that
+        # node already applies, for consistency. Left honestly unset (not a fabricated 0.0) when
+        # there's not enough data either way, matching this row's own pre-REL-023 comment.
+        trade_returns = [t.return_pct for t in outcome.trades] or _equity_curve_returns(
+            outcome.equity_curve
+        )
+        if len(trade_returns) >= 2:
+            mc_result = run_monte_carlo_simulation(trade_returns)
+            persist_monte_carlo_p95_max_drawdown(
+                session, result_id, mc_result.percentile_95_max_drawdown
+            )
 
     with _backtest_jobs_lock:
         _backtest_jobs[job_id] = _BacktestJob(status="Completed", backtest_result_id=result_id)
@@ -415,6 +440,33 @@ def get_equity_curve(backtest_id: uuid.UUID) -> list[EquityCurvePoint]:
             EquityCurvePoint(date=str(row["date"]), equity=float(row["equity"]))
             for row in df.iter_rows(named=True)
         ]
+
+
+class TradeSummary(BaseModel):
+    entry_date: str
+    exit_date: str
+    side: str
+    size: float
+    entry_price: float
+    exit_price: float
+    pnl: float
+    return_pct: float
+
+
+@router.get("/backtests/{backtest_id}/trades", response_model=list[TradeSummary])
+def get_trades(backtest_id: uuid.UUID) -> list[TradeSummary]:
+    """REL-023 E23.2. Mirrors get_equity_curve's shape, but `trades` lives directly on the
+    `BacktestResult` row as JSONB (REL-022) rather than a separate parquet file -- no extra I/O
+    needed. Empty list (not a 404) for a real backtest with zero closed trades or one that
+    predates the v3 sandbox contract -- same "honestly nothing here" convention as the equity
+    curve endpoint above."""
+    with get_session() as session:
+        result = session.get(BacktestResult, backtest_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        if not result.trades:
+            return []
+        return [TradeSummary(**trade) for trade in result.trades]
 
 
 # --- Promote (human approval) ------------------------------------------------------------------

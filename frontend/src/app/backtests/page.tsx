@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
 import { DrawdownChart } from "@/components/strategies/drawdown-chart";
-import type { BacktestSummary, OhlcvBar, StrategyDetail } from "@/lib/api";
+import type { BacktestSummary, OhlcvBar, StrategyDetail, TradeSummary } from "@/lib/api";
 
 const BENCHMARK_SYMBOL = "^NSEI";
 
@@ -22,11 +22,10 @@ const BENCHMARK_SYMBOL = "^NSEI";
  * ^NSEI data for the first time, closing the gap EquityCurveChart's own comment used to name
  * explicitly ("no Nifty 50 index data is ingested anywhere").
  *
- * Honest scope note: there is no per-run trade list here. The sandboxed strategy code's return
- * contract (PMPT-004, src/engine/sandbox/backtest_runner.py) is `{"metrics": {...},
- * "equity_curve": [...]}` -- individual trade records were never part of that contract or
- * persisted anywhere, so a trade list can't be shown without fabricating one. Documented here
- * rather than silently omitted.
+ * REL-023 E23.3: the per-run trade list this component's own docstring used to say couldn't
+ * exist -- REL-022 extended the sandboxed contract to capture a real per-trade ledger, and this
+ * page now renders it via GET .../trades. Empty (not missing) for a backtest that predates that
+ * contract or genuinely closed zero trades in its window.
  */
 function BacktestingDashboardView() {
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
@@ -56,6 +55,12 @@ function BacktestingDashboardView() {
     queryKey: ["equity-curve", effectiveBacktestId],
     queryFn: () => api.equityCurve(effectiveBacktestId!),
     enabled: !!effectiveBacktestId && !!selectedBacktest?.has_equity_curve,
+  });
+
+  const tradesQuery = useQuery({
+    queryKey: ["backtest-trades", effectiveBacktestId],
+    queryFn: () => api.backtestTrades(effectiveBacktestId!),
+    enabled: !!effectiveBacktestId,
   });
 
   const benchmarkQuery = useQuery({
@@ -156,34 +161,109 @@ function BacktestingDashboardView() {
         )}
       </Card>
 
-      <Card eyebrow="Scope note" title="No per-run trade list">
-        <p className="text-[11px] leading-relaxed text-text-faint">
-          A backtest here only ever returns aggregate metrics and an equity curve (the sandboxed
-          strategy code&apos;s own return contract, PMPT-004) — individual trade records were
-          never computed or persisted anywhere in this pipeline, so there is no real per-trade
-          list to show without fabricating one. Real, per-trade fills do exist for the Paper
-          Trading Desk (a live, ongoing ledger, not a backtest artifact) — see{" "}
-          <code className="text-text-dim">/paper-trading</code>.
-        </p>
-      </Card>
+      {selectedBacktest && (
+        <Card eyebrow="Per-trade" title="Trade List">
+          <TradeListTable trades={tradesQuery.data} isLoading={tradesQuery.isLoading} />
+        </Card>
+      )}
 
-      <Card eyebrow="Scope note" title="Monte Carlo p95 drawdown reads blank; no Walk-Forward view">
+      <Card eyebrow="Scope note" title="No Walk-Forward view yet">
         <p className="text-[11px] leading-relaxed text-text-faint">
-          <code className="text-text-dim">MC p95 DD</code> above is a real database column
-          (DB-007) exposed here for the first time, not a fabricated one — but it reads blank for
-          every backtest today because nothing in this pipeline has ever populated it outside its
-          own test file. Running a real simulation (
-          <code className="text-text-dim">run_monte_carlo_simulation()</code>) needs per-trade
-          returns, which the sandbox contract above never captures either — closing this for real
-          means extending that contract and re-running backtests, not just adding UI on top of
-          data that already exists, so it&apos;s deliberately left as an honest gap rather than
-          stretched into this pass. Walk-Forward Optimization results have the same real gap one
-          level deeper: no persistence layer or API endpoint exists for{" "}
-          <code className="text-text-dim">walk_forward.py</code>&apos;s output at all (only unit
-          tests call it directly) — there is nothing yet to build this view against.
+          <code className="text-text-dim">MC p95 DD</code> above is a real Monte Carlo simulation
+          now (REL-023), run against the real per-trade returns above for every newly-triggered
+          backtest — still blank for backtests run before this release, since the contract that
+          captures those returns (REL-022) isn&apos;t retroactive. Walk-Forward Optimization has a
+          real gap one level deeper: no adapter exists from this pipeline&apos;s sandboxed
+          strategy code to the vectorized signal shape{" "}
+          <code className="text-text-dim">walk_forward.py</code> needs, and no persistence layer
+          or API endpoint exists for its output at all (only unit tests call it directly) — there
+          is nothing yet to build this view against.
         </p>
       </Card>
     </main>
+  );
+}
+
+function TradeListTable({
+  trades,
+  isLoading,
+}: {
+  trades: TradeSummary[] | undefined;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return <div className="h-24 animate-pulse rounded-xl bg-bg" />;
+  }
+  if (!trades || trades.length === 0) {
+    return (
+      <p className="text-[11px] leading-relaxed text-text-faint">
+        No closed trades in this backtest&apos;s window — either it genuinely closed zero real
+        trades, or it predates the real trade-ledger contract (REL-022, 2026-08-05) and can&apos;t
+        be backfilled.
+      </p>
+    );
+  }
+  return (
+    <div className="max-h-80 overflow-y-auto overflow-x-auto">
+      <table className="w-full text-left text-[11px]">
+        <thead className="sticky top-0 bg-panel">
+          <tr className="text-[9px] uppercase tracking-wider text-text-faint">
+            <th className="pb-2 pr-3">Entry</th>
+            <th className="pb-2 pr-3">Exit</th>
+            <th className="pb-2 pr-3">Side</th>
+            <th className="pb-2 pr-3 text-right">Size</th>
+            <th className="pb-2 pr-3 text-right">Entry Px</th>
+            <th className="pb-2 pr-3 text-right">Exit Px</th>
+            <th className="pb-2 pr-3 text-right">PnL</th>
+            <th className="pb-2 text-right">Return</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((t, i) => (
+            <tr key={`${t.entry_date}-${i}`} className="border-t border-card-edge">
+              <td className="py-1.5 pr-3 text-text-dim">{t.entry_date}</td>
+              <td className="py-1.5 pr-3 text-text-dim">{t.exit_date}</td>
+              <td
+                className={
+                  t.side === "long"
+                    ? "py-1.5 pr-3 font-medium text-up"
+                    : "py-1.5 pr-3 font-medium text-down"
+                }
+              >
+                {t.side}
+              </td>
+              <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                {t.size.toFixed(2)}
+              </td>
+              <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                ₹{t.entry_price.toFixed(2)}
+              </td>
+              <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                ₹{t.exit_price.toFixed(2)}
+              </td>
+              <td
+                className={
+                  t.pnl >= 0
+                    ? "py-1.5 pr-3 text-right font-mono-tabular text-up"
+                    : "py-1.5 pr-3 text-right font-mono-tabular text-down"
+                }
+              >
+                ₹{t.pnl.toFixed(2)}
+              </td>
+              <td
+                className={
+                  t.return_pct >= 0
+                    ? "py-1.5 text-right font-mono-tabular text-up"
+                    : "py-1.5 text-right font-mono-tabular text-down"
+                }
+              >
+                {(t.return_pct * 100).toFixed(2)}%
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

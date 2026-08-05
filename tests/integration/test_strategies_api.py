@@ -229,13 +229,33 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
             assert result_row is not None
             assert result_row.trades is not None
             assert len(result_row.trades) == backtest_summary["total_trades"]
-            if result_row.trades:
-                total_trade_pnl = sum(t["pnl"] for t in result_row.trades)
-                net_equity_change = points[-1]["equity"] - points[0]["equity"]
-                # Open positions at the window's end and cash-drag mean these aren't identical,
-                # but a real ledger's PnL must be within the same order of magnitude as the real
-                # equity curve's own net change, not wildly divergent or zero.
-                assert abs(total_trade_pnl - net_equity_change) < abs(net_equity_change) * 0.5 + 1
+            trades = list(result_row.trades)
+            mc_p95 = result_row.monte_carlo_p95_max_drawdown
+            historical_max_dd = result_row.max_drawdown
+        if trades:
+            total_trade_pnl = sum(t["pnl"] for t in trades)
+            net_equity_change = points[-1]["equity"] - points[0]["equity"]
+            # Open positions at the window's end and cash-drag mean these aren't identical, but
+            # a real ledger's PnL must be within the same order of magnitude as the real equity
+            # curve's own net change, not wildly divergent or zero.
+            assert abs(total_trade_pnl - net_equity_change) < abs(net_equity_change) * 0.5 + 1
+
+        # REL-023 exit criterion: a real Monte Carlo P95 max drawdown, computed from the same
+        # real per-trade returns just verified above (not the daily-equity-curve approximation
+        # optimization_node's own LangGraph path still uses) -- >= the real historical
+        # max_drawdown is the actual defining property of a P95 worst-case tail metric, not just
+        # "some non-null number got written."
+        if len(trades) >= 2:
+            assert mc_p95 is not None
+            assert float(mc_p95) >= 0
+            if historical_max_dd is not None:
+                assert float(mc_p95) >= float(historical_max_dd) * 0.99
+
+        # REL-023 E23.2: the new trades endpoint reconciles exactly against the same DB row --
+        # same discipline as REL-018's orders-endpoint reconciliation test.
+        trades_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/trades")
+        assert trades_response.status_code == 200
+        assert trades_response.json() == trades
 
         promote_response = client.post(
             f"/api/v1/strategies/{strategy_id}/promote", json={"to_status": "Live"}, headers=headers
