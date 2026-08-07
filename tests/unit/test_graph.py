@@ -300,6 +300,22 @@ def test_graph_topology_includes_compliance_between_code_generator_and_validator
     assert ("compliance", "python_validator") in edges
 
 
+def test_graph_topology_includes_options_strategy_agent_between_generator_and_code_generator():
+    """REL-030: strategy_generator no longer edges directly to python_code_generator --
+    options_strategy_agent sits between them (a no-op for Equity strategies, real chain-grounded
+    leg replacement for F&O ones)."""
+    from src.agents.graph import build_graph
+
+    representation = build_graph().get_graph()
+    node_ids = set(representation.nodes)
+    assert "options_strategy_agent" in node_ids
+
+    edges = {(e.source, e.target) for e in representation.edges}
+    assert ("strategy_generator", "python_code_generator") not in edges
+    assert ("strategy_generator", "options_strategy_agent") in edges
+    assert ("options_strategy_agent", "python_code_generator") in edges
+
+
 def test_graph_topology_routes_every_evaluator_fail_through_memory_ingest():
     """REL-025: both of route_after_evaluation's old FAIL targets (strategy_generator's retry
     loop, ceo_agent's escalation) must now be reached only via memory_ingest -- a rejected

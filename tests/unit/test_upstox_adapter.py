@@ -405,3 +405,30 @@ async def test_get_option_chain_parses_the_real_documented_response_shape():
     assert ce.last_price == 150.0
     assert ce.open_interest == 1000
     assert ce.implied_volatility == 15.2
+
+
+@pytest.mark.asyncio
+async def test_list_expiries_returns_real_distinct_future_expiries_sorted_ascending():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": [
+                    {"expiry": "2027-02-25", "strike_price": 24000},
+                    {"expiry": "2027-02-25", "strike_price": 24200},  # same expiry, dup dropped
+                    {"expiry": "2027-01-28", "strike_price": 24000},
+                    {"expiry": "2024-01-25", "strike_price": 24000},  # real past expiry, excluded
+                ],
+            },
+        )
+
+    adapter = _adapter_with_transport(handler)
+    expiries = await adapter.list_expiries("NSE_INDEX|Nifty 50")
+
+    assert "instrument_key=NSE_INDEX" in captured["url"].replace("%7C", "|")
+    assert "expiry_date" not in captured["url"]
+    assert expiries == [date(2027, 1, 28), date(2027, 2, 25)]

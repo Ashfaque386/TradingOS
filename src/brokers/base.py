@@ -158,3 +158,15 @@ class BrokerAdapter(ABC):
     async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
         """REL-010 E10.4. Read-only market data, same safety posture as get_quote above."""
         ...
+
+    @abstractmethod
+    async def list_expiries(self, underlying: str) -> list[date]:
+        """REL-030 E30.1. Real, currently-listed option expiry dates for `underlying`, sorted
+        ascending, restricted to today-or-later -- `get_option_chain` needs an exact `expiry` and
+        returns an empty chain on any date that isn't a real currently-listed one, so a caller
+        that wants "the nearest real expiry" needs this list rather than guessing an NSE
+        weekday convention that could silently be wrong (and today or a future date the
+        underlying doesn't have a listed expiry on isn't a data-quality bug to work around --
+        it's simply not a real expiry). Read-only market data, same safety posture as
+        get_quote/get_option_chain above."""
+        ...

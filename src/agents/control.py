@@ -2,9 +2,9 @@
 
 ADR 11 (Phase_1_Architecture_Decision_Record.md) decided per-agent disable means a halt-on-entry
 circuit breaker for the LangGraph pipeline nodes (11 originally, 12 since REL-025's `memory_ingest`
-node -- the run stops before a disabled node's real logic executes -- src/agents/graph.py wraps
-every `add_node()` registration with `require_enabled()` below) and a real skip-this-call check
-for agents invoked outside the graph
+node, 13 since REL-030's `options_strategy_agent` -- the run stops before a disabled node's real
+logic executes -- src/agents/graph.py wraps every `add_node()` registration with
+`require_enabled()` below) and a real skip-this-call check for agents invoked outside the graph
 (src/agents/scheduler.py checks `is_agent_enabled()` before dispatching News/Sentiment/Memory/
 Data Ingestion). This module is the one shared primitive both call.
 
@@ -20,14 +20,19 @@ entry below. Both write to the same `trading_strategies` Qdrant collection but a
 independent (one is a per-FAIL real-time graph node, the other a batch job), so they get separate
 toggleable control-state rows rather than sharing one lever.
 
+UPDATE 2026-08-07 (REL-030): AGT-015 (Options Strategy Agent) moves from `registry_only`/
+`enforced=False` to a real 13th `graph_node`/`enforced=True` entry -- `src/agents/graph.py` now
+has a real call site (between `strategy_generator` and `python_code_generator`), the same
+registry_only -> graph_node upgrade REL-025 gave `memory_ingest`.
+
 `KNOWN_AGENTS` is the full real-agent registry backing the E19.3 console UI: every agent the
 ERDTM AI Agent Traceability sheet currently marks REAL and still-shipped (AGT-017/018/019 -- the
 ML/RL agents -- are excluded; their code was removed from the running system 2026-07-30, see
 Release Traceability REL-008/009). `enforced=True` means a real call site checks this agent's
 state today; `enforced=False` means the control row is real and toggleable (the API/UI never
 lies about what state is stored) but no call site enforces it yet -- an honest scope boundary for
-agents invoked from routers/skill dispatch this pass didn't wire (Execution, Options Strategy,
-Portfolio Manager, Notification, Skill Registry Manager, Scheduler itself, CEO Chat)."""
+agents invoked from routers/skill dispatch this pass didn't wire (Execution, Portfolio Manager,
+Notification, Skill Registry Manager, Scheduler itself, CEO Chat)."""
 
 from __future__ import annotations
 
@@ -79,6 +84,12 @@ KNOWN_AGENTS: tuple[AgentDescriptor, ...] = (
     ),
     AgentDescriptor("risk_manager", "AGT-008", "Risk Manager Agent (AI Layer)", "graph_node", True),
     AgentDescriptor("deployment", "AGT-012", "Deployment Agent", "graph_node", True),
+    # REL-030: real 13th graph node, between strategy_generator and python_code_generator --
+    # AGT-015 moves from registry_only/False to a real halt-on-entry graph_node/True, same
+    # upgrade REL-025 gave memory_ingest.
+    AgentDescriptor(
+        "options_strategy_agent", "AGT-015", "Options Strategy Agent", "graph_node", True
+    ),
     # Non-graph agents dispatched from a single src/agents/scheduler.py call site each --
     # real skip-this-call enforcement, not just a stored toggle.
     AgentDescriptor("memory_agent", "AGT-009", "Memory Agent", "scheduled", True),
@@ -88,9 +99,6 @@ KNOWN_AGENTS: tuple[AgentDescriptor, ...] = (
     # Non-graph agents invoked via API/skill dispatch -- real, toggleable state; call-site
     # enforcement not yet wired this pass (see module docstring).
     AgentDescriptor("execution_agent", "AGT-010", "Execution Agent (Live)", "registry_only", False),
-    AgentDescriptor(
-        "options_strategy_agent", "AGT-015", "Options Strategy Agent", "registry_only", False
-    ),
     AgentDescriptor(
         "portfolio_manager_agent", "AGT-016", "Portfolio Manager Agent", "registry_only", False
     ),

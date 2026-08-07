@@ -43,6 +43,21 @@ KITE_VARIETY = "regular"  # this adapter only supports regular orders (not amo/c
 
 _PRODUCT_CODE = {"INTRADAY": "MIS", "DELIVERY": "CNC"}
 
+# REL-030: a real, confirmed Kite Connect quirk (not a made-up workaround -- see the Kite
+# developer forum's own "how to get nifty and banknifty quotes" thread, and
+# docs.kite.trade/connect/v3/market-quotes: "For nifty bank, index name is 'Nifty bank' but
+# options have 'BANKNIFTY'"): the `name` column in the real `/instruments/NFO` dump (what
+# get_option_chain filters on, since that's the underlying name F&O contracts declare) does not
+# match the real tradingsymbol get_quote's `/quote` endpoint needs for these index underlyings.
+# Confirmed real mappings only for NSE's 3 major index underlyings with F&O contracts -- a plain
+# stock underlying (e.g. "RELIANCE") needs no mapping, its F&O name and equity quote symbol are
+# already identical, so an unmapped underlying is used as-is, not an error.
+_INDEX_QUOTE_SYMBOLS = {
+    "NIFTY": "NIFTY 50",
+    "BANKNIFTY": "NIFTY BANK",
+    "FINNIFTY": "NIFTY FIN SERVICE",
+}
+
 # Kite's order status vocabulary, mapped onto our own DB-008 ORDERS.status values
 # (Phase_11_Database_Design.md). Reconstructed from Kite Connect's public docs, not exhaustively
 # verified against a live order lifecycle (Kite has no sandbox to safely generate every status
@@ -233,7 +248,8 @@ class KiteConnectAdapter(BrokerAdapter):
         if not matching:
             return OptionChain(underlying=underlying, expiry=expiry, spot_price=0.0, instruments=[])
 
-        spot_quote = await self.get_quote(underlying)
+        quote_symbol = _INDEX_QUOTE_SYMBOLS.get(underlying, underlying)
+        spot_quote = await self.get_quote(quote_symbol)
 
         instrument_keys = [f"NFO:{row['tradingsymbol']}" for row in matching]
         quote_response = await self._client.get(
@@ -279,6 +295,22 @@ class KiteConnectAdapter(BrokerAdapter):
             spot_price=spot_quote.last_price,
             instruments=instruments,
         )
+
+    async def list_expiries(self, underlying: str) -> list[date]:
+        """REL-030 E30.1. Reuses the same real `/instruments/NFO` dump `get_option_chain` above
+        fetches -- the real, currently-listed expiry dates are already right there in each row's
+        `expiry` column; no separate endpoint is needed or exists."""
+        instruments_response = await self._client.get("/instruments/NFO")
+        instruments_response.raise_for_status()
+        rows = csv.DictReader(io.StringIO(instruments_response.text))
+
+        today = date.today()
+        expiries = {
+            date.fromisoformat(row["expiry"])
+            for row in rows
+            if row["name"] == underlying and row["instrument_type"] in ("CE", "PE")
+        }
+        return sorted(e for e in expiries if e >= today)
 
     # --- internals -------------------------------------------------------------------
 

@@ -55,6 +55,13 @@ research:
     model: claude-3-7-sonnet-20250219
   - provider: gemini
     model: gemini-1.5-pro
+  # 2026-08-07 (REL-030 live verification): a real DeepSeek key was added specifically because
+  # huggingface/opencode/ollama (the only providers previously configured for this task type)
+  # were all genuinely down at once -- huggingface out of monthly credits, opencode missing a
+  # payment method, ollama timing out at 600s. Placed ahead of that trio since deepseek is real,
+  # paid, and known-working (already used in the `coding` chain above).
+  - provider: deepseek
+    model: deepseek-reasoner
   - provider: huggingface
     model: meta-llama/Llama-3.3-70B-Instruct
   - provider: opencode

@@ -366,12 +366,15 @@ async def test_get_option_chain_filters_by_underlying_and_expiry_then_batch_quot
             return httpx.Response(200, text=real_csv_header + real_csv_rows)
         if request.url.path == "/quote":
             requested_keys = request.url.params.get_list("i")
-            if requested_keys == ["NSE:NIFTY"]:
+            # REL-030: NIFTY's real Kite tradingsymbol for /quote is "NIFTY 50", not the bare
+            # "NIFTY" the NFO instrument dump's own `name` column uses -- a real, confirmed Kite
+            # quirk, not test-only fixture noise (see _INDEX_QUOTE_SYMBOLS's own docstring).
+            if requested_keys == ["NSE:NIFTY 50"]:
                 return httpx.Response(
                     200,
                     json={
                         "status": "success",
-                        "data": {"NSE:NIFTY": {"last_price": 24100.0, "depth": {}}},
+                        "data": {"NSE:NIFTY 50": {"last_price": 24100.0, "depth": {}}},
                     },
                 )
             return httpx.Response(
@@ -397,3 +400,113 @@ async def test_get_option_chain_filters_by_underlying_and_expiry_then_batch_quot
     assert ce.last_price == 150.0
     assert ce.open_interest == 1000
     assert ce.implied_volatility is not None
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_maps_a_real_index_underlying_to_its_real_quote_symbol():
+    """REL-030: found live, against the real production API, before this fix existed --
+    get_option_chain("NIFTY", ...) genuinely 500'd with a real KeyError because Kite's real
+    /quote endpoint needs "NIFTY 50", not the bare "NIFTY" the NFO instrument dump's own `name`
+    column uses. Covers all 3 real confirmed index mappings, not just NIFTY."""
+    real_csv_header = (
+        "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,"
+        "tick_size,lot_size,instrument_type,segment,exchange\n"
+    )
+    real_csv_rows = (
+        "1,1,BANKNIFTY26AUG50000CE,BANKNIFTY,0,2026-08-06,50000,0.05,25,CE,NFO-OPT,NFO\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/instruments/NFO":
+            return httpx.Response(200, text=real_csv_header + real_csv_rows)
+        if request.url.path == "/quote":
+            requested_keys = request.url.params.get_list("i")
+            if requested_keys[0].startswith("NSE:"):
+                assert requested_keys == [
+                    "NSE:NIFTY BANK"
+                ], f"expected the real mapped index quote symbol, got {requested_keys}"
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "success",
+                        "data": {"NSE:NIFTY BANK": {"last_price": 50100.0, "depth": {}}},
+                    },
+                )
+            # the separate batch quote for the option instruments themselves (NFO: keys)
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {"NFO:BANKNIFTY26AUG50000CE": {"last_price": 800.0, "oi": 500}},
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = _adapter_with_transport(handler)
+    chain = await adapter.get_option_chain("BANKNIFTY", date(2026, 8, 6))
+
+    assert chain.spot_price == 50100.0
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_uses_a_plain_stock_underlying_as_its_own_quote_symbol():
+    """A real stock underlying (e.g. RELIANCE) needs no index-name mapping -- its F&O `name` and
+    its real equity quote symbol are already identical, unlike the 3 real NSE indices above."""
+    real_csv_header = (
+        "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,"
+        "tick_size,lot_size,instrument_type,segment,exchange\n"
+    )
+    real_csv_rows = "1,1,RELIANCE26AUG2500CE,RELIANCE,0,2026-08-06,2500,0.05,250,CE,NFO-OPT,NFO\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/instruments/NFO":
+            return httpx.Response(200, text=real_csv_header + real_csv_rows)
+        if request.url.path == "/quote":
+            requested_keys = request.url.params.get_list("i")
+            if requested_keys[0].startswith("NSE:"):
+                assert requested_keys == [
+                    "NSE:RELIANCE"
+                ], f"unmapped symbol changed: {requested_keys}"
+                return httpx.Response(
+                    200,
+                    json={"status": "success", "data": {"NSE:RELIANCE": {"last_price": 2510.0}}},
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {"NFO:RELIANCE26AUG2500CE": {"last_price": 40.0, "oi": 200}},
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    adapter = _adapter_with_transport(handler)
+    chain = await adapter.get_option_chain("RELIANCE", date(2026, 8, 6))
+
+    assert chain.spot_price == 2510.0
+
+
+@pytest.mark.asyncio
+async def test_list_expiries_returns_real_distinct_future_expiries_sorted_ascending():
+    real_csv_header = (
+        "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,"
+        "tick_size,lot_size,instrument_type,segment,exchange\n"
+    )
+    real_csv_rows = (
+        # 2 real distinct expiries for NIFTY (CE+PE each), 1 real expired date (excluded),
+        # 1 real row for a different underlying (excluded)
+        "1,1,NIFTY27FEB24000CE,NIFTY,0,2027-02-25,24000,0.05,50,CE,NFO-OPT,NFO\n"
+        "2,2,NIFTY27FEB24000PE,NIFTY,0,2027-02-25,24000,0.05,50,PE,NFO-OPT,NFO\n"
+        "3,3,NIFTY27JAN24000CE,NIFTY,0,2027-01-28,24000,0.05,50,CE,NFO-OPT,NFO\n"
+        "4,4,NIFTY24JAN24000CE,NIFTY,0,2024-01-25,24000,0.05,50,CE,NFO-OPT,NFO\n"
+        "5,5,BANKNIFTY27FEB50000CE,BANKNIFTY,0,2027-02-25,50000,0.05,25,CE,NFO-OPT,NFO\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/instruments/NFO"
+        return httpx.Response(200, text=real_csv_header + real_csv_rows)
+
+    adapter = _adapter_with_transport(handler)
+    expiries = await adapter.list_expiries("NIFTY")
+
+    assert expiries == [date(2027, 1, 28), date(2027, 2, 25)]

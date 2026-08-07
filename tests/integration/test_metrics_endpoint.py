@@ -49,6 +49,9 @@ class _RecordingBroker(BrokerAdapter):
     async def get_option_chain(self, underlying: str, expiry):
         raise AssertionError("not used in this test")
 
+    async def list_expiries(self, underlying: str):
+        raise AssertionError("not used in this test")
+
 
 def test_metrics_endpoint_returns_prometheus_text_exposition_format() -> None:
     response = client.get("/metrics")

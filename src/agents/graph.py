@@ -20,6 +20,12 @@ decides retry-vs-escalate, so a rejected strategy is never silently dropped with
 record (`route_after_evaluation`'s FAIL branch used to go straight to `strategy_generator`/
 `ceo_agent`; it now always goes to `memory_ingest` first, which then routes onward via
 `route_after_memory_ingest`).
+
+REL-030: `options_strategy_agent` now sits between `strategy_generator` and
+`python_code_generator` -- for "F&O" strategies, it replaces `strategy_generator`'s own
+free-handed `option_legs` (no real market grounding) with a real chain-grounded proposal (real
+BrokerAdapter.get_option_chain, real listed strikes only); a no-op passthrough for "Equity"
+strategies. See that module's own docstring for the real gap this closes.
 """
 
 from collections.abc import Callable
@@ -37,6 +43,7 @@ from src.agents.nodes.evaluator import evaluator_node
 from src.agents.nodes.market_analyst import market_analyst_node
 from src.agents.nodes.memory_ingest import memory_ingest_node
 from src.agents.nodes.optimization import optimization_node
+from src.agents.nodes.options_strategy_agent import options_strategy_node
 from src.agents.nodes.python_code_generator import python_code_generator_node
 from src.agents.nodes.python_validator import python_validator_node
 from src.agents.nodes.risk_manager import risk_manager_node
@@ -114,6 +121,10 @@ def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
         "strategy_generator", _halt_on_entry("strategy_generator", strategy_generator_node)
     )  # type: ignore[call-overload]
     graph.add_node(
+        "options_strategy_agent",
+        _halt_on_entry("options_strategy_agent", options_strategy_node),
+    )  # type: ignore[call-overload]
+    graph.add_node(
         "python_code_generator",
         _halt_on_entry("python_code_generator", python_code_generator_node),
     )  # type: ignore[call-overload]
@@ -129,7 +140,8 @@ def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
     graph.set_entry_point("ceo_agent")
     graph.add_edge("ceo_agent", "market_analyst")
     graph.add_edge("market_analyst", "strategy_generator")
-    graph.add_edge("strategy_generator", "python_code_generator")
+    graph.add_edge("strategy_generator", "options_strategy_agent")
+    graph.add_edge("options_strategy_agent", "python_code_generator")
     graph.add_edge("python_code_generator", "compliance")
     graph.add_conditional_edges(
         "compliance",

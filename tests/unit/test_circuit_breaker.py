@@ -65,6 +65,9 @@ class FakeBrokerAdapter(BrokerAdapter):
     async def get_option_chain(self, underlying: str, expiry):
         raise NotImplementedError
 
+    async def list_expiries(self, underlying: str):
+        raise NotImplementedError
+
 
 def _dummy_response(broker_order_id: str = "X") -> OrderResponse:
     return OrderResponse(

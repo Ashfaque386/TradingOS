@@ -71,6 +71,9 @@ class NoOpFakeBroker(BrokerAdapter):
     async def get_option_chain(self, underlying: str, expiry):
         raise NotImplementedError
 
+    async def list_expiries(self, underlying: str):
+        raise NotImplementedError
+
 
 def test_configure_tracing_is_idempotent():
     configure_tracing()

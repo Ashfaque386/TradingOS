@@ -67,6 +67,9 @@ class RecordingBrokerAdapter(BrokerAdapter):
     async def get_option_chain(self, underlying: str, expiry):
         raise NotImplementedError
 
+    async def list_expiries(self, underlying: str):
+        raise NotImplementedError
+
 
 @pytest.mark.asyncio
 async def test_a_published_tick_flows_through_the_real_redis_listener_to_the_broker():

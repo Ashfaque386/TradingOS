@@ -136,6 +136,9 @@ class BrokerCircuitBreaker(BrokerAdapter):
     async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
         return await self.primary.get_option_chain(underlying, expiry)
 
+    async def list_expiries(self, underlying: str) -> list[date]:
+        return await self.primary.list_expiries(underlying)
+
     # --- circuit breaker internals ------------------------------------------------------
 
     @staticmethod

@@ -109,6 +109,9 @@ class _TimingBrokerWrapper(BrokerAdapter):
     async def get_option_chain(self, underlying: str, expiry):
         return await self._real.get_option_chain(underlying, expiry)
 
+    async def list_expiries(self, underlying: str):
+        return await self._real.list_expiries(underlying)
+
 
 def _percentile(sorted_values: list[float], pct: float) -> float:
     return sorted_values[int(len(sorted_values) * pct)]

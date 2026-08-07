@@ -308,6 +308,22 @@ class UpstoxAdapter(BrokerAdapter):
             underlying=underlying, expiry=expiry, spot_price=spot_price, instruments=instruments
         )
 
+    async def list_expiries(self, underlying: str) -> list[date]:
+        """REL-030 E30.1. Real Upstox endpoint -- `GET /option/contract?instrument_key=...`
+        (https://upstox.com/developer/api-documentation/get-option-contracts/), confirmed
+        against Upstox's own current docs -- with no `expiry_date` param, per that endpoint's
+        own documented purpose distinct from `/option/chain` above (which requires one real
+        expiry). `underlying` must already be a real Upstox instrument_key, same contract as
+        get_option_chain above. Real, confirmed limitation matching that method's own: Upstox's
+        sandbox 404s on this endpoint too -- covered by mocked-HTTP unit tests only here."""
+        response = await self._client.get("/option/contract", params={"instrument_key": underlying})
+        response.raise_for_status()
+        rows = response.json()["data"]
+
+        today = date.today()
+        expiries = {date.fromisoformat(row["expiry"]) for row in rows}
+        return sorted(e for e in expiries if e >= today)
+
     async def _fetch_single_order(self, broker_order_id: str) -> OrderResponse:
         for order in await self.get_order_book():
             if order.broker_order_id == broker_order_id:
