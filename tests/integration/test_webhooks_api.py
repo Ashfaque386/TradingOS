@@ -15,6 +15,7 @@ confirmed via an actual failing run, not hypothesized.
 import hashlib
 import hmac
 import json
+import time
 import uuid
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -240,3 +241,88 @@ def test_whatsapp_webhook_rejects_a_bad_signature():
         assert response.status_code == 401
     finally:
         vault.delete_webhook_secret("whatsapp")
+
+
+def _slack_headers(signing_secret: str, raw_body: bytes) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    base_string = f"v0:{timestamp}:".encode() + raw_body
+    signature = (
+        "v0=" + hmac.new(signing_secret.encode("utf-8"), base_string, hashlib.sha256).hexdigest()
+    )
+    return {
+        "X-Slack-Signature": signature,
+        "X-Slack-Request-Timestamp": timestamp,
+        "Content-Type": "application/json",
+    }
+
+
+def test_slack_url_verification_challenge_is_echoed_back_when_signed_correctly():
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    try:
+        payload = {
+            "token": "deprecated-verification-token",
+            "challenge": f"real-challenge-{uuid.uuid4()}",
+            "type": "url_verification",
+        }
+        raw_body = json.dumps(payload).encode("utf-8")
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers=_slack_headers(signing_secret, raw_body),
+        )
+        assert response.status_code == 200
+        assert response.json() == {"challenge": payload["challenge"]}
+    finally:
+        vault.delete_webhook_secret("slack")
+
+
+def test_slack_webhook_rejects_a_bad_signature():
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    try:
+        raw_body = json.dumps({"type": "event_callback"}).encode("utf-8")
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers={
+                "X-Slack-Signature": "v0=" + "0" * 64,
+                "X-Slack-Request-Timestamp": str(int(time.time())),
+                "Content-Type": "application/json",
+            },
+        )
+        assert response.status_code == 401
+    finally:
+        vault.delete_webhook_secret("slack")
+
+
+def test_slack_webhook_accepts_a_correctly_signed_event():
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    try:
+        # No "text" field -- same reasoning as the WhatsApp signature-only test above, real
+        # routing behavior is covered separately in tests/integration/test_webhooks_routing.py.
+        payload = {
+            "type": "event_callback",
+            "event_id": f"Ev{uuid.uuid4().hex[:12]}",
+            "event": {"type": "message", "channel": "C123", "user": "U123"},
+        }
+        raw_body = json.dumps(payload).encode("utf-8")
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers=_slack_headers(signing_secret, raw_body),
+        )
+        assert response.status_code == 200
+
+        with get_session() as session:
+            row = (
+                session.query(WebhookEvent)
+                .filter(WebhookEvent.channel == "Slack")
+                .order_by(WebhookEvent.received_at.desc())
+                .first()
+            )
+            assert row is not None
+    finally:
+        vault.delete_webhook_secret("slack")
+        _cleanup_events("Slack")

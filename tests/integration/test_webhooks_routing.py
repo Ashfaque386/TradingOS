@@ -494,6 +494,204 @@ def test_whatsapp_message_without_text_is_recorded_but_not_routed():
         vault.delete_webhook_secret("whatsapp")
 
 
+def _slack_signature_headers(signing_secret: str, raw_body: bytes) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    base_string = f"v0:{timestamp}:".encode() + raw_body
+    signature = (
+        "v0=" + hmac.new(signing_secret.encode("utf-8"), base_string, hashlib.sha256).hexdigest()
+    )
+    return {
+        "X-Slack-Signature": signature,
+        "X-Slack-Request-Timestamp": timestamp,
+        "Content-Type": "application/json",
+    }
+
+
+def test_slack_message_with_text_routes_to_ceo_agent_and_creates_a_pending_reply():
+    """REL-027: mirrors the Telegram test above -- Slack is real from scratch this release, no
+    prior inbound handling of any kind existed."""
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    channel_id = f"C{uuid.uuid4().hex[:10]}"
+    slack_user_id = f"U{uuid.uuid4().hex[:10]}"
+    marker = f"integration-test-{uuid.uuid4()}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    sender_id = _seed_verified_sender("Slack", slack_user_id)
+    try:
+        payload = {
+            "type": "event_callback",
+            "event_id": f"Ev{uuid.uuid4().hex[:12]}",
+            "event": {
+                "type": "message",
+                "channel": channel_id,
+                "user": slack_user_id,
+                "text": marker,
+            },
+        }
+        raw_body = json.dumps(payload).encode("utf-8")
+
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers=_slack_signature_headers(signing_secret, raw_body),
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+        event = _latest_webhook_event("Slack")
+        assert event.routed_to_agent == "ceo_agent_chat"
+
+        with get_session() as session:
+            messages = session.scalars(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.channel == "Slack",
+                    ChatMessage.external_metadata["chat_key"].astext == channel_id,
+                )
+                .order_by(ChatMessage.created_at)
+            ).all()
+
+        assert len(messages) == 2
+        user_message, assistant_message = messages
+        assert user_message.role == "user"
+        assert user_message.content == marker
+        assert user_message.status == "Completed"
+        assert assistant_message.role == "assistant"
+        assert assistant_message.status == "Pending"
+    finally:
+        vault.delete_webhook_secret("slack")
+        _cleanup("Slack", channel_id)
+        _cleanup_sender(sender_id)
+
+
+def test_slack_unrecognized_sender_is_recorded_but_not_routed():
+    """SEC-030: real signature, real text, but no verified NotificationChannel binds this
+    Slack user ID to any TradingOS user -- must be recorded for audit, never routed."""
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    channel_id = f"C{uuid.uuid4().hex[:10]}"
+    slack_user_id = f"U{uuid.uuid4().hex[:10]}"  # deliberately never seeded
+    marker = f"integration-test-{uuid.uuid4()}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    try:
+        payload = {
+            "type": "event_callback",
+            "event_id": f"Ev{uuid.uuid4().hex[:12]}",
+            "event": {
+                "type": "message",
+                "channel": channel_id,
+                "user": slack_user_id,
+                "text": marker,
+            },
+        }
+        raw_body = json.dumps(payload).encode("utf-8")
+
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers=_slack_signature_headers(signing_secret, raw_body),
+        )
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+        event = _latest_webhook_event("Slack")
+        assert event.routed_to_agent is None
+
+        with get_session() as session:
+            count = (
+                session.query(ChatMessage)
+                .filter(
+                    ChatMessage.channel == "Slack",
+                    ChatMessage.external_metadata["chat_key"].astext == channel_id,
+                )
+                .count()
+            )
+        assert count == 0, "an unrecognized sender's message must never create a ChatMessage pair"
+    finally:
+        vault.delete_webhook_secret("slack")
+
+
+def test_slack_message_without_text_is_recorded_but_not_routed():
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    channel_id = f"C{uuid.uuid4().hex[:10]}"
+    slack_user_id = f"U{uuid.uuid4().hex[:10]}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    try:
+        # A real file-share event has no "text" field.
+        payload = {
+            "type": "event_callback",
+            "event_id": f"Ev{uuid.uuid4().hex[:12]}",
+            "event": {"type": "message", "channel": channel_id, "user": slack_user_id},
+        }
+        raw_body = json.dumps(payload).encode("utf-8")
+
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers=_slack_signature_headers(signing_secret, raw_body),
+        )
+        assert response.status_code == 200
+
+        event = _latest_webhook_event("Slack")
+        assert event.routed_to_agent is None
+
+        with get_session() as session:
+            count = (
+                session.query(ChatMessage)
+                .filter(
+                    ChatMessage.channel == "Slack",
+                    ChatMessage.external_metadata["chat_key"].astext == channel_id,
+                )
+                .count()
+            )
+        assert count == 0
+    finally:
+        vault.delete_webhook_secret("slack")
+
+
+def test_slack_bot_authored_message_is_recorded_but_not_routed():
+    """REL-027: Slack delivers every channel message, including this app's own real replies, to
+    every subscribed app -- a real bot_id on the event means it must never be routed back to the
+    CEO Agent, or a real infinite reply loop would result."""
+    signing_secret = f"test-signing-secret-{uuid.uuid4()}"
+    channel_id = f"C{uuid.uuid4().hex[:10]}"
+    marker = f"integration-test-{uuid.uuid4()}"
+    vault.write_webhook_secret("slack", {"signing_secret": signing_secret})
+    try:
+        payload = {
+            "type": "event_callback",
+            "event_id": f"Ev{uuid.uuid4().hex[:12]}",
+            "event": {
+                "type": "message",
+                "channel": channel_id,
+                "text": marker,
+                "bot_id": "B0REALBOTID",
+            },
+        }
+        raw_body = json.dumps(payload).encode("utf-8")
+
+        response = client.post(
+            "/api/v1/webhooks/slack",
+            content=raw_body,
+            headers=_slack_signature_headers(signing_secret, raw_body),
+        )
+        assert response.status_code == 200
+
+        event = _latest_webhook_event("Slack")
+        assert event.routed_to_agent is None
+
+        with get_session() as session:
+            count = (
+                session.query(ChatMessage)
+                .filter(
+                    ChatMessage.channel == "Slack",
+                    ChatMessage.external_metadata["chat_key"].astext == channel_id,
+                )
+                .count()
+            )
+        assert count == 0
+    finally:
+        vault.delete_webhook_secret("slack")
+
+
 def test_discord_non_command_interaction_is_recorded_but_not_routed():
     private_key = Ed25519PrivateKey.generate()
     public_key_hex = private_key.public_key().public_bytes_raw().hex()

@@ -1,7 +1,7 @@
-"""Per-platform webhook signature verification (REL-007 E7.7, SEC-025..028): real cryptographic
-verification for each of the three supported inbound webhook sources, genuinely testable with
-synthetic signed payloads (real HMAC/Ed25519 primitives) without needing a live Telegram/Discord/
-WhatsApp account or bot registration.
+"""Per-platform webhook signature verification (REL-007 E7.7 SEC-025..028, REL-027 SEC-047): real
+cryptographic verification for each of the four supported inbound webhook sources, genuinely
+testable with synthetic signed payloads (real HMAC/Ed25519 primitives) without needing a live
+Telegram/Discord/WhatsApp/Slack account or bot registration.
 
 All three verify against the *exact raw request bytes* -- callers (src/api/routers/webhooks.py)
 must read `await request.body()` before any JSON parsing and pass those raw bytes here.
@@ -50,3 +50,23 @@ def verify_whatsapp_signature(
     provided_hex = signature_header[len("sha256=") :]
     expected = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(provided_hex, expected)
+
+
+def verify_slack_signature(
+    raw_body: bytes, signature_header: str | None, timestamp: str | None, *, signing_secret: str
+) -> bool:
+    """REL-027 (SEC-047): Slack's own v0 request-signing scheme -- HMAC-SHA256 over
+    `"v0:" + timestamp + ":" + raw_body`, header format `v0=<hex>`
+    (https://docs.slack.dev/authentication/verifying-requests-from-slack, verified against
+    Slack's current docs, not guessed). The caller is responsible for the separate 5-minute
+    replay-window timestamp check Slack's own docs also specify -- this function only verifies
+    the signature itself, matching every other verify_* function in this module."""
+    if signature_header is None or timestamp is None:
+        return False
+    if not signature_header.startswith("v0="):
+        return False
+    base_string = f"v0:{timestamp}:".encode() + raw_body
+    expected = (
+        "v0=" + hmac.new(signing_secret.encode("utf-8"), base_string, hashlib.sha256).hexdigest()
+    )
+    return hmac.compare_digest(signature_header, expected)

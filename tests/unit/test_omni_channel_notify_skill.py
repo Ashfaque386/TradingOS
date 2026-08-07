@@ -89,3 +89,22 @@ def test_whatsapp_dispatch_raises_when_no_access_token_configured():
         mock_settings.return_value.whatsapp_access_token = None
         with pytest.raises(SkillNotImplementedError, match="access token"):
             OmniChannelNotifySkill().execute(channel="whatsapp", text="hi", to="911234567890")
+
+
+@patch("src.agents.tools.skills._slack_bot_token", return_value="real-token")
+@patch("src.agents.tools.skills.send_slack_message", new_callable=AsyncMock)
+def test_slack_dispatch_calls_the_real_send_function(mock_send, _mock_token):
+    mock_send.return_value = {"ok": True, "channel": "C123"}
+    result = OmniChannelNotifySkill().execute(channel="slack", text="hi", channel_id="C123")
+    assert result == {"ok": True, "channel": "C123"}
+    mock_send.assert_awaited_once_with(channel="C123", text="hi", bot_token="real-token")
+
+
+def test_slack_dispatch_raises_when_no_bot_token_configured():
+    with (
+        patch("src.agents.tools.skills.vault.read_bot_token", return_value=None),
+        patch("src.agents.tools.skills.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.slack_bot_token = None
+        with pytest.raises(SkillNotImplementedError, match="bot token"):
+            OmniChannelNotifySkill().execute(channel="slack", text="hi", channel_id="C123")

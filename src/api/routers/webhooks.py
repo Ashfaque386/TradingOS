@@ -1,5 +1,5 @@
-"""Inbound omni-channel webhook gateway (REL-007 E7.7, SEC-025..031): real signature
-verification, replay prevention, and rate limiting for each platform.
+"""Inbound omni-channel webhook gateway (REL-007 E7.7 SEC-025..031, REL-027 SEC-047): real
+signature verification, replay prevention, and rate limiting for each platform.
 
 REL-010 E10.1: Telegram and Discord messages are now actually routed to the CEO Agent (via the
 same real, already-tested reply pipeline the in-dashboard chat uses --
@@ -7,7 +7,12 @@ src/api/routers/chat.py::generate_and_store_reply) and a real reply is sent back
 `notify_omni_channel` (src/agents/tools/skills.py, REL-010 E10.2). REL-026: WhatsApp now routes
 the exact same way -- the inbound receiver's real Meta webhook verification handshake, real
 signature verification, and real replay/rate-limit checks were already fully real since REL-007;
-only the routing/reply half was ever missing.
+only the routing/reply half was ever missing. REL-027: Slack is real from scratch (no prior
+config/route/notifier existed at all, confirmed via a full-repo grep before building this) --
+its own `POST /slack` handler additionally handles the one-time Events API `url_verification`
+handshake, and filters out any event carrying a real `bot_id` (Slack delivers every channel
+message, including this app's own replies, to every subscribed app -- routing a bot's own reply
+back to itself would create a real infinite loop).
 
 No JWT/require_role auth on any route here -- the platform's own signature IS the
 authentication for "this really came from Telegram/Discord". UPDATE 2026-08-01 (REL-014 E14.3,
@@ -42,6 +47,7 @@ from src.core.webhook_rate_limit import check_rate_limit
 from src.core.webhook_replay import is_replay
 from src.core.webhook_security import (
     verify_discord_signature,
+    verify_slack_signature,
     verify_telegram_secret_token,
     verify_whatsapp_signature,
 )
@@ -386,5 +392,75 @@ async def whatsapp_webhook(request: Request) -> dict[str, bool]:
         user_text=text,
         external_metadata={"chat_id": chat_id},
         notify_kwargs={"channel": "whatsapp", "to": chat_id},
+    )
+    return {"ok": True}
+
+
+@router.post("/slack")
+async def slack_webhook(request: Request) -> dict[str, Any]:
+    settings = get_settings()
+    stored = vault.read_webhook_secret("slack")
+    signing_secret = (stored or {}).get("signing_secret") or settings.slack_signing_secret
+    if not signing_secret:
+        raise HTTPException(status_code=503, detail="Slack signing secret not configured")
+
+    raw_body = await request.body()
+    signature_header = request.headers.get("X-Slack-Signature")
+    timestamp = request.headers.get("X-Slack-Request-Timestamp")
+    if not verify_slack_signature(
+        raw_body, signature_header, timestamp, signing_secret=signing_secret
+    ):
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+    assert timestamp is not None  # verify_slack_signature above already rejected a None one
+
+    if abs(time.time() - float(timestamp)) > _REPLAY_TIMESTAMP_SKEW_SECONDS:
+        raise HTTPException(status_code=401, detail="Timestamp outside allowed skew")
+
+    body = await request.json()
+    if body.get("type") == "url_verification":
+        # Slack's one-time Events API registration handshake -- must echo the real challenge
+        # value back verbatim, only after real signature verification above ("verify the
+        # request's authenticity" is Slack's own documented requirement before responding).
+        return {"challenge": body.get("challenge", "")}
+
+    event = body.get("event", {})
+    event_id = body.get("event_id", "unknown")
+
+    redis_client = get_redis_client()
+    if is_replay("slack", str(event_id), redis_client=redis_client):
+        return {"ok": True}
+
+    channel_id = str(event.get("channel", "unknown"))
+    if not check_rate_limit("slack", channel_id, redis_client=redis_client):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    if event.get("type") != "message" or event.get("bot_id"):
+        # A non-message event (e.g. a reaction), or a message carrying a real bot_id -- Slack
+        # delivers every channel message, including this app's own replies, to every subscribed
+        # app. Routing a bot-authored message (ours or another app's) back to the CEO Agent would
+        # both be nonsensical and, for our own replies specifically, a real infinite loop.
+        _record_event("Slack", body)
+        return {"ok": True}
+
+    text = event.get("text")
+    if not text:
+        # A real Slack message with no text (a file upload, an emoji-only reaction message,
+        # etc.) -- still recorded for real, just not routed. Same convention as Telegram above.
+        _record_event("Slack", body)
+        return {"ok": True}
+
+    slack_user_id = str(event.get("user", "unknown"))
+    if _resolve_sender("Slack", slack_user_id) is None:
+        # SEC-030: see the Telegram handler's matching check above.
+        _record_event("Slack", body)
+        return {"ok": True}
+
+    _record_event_and_route(
+        channel="Slack",
+        raw_body=body,
+        external_chat_key=channel_id,
+        user_text=text,
+        external_metadata={"channel_id": channel_id, "slack_user_id": slack_user_id},
+        notify_kwargs={"channel": "slack", "channel_id": channel_id},
     )
     return {"ok": True}

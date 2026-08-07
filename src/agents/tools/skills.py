@@ -9,8 +9,8 @@ Real, working skills (backed by infrastructure that already exists from Phase 1/
     src/engine/sandbox/runner.py) -- the full dry-run named in Phase_4_AI_Agent_Design.md's
     Python Validator Agent spec, now real rather than a stand-in.
   - fetch_portfolio_status: real query against the PORTFOLIO_POSITIONS table.
-  - notify_omni_channel: real Telegram/Discord/WhatsApp outbound dispatch (REL-010 E10.2,
-    WhatsApp added REL-026).
+  - notify_omni_channel: real Telegram/Discord/WhatsApp/Slack outbound dispatch (REL-010 E10.2,
+    WhatsApp added REL-026, Slack added REL-027) -- all 4 of FR-10's named platforms now real.
   - fetch_india_vix, fetch_nse_sector_data: real Yahoo Finance data (REL-010 E10.3), confirmed
     working tickers, no new vendor/API key.
   - query_news_sentiment: real Qdrant semantic search over the news_sentiment collection
@@ -37,6 +37,7 @@ from qdrant_client import QdrantClient
 from src.agents.tools.base import BaseSkill
 from src.agents.tools.notifiers import (
     send_discord_followup,
+    send_slack_message,
     send_telegram_message,
     send_whatsapp_message,
 )
@@ -339,20 +340,39 @@ def _whatsapp_access_token() -> str:
     return token
 
 
+def _slack_bot_token() -> str:
+    settings = get_settings()
+    token = vault.read_bot_token("slack") or settings.slack_bot_token
+    if not token:
+        raise SkillNotImplementedError(
+            "notify_omni_channel(channel='slack') needs a real bot token -- none configured in "
+            "Vault or SLACK_BOT_TOKEN"
+        )
+    return token
+
+
 class OmniChannelNotifySkill(BaseSkill):
     name = "notify_omni_channel"
-    description = "Real outbound Telegram/Discord/WhatsApp dispatch (REL-010 E10.2, REL-026)."
-    version = "1.1.0"
+    description = (
+        "Real outbound Telegram/Discord/WhatsApp/Slack dispatch (REL-010 E10.2, REL-026, REL-027)."
+    )
+    version = "1.2.0"
 
     def execute(  # type: ignore[override]
-        self, *, channel: Literal["telegram", "discord", "whatsapp"], text: str, **kwargs: Any
+        self,
+        *,
+        channel: Literal["telegram", "discord", "whatsapp", "slack"],
+        text: str,
+        **kwargs: Any,
     ) -> Any:
         # `SkillNotImplementedError` is reserved for "not configured/not built" only -- a real
-        # `httpx.HTTPStatusError` from an actually-attempted send (bot blocked, bad chat_id, ...)
-        # is deliberately left to propagate un-wrapped, so a caller distinguishing "this
-        # capability doesn't exist" from "it exists and just failed this once" (e.g.
-        # src/api/routers/webhooks.py deciding whether to record a real delivery failure) can
-        # still tell the two apart, matching every other real skill's honesty convention.
+        # `httpx.HTTPStatusError` (or, for Slack specifically, `RuntimeError` -- see
+        # send_slack_message's own docstring for why) from an actually-attempted send (bot
+        # blocked, bad chat_id, ...) is deliberately left to propagate un-wrapped, so a caller
+        # distinguishing "this capability doesn't exist" from "it exists and just failed this
+        # once" (e.g. src/api/routers/webhooks.py deciding whether to record a real delivery
+        # failure) can still tell the two apart, matching every other real skill's honesty
+        # convention.
         if channel == "telegram":
             return asyncio.run(
                 send_telegram_message(
@@ -373,23 +393,31 @@ class OmniChannelNotifySkill(BaseSkill):
                     content=text,
                 )
             )
-        # channel == "whatsapp" (REL-026): the Literal type above already narrows this to the
-        # only remaining option, matching the discord branch's own precedent of not needing a
-        # final else/raise.
-        phone_number_id = (
-            kwargs.get("phone_number_id") or get_settings().whatsapp_business_phone_number_id
-        )
-        if not phone_number_id:
-            raise SkillNotImplementedError(
-                "notify_omni_channel(channel='whatsapp') needs a real phone_number_id -- none "
-                "provided and WHATSAPP_BUSINESS_PHONE_NUMBER_ID is not configured"
+        if channel == "whatsapp":
+            phone_number_id = (
+                kwargs.get("phone_number_id") or get_settings().whatsapp_business_phone_number_id
             )
+            if not phone_number_id:
+                raise SkillNotImplementedError(
+                    "notify_omni_channel(channel='whatsapp') needs a real phone_number_id -- "
+                    "none provided and WHATSAPP_BUSINESS_PHONE_NUMBER_ID is not configured"
+                )
+            return asyncio.run(
+                send_whatsapp_message(
+                    to=kwargs["to"],
+                    text=text,
+                    phone_number_id=phone_number_id,
+                    access_token=_whatsapp_access_token(),
+                )
+            )
+        # channel == "slack" (REL-027): the Literal type above already narrows this to the only
+        # remaining option, matching the whatsapp branch's own precedent of not needing a final
+        # else/raise. `channel_id` (the Slack channel to post into) is deliberately not named
+        # `channel` in kwargs -- that name is already bound to this method's own platform
+        # selector above.
         return asyncio.run(
-            send_whatsapp_message(
-                to=kwargs["to"],
-                text=text,
-                phone_number_id=phone_number_id,
-                access_token=_whatsapp_access_token(),
+            send_slack_message(
+                channel=kwargs["channel_id"], text=text, bot_token=_slack_bot_token()
             )
         )
 

@@ -7,6 +7,7 @@ import pytest
 
 from src.agents.tools.notifiers import (
     send_discord_followup,
+    send_slack_message,
     send_telegram_message,
     send_whatsapp_message,
 )
@@ -130,5 +131,62 @@ async def test_send_whatsapp_message_raises_on_real_http_error():
             text="hi",
             phone_number_id="123456",
             access_token="bad-token",
+            transport=httpx.MockTransport(handler),
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_slack_message_posts_the_real_web_api_shape():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        captured["body"] = request.content
+        return httpx.Response(200, json={"ok": True, "channel": "C123", "ts": "1700000000.000100"})
+
+    result = await send_slack_message(
+        channel="C123",
+        text="hello from TradingOS",
+        bot_token="xoxb-test-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://slack.com/api/chat.postMessage"
+    assert captured["headers"]["authorization"] == "Bearer xoxb-test-token"
+    assert b'"channel":"C123"' in captured["body"]
+    assert b'"text":"hello from TradingOS"' in captured["body"]
+    assert result == {"ok": True, "channel": "C123", "ts": "1700000000.000100"}
+
+
+@pytest.mark.asyncio
+async def test_send_slack_message_raises_on_real_http_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"ok": False, "error": "internal_error"})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await send_slack_message(
+            channel="C123",
+            text="hi",
+            bot_token="xoxb-test-token",
+            transport=httpx.MockTransport(handler),
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_slack_message_raises_a_real_runtime_error_on_a_200_but_ok_false_response():
+    # A real, confirmed Slack platform quirk: chat.postMessage returns HTTP 200 even on a real
+    # failure (e.g. bad token, channel not found) -- raise_for_status() alone would never catch
+    # this, so send_slack_message must check the "ok" field itself.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "error": "channel_not_found"})
+
+    with pytest.raises(RuntimeError, match="channel_not_found"):
+        await send_slack_message(
+            channel="C-does-not-exist",
+            text="hi",
+            bot_token="xoxb-test-token",
             transport=httpx.MockTransport(handler),
         )

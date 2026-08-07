@@ -155,6 +155,9 @@ class Settings(BaseSettings):
     discord_public_key: str | None = None
     whatsapp_app_secret: str | None = None
     whatsapp_verify_token: str | None = None
+    # REL-027: Slack's own request-signing secret (verifies X-Slack-Signature), distinct from
+    # slack_bot_token below the same way whatsapp_app_secret is distinct from whatsapp_access_token.
+    slack_signing_secret: str | None = None
 
     # REL-010 E10.2 (Notification/Omni-Channel Agent, AGT-022): OUTBOUND credentials -- distinct
     # from the inbound-only secrets directly above (those verify a request came from the real
@@ -170,6 +173,11 @@ class Settings(BaseSettings):
     # `/{phone_number_id}/messages` send URL), not a secret.
     whatsapp_access_token: str | None = None
     whatsapp_business_phone_number_id: str | None = None
+    # REL-027: Slack's outbound bot token (xoxb-...), same Vault-first pattern via
+    # read_bot_token("slack"). Unlike Discord/WhatsApp there's no separate public identifier
+    # needed -- chat.postMessage takes the target channel ID directly per-call, not a fixed
+    # per-app URL component.
+    slack_bot_token: str | None = None
 
     # REL-007 E7.6 (TLS, SEC-023/024). Gates src/agents/scheduler.py's APScheduler so the
     # sibling `app-tls` compose service (same image, HTTPS-only) doesn't double-fire the daily

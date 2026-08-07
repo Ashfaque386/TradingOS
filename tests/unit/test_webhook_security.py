@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from src.core.webhook_security import (
     verify_discord_signature,
+    verify_slack_signature,
     verify_telegram_secret_token,
     verify_whatsapp_signature,
 )
@@ -102,3 +103,53 @@ def test_whatsapp_tampered_payload_is_rejected():
 
 def test_whatsapp_missing_prefix_is_rejected():
     assert verify_whatsapp_signature(b"body", "deadbeef", app_secret="secret") is False
+
+
+def _slack_signature(signing_secret: str, timestamp: str, raw_body: bytes) -> str:
+    base_string = f"v0:{timestamp}:".encode() + raw_body
+    return "v0=" + hmac.new(signing_secret.encode("utf-8"), base_string, hashlib.sha256).hexdigest()
+
+
+def test_slack_correctly_signed_payload_is_accepted():
+    signing_secret = "real-signing-secret"
+    timestamp = "1700000000"
+    raw_body = b'{"type": "event_callback"}'
+    signature = _slack_signature(signing_secret, timestamp, raw_body)
+    assert (
+        verify_slack_signature(raw_body, signature, timestamp, signing_secret=signing_secret)
+        is True
+    )
+
+
+def test_slack_tampered_payload_is_rejected():
+    signing_secret = "real-signing-secret"
+    timestamp = "1700000000"
+    raw_body = b'{"type": "event_callback"}'
+    signature = _slack_signature(signing_secret, timestamp, raw_body)
+    tampered_body = b'{"type": "tampered"}'
+    assert (
+        verify_slack_signature(tampered_body, signature, timestamp, signing_secret=signing_secret)
+        is False
+    )
+
+
+def test_slack_wrong_timestamp_in_base_string_is_rejected():
+    # The signature was computed for a different timestamp than the one presented alongside it --
+    # the base string ("v0:{timestamp}:{body}") must use the SAME timestamp on both sides.
+    signing_secret = "real-signing-secret"
+    raw_body = b'{"type": "event_callback"}'
+    signature = _slack_signature(signing_secret, "1700000000", raw_body)
+    assert (
+        verify_slack_signature(raw_body, signature, "1700000001", signing_secret=signing_secret)
+        is False
+    )
+
+
+def test_slack_missing_prefix_is_rejected():
+    assert (
+        verify_slack_signature(b"body", "deadbeef", "1700000000", signing_secret="secret") is False
+    )
+
+
+def test_slack_missing_timestamp_is_rejected():
+    assert verify_slack_signature(b"body", "v0=deadbeef", None, signing_secret="secret") is False
