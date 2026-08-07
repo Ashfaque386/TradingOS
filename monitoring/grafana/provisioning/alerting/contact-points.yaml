@@ -1,14 +1,24 @@
-# REL-020 E20.2: real Slack contact point, provisioned as code (same discipline as the
-# datasource/dashboard provisioning above -- no manual click-through Grafana setup).
+# REL-020 E20.2 (Slack) + REL-029 E29.1/E29.2 (Telegram, Discord): real multi-channel downtime
+# contact point, provisioned as code (same discipline as the datasource/dashboard provisioning
+# above -- no manual click-through Grafana setup).
 #
-# The webhook URL is never written here in plaintext: `$__env{SLACK_WEBHOOK_URL}` is Grafana's
-# own provisioning-time environment-variable expansion, reading the SLACK_WEBHOOK_URL env var
-# that docker-compose.yml passes into the grafana container from the host's gitignored .env.
+# One contact point, three receivers/integrations: Grafana sends a real notification to every
+# receiver listed under `receivers:` for each alert routed to this contact point -- no
+# `continue: true` sibling-route trick needed in notification-policies.yaml, since there's only
+# one alert rule (tradingos-market-hours-downtime) and it should always reach all three channels.
+#
+# No secret is ever written here in plaintext: `$__env{...}` is Grafana's own provisioning-time
+# environment-variable expansion, reading the real values docker-compose.yml passes into the
+# grafana container from the host's gitignored .env.
+#
+# Field names below (bottoken/chatid for Telegram, url for Discord) are Grafana's own real
+# receiver-settings schema (github.com/grafana/alerting/receivers/{telegram,discord}/config.go),
+# confirmed before writing this file, not guessed.
 apiVersion: 1
 
 contactPoints:
   - orgId: 1
-    name: slack-downtime-alerts
+    name: tradingos-downtime-alerts
     receivers:
       - uid: slack-downtime-webhook
         type: slack
@@ -16,4 +26,26 @@ contactPoints:
           url: $__env{SLACK_WEBHOOK_URL}
           title: '{{ template "default.title" . }}'
           text: '{{ template "default.message" . }}'
+        disableResolveMessage: false
+      - uid: telegram-downtime-alerts
+        type: telegram
+        settings:
+          bottoken: $__env{TELEGRAM_ALERT_BOT_TOKEN}
+          # NOT Grafana's own $__env{} syntax -- see provisioning-entrypoint.sh for why. This
+          # placeholder is substituted with the real chat_id by that wrapper script before
+          # Grafana's file provisioner ever reads this file, working around a real, confirmed
+          # upstream Grafana bug (grafana/grafana#69950) where $__env{}'s own substitution
+          # re-infers a purely-numeric value's JSON type as a number regardless of YAML
+          # quoting/tagging, crashing chatid's real string-typed field. Already quoted here so the
+          # substituted result is a valid, correctly-typed YAML string with no further
+          # Grafana-side substitution involved.
+          chatid: "__TELEGRAM_ALERT_CHAT_ID_PLACEHOLDER__"
+          message: '{{ template "default.message" . }}'
+        disableResolveMessage: false
+      - uid: discord-downtime-webhook
+        type: discord
+        settings:
+          url: $__env{DISCORD_ALERT_WEBHOOK_URL}
+          title: '{{ template "default.title" . }}'
+          message: '{{ template "default.message" . }}'
         disableResolveMessage: false

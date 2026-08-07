@@ -1,13 +1,14 @@
-# REL-020 E20.2: root notification policy -- routes every alert in this (currently
-# single-alert) Grafana instance to the real Slack contact point. A dedicated matcher-based
-# route isn't needed yet since tradingos-market-hours-downtime (rules.yaml) is the only alert
-# rule provisioned; add a `routes:` entry here if/when a second alert with a different
-# destination is introduced.
+# REL-020 E20.2 (Slack) + REL-029 (Telegram, Discord): root notification policy -- routes every
+# alert in this (currently single-alert) Grafana instance to the real multi-channel contact point
+# (contact-points.yaml's tradingos-downtime-alerts, which itself fans out to all three receivers).
+# A dedicated matcher-based route isn't needed since tradingos-market-hours-downtime (rules.yaml)
+# is the only alert rule provisioned; add a `routes:` entry here if/when a second alert with a
+# different destination is introduced.
 apiVersion: 1
 
 policies:
   - orgId: 1
-    receiver: slack-downtime-alerts
+    receiver: tradingos-downtime-alerts
     group_by: ["alertname"]
     group_wait: 30s
     group_interval: 5m

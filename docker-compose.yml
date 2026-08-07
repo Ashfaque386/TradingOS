@@ -395,7 +395,16 @@ services:
   grafana:
     image: tradingos-grafana:latest
     build:
-      dockerfile_inline: "FROM grafana/grafana:latest"
+      context: ./monitoring/grafana
+      dockerfile_inline: |
+        FROM grafana/grafana:latest
+        USER root
+        COPY provisioning-entrypoint.sh /provisioning-entrypoint.sh
+        RUN chmod +x /provisioning-entrypoint.sh && \
+            mkdir -p /etc/grafana/provisioning && \
+            chown -R grafana:root /etc/grafana/provisioning
+        USER grafana
+        ENTRYPOINT ["/provisioning-entrypoint.sh"]
     container_name: tradingos-grafana
     restart: unless-stopped
     depends_on:
@@ -408,8 +417,19 @@ services:
       # never committed) and expanded into the alerting contact-point provisioning YAML via
       # Grafana's own $__env{...} syntax -- see monitoring/grafana/provisioning/alerting/.
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      # REL-029 E29.1/E29.2: real Telegram bot token/chat_id and Discord Incoming Webhook URL for
+      # the same downtime alert, same .env-gitignored / $__env{...} pattern as Slack above. A
+      # deliberately separate bot token/chat_id from TELEGRAM_BOT_TOKEN (the CEO Agent chat bot,
+      # REL-010) -- the alert destination isn't necessarily the same chat.
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      DISCORD_ALERT_WEBHOOK_URL: ${DISCORD_ALERT_WEBHOOK_URL:-}
     volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      # REL-029: mounted read-only at -src, not directly at /etc/grafana/provisioning --
+      # provisioning-entrypoint.sh copies it into a writable path and patches the one field
+      # Grafana's own $__env{} substitution can't handle correctly (see that script's own
+      # comment) before handing off to Grafana's real startup script.
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning-src:ro
       - grafana_data:/var/lib/grafana
     ports:
       # Host 3001 -- 3000 is already bound by `frontend`.
