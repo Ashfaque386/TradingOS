@@ -328,7 +328,7 @@ export const ALERT_LEVELS = [
 ] as const;
 export type AlertLevel = (typeof ALERT_LEVELS)[number];
 
-export type ChannelType = "Telegram" | "Discord" | "WhatsApp" | "Slack" | "Email";
+export type ChannelType = "Telegram" | "Discord" | "Slack" | "Email";
 
 export interface NotificationChannel {
   id: string;

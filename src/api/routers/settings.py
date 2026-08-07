@@ -58,7 +58,7 @@ _can_manage_llm_keys = require_role(ROLE_SYSTEM_ADMINISTRATOR, audit_denials=Tru
 LLM_PROVIDER_IDS = ("openai", "anthropic", "deepseek", "gemini", "huggingface", "opencode")
 
 ALERT_LEVELS = ("critical_errors", "executed_trades", "risk_warnings", "strategy_promotions")
-ChannelType = Literal["Telegram", "Discord", "WhatsApp", "Slack", "Email"]
+ChannelType = Literal["Telegram", "Discord", "Slack", "Email"]
 
 
 def _mask(secret: str | None) -> str | None:

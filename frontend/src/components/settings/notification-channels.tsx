@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { slideUp, staggerContainer, staggerItem } from "@/lib/motion";
 import type { AlertLevel, ChannelType, NotificationChannel } from "@/lib/api";
 
-const CHANNEL_TYPES: ChannelType[] = ["Telegram", "Discord", "WhatsApp", "Slack", "Email"];
+const CHANNEL_TYPES: ChannelType[] = ["Telegram", "Discord", "Slack", "Email"];
 
 const ALERT_LABELS: Record<AlertLevel, string> = {
   critical_errors: "Critical errors",

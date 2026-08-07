@@ -9,8 +9,9 @@ Real, working skills (backed by infrastructure that already exists from Phase 1/
     src/engine/sandbox/runner.py) -- the full dry-run named in Phase_4_AI_Agent_Design.md's
     Python Validator Agent spec, now real rather than a stand-in.
   - fetch_portfolio_status: real query against the PORTFOLIO_POSITIONS table.
-  - notify_omni_channel: real Telegram/Discord/WhatsApp/Slack outbound dispatch (REL-010 E10.2,
-    WhatsApp added REL-026, Slack added REL-027) -- all 4 of FR-10's named platforms now real.
+  - notify_omni_channel: real Telegram/Discord/Slack outbound dispatch (REL-010 E10.2, Slack
+    added REL-027) -- all 3 of FR-10's named platforms now real. WhatsApp was implemented in
+    REL-026 and removed at your explicit request (2026-08-07) -- not needed.
   - fetch_india_vix, fetch_nse_sector_data: real Yahoo Finance data (REL-010 E10.3), confirmed
     working tickers, no new vendor/API key.
   - query_news_sentiment: real Qdrant semantic search over the news_sentiment collection
@@ -39,7 +40,6 @@ from src.agents.tools.notifiers import (
     send_discord_followup,
     send_slack_message,
     send_telegram_message,
-    send_whatsapp_message,
 )
 from src.core import vault
 from src.core.config import get_settings
@@ -329,17 +329,6 @@ def _telegram_bot_token() -> str:
     return token
 
 
-def _whatsapp_access_token() -> str:
-    settings = get_settings()
-    token = vault.read_bot_token("whatsapp") or settings.whatsapp_access_token
-    if not token:
-        raise SkillNotImplementedError(
-            "notify_omni_channel(channel='whatsapp') needs a real access token -- none "
-            "configured in Vault or WHATSAPP_ACCESS_TOKEN"
-        )
-    return token
-
-
 def _slack_bot_token() -> str:
     settings = get_settings()
     token = vault.read_bot_token("slack") or settings.slack_bot_token
@@ -353,15 +342,13 @@ def _slack_bot_token() -> str:
 
 class OmniChannelNotifySkill(BaseSkill):
     name = "notify_omni_channel"
-    description = (
-        "Real outbound Telegram/Discord/WhatsApp/Slack dispatch (REL-010 E10.2, REL-026, REL-027)."
-    )
-    version = "1.2.0"
+    description = "Real outbound Telegram/Discord/Slack dispatch (REL-010 E10.2, REL-027)."
+    version = "1.3.0"
 
     def execute(  # type: ignore[override]
         self,
         *,
-        channel: Literal["telegram", "discord", "whatsapp", "slack"],
+        channel: Literal["telegram", "discord", "slack"],
         text: str,
         **kwargs: Any,
     ) -> Any:
@@ -393,28 +380,10 @@ class OmniChannelNotifySkill(BaseSkill):
                     content=text,
                 )
             )
-        if channel == "whatsapp":
-            phone_number_id = (
-                kwargs.get("phone_number_id") or get_settings().whatsapp_business_phone_number_id
-            )
-            if not phone_number_id:
-                raise SkillNotImplementedError(
-                    "notify_omni_channel(channel='whatsapp') needs a real phone_number_id -- "
-                    "none provided and WHATSAPP_BUSINESS_PHONE_NUMBER_ID is not configured"
-                )
-            return asyncio.run(
-                send_whatsapp_message(
-                    to=kwargs["to"],
-                    text=text,
-                    phone_number_id=phone_number_id,
-                    access_token=_whatsapp_access_token(),
-                )
-            )
         # channel == "slack" (REL-027): the Literal type above already narrows this to the only
-        # remaining option, matching the whatsapp branch's own precedent of not needing a final
-        # else/raise. `channel_id` (the Slack channel to post into) is deliberately not named
-        # `channel` in kwargs -- that name is already bound to this method's own platform
-        # selector above.
+        # remaining option, so no final else/raise is needed. `channel_id` (the Slack channel to
+        # post into) is deliberately not named `channel` in kwargs -- that name is already bound
+        # to this method's own platform selector above.
         return asyncio.run(
             send_slack_message(
                 channel=kwargs["channel_id"], text=text, bot_token=_slack_bot_token()

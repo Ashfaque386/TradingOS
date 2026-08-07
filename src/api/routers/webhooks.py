@@ -4,15 +4,14 @@ signature verification, replay prevention, and rate limiting for each platform.
 REL-010 E10.1: Telegram and Discord messages are now actually routed to the CEO Agent (via the
 same real, already-tested reply pipeline the in-dashboard chat uses --
 src/api/routers/chat.py::generate_and_store_reply) and a real reply is sent back via
-`notify_omni_channel` (src/agents/tools/skills.py, REL-010 E10.2). REL-026: WhatsApp now routes
-the exact same way -- the inbound receiver's real Meta webhook verification handshake, real
-signature verification, and real replay/rate-limit checks were already fully real since REL-007;
-only the routing/reply half was ever missing. REL-027: Slack is real from scratch (no prior
-config/route/notifier existed at all, confirmed via a full-repo grep before building this) --
-its own `POST /slack` handler additionally handles the one-time Events API `url_verification`
-handshake, and filters out any event carrying a real `bot_id` (Slack delivers every channel
-message, including this app's own replies, to every subscribed app -- routing a bot's own reply
-back to itself would create a real infinite loop).
+`notify_omni_channel` (src/agents/tools/skills.py, REL-010 E10.2). REL-027: Slack is real from
+scratch (no prior config/route/notifier existed at all, confirmed via a full-repo grep before
+building this) -- its own `POST /slack` handler additionally handles the one-time Events API
+`url_verification` handshake, and filters out any event carrying a real `bot_id` (Slack delivers
+every channel message, including this app's own replies, to every subscribed app -- routing a
+bot's own reply back to itself would create a real infinite loop). WhatsApp was implemented in
+REL-026 and removed at the user's explicit request (2026-08-07) -- not needed; only Telegram,
+Discord, and Slack remain.
 
 No JWT/require_role auth on any route here -- the platform's own signature IS the
 authentication for "this really came from Telegram/Discord". UPDATE 2026-08-01 (REL-014 E14.3,
@@ -34,7 +33,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from src.agents.tools.registry import get_skill_registry
@@ -49,7 +48,6 @@ from src.core.webhook_security import (
     verify_discord_signature,
     verify_slack_signature,
     verify_telegram_secret_token,
-    verify_whatsapp_signature,
 )
 from src.memory.redis_client import get_redis_client
 from src.models.chat import ChatMessage
@@ -327,73 +325,6 @@ async def discord_webhook(request: Request) -> dict[str, Any]:
     # background thread _record_event_and_route already started, followed by a real PATCH to
     # this interaction's own follow-up webhook URL once it completes.
     return {"type": 5}
-
-
-@router.get("/whatsapp")
-def whatsapp_verify(
-    hub_mode: str = Query(..., alias="hub.mode"),
-    hub_verify_token: str = Query(..., alias="hub.verify_token"),
-    hub_challenge: str = Query(..., alias="hub.challenge"),
-) -> Response:
-    """Meta's webhook verification handshake, sent once when the URL is registered."""
-    settings = get_settings()
-    if hub_mode == "subscribe" and hub_verify_token == settings.whatsapp_verify_token:
-        return Response(content=hub_challenge, media_type="text/plain")
-    raise HTTPException(status_code=403, detail="Verification token mismatch")
-
-
-@router.post("/whatsapp")
-async def whatsapp_webhook(request: Request) -> dict[str, bool]:
-    settings = get_settings()
-    stored = vault.read_webhook_secret("whatsapp")
-    app_secret = (stored or {}).get("app_secret") or settings.whatsapp_app_secret
-    if not app_secret:
-        raise HTTPException(status_code=503, detail="WhatsApp app secret not configured")
-
-    raw_body = await request.body()
-    signature_header = request.headers.get("X-Hub-Signature-256")
-    if not verify_whatsapp_signature(raw_body, signature_header, app_secret=app_secret):
-        raise HTTPException(status_code=401, detail="Invalid request signature")
-
-    body = await request.json()
-    # REL-026: extracted once (was repeated inline 2x before this release, for message_id/
-    # chat_id only -- now also needs the message text, so pulled out to avoid a 3rd repetition
-    # of this same nested-dict chain).
-    message = (
-        body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
-    )
-    message_id = message.get("id", "unknown")
-
-    redis_client = get_redis_client()
-    if is_replay("whatsapp", str(message_id), redis_client=redis_client):
-        return {"ok": True}
-
-    chat_id = str(message.get("from", "unknown"))
-    if not check_rate_limit("whatsapp", chat_id, redis_client=redis_client):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    text = message.get("text", {}).get("body")
-    if not text:
-        # A real WhatsApp message with no text body (an image, a reaction, a status update,
-        # etc.) -- still recorded for real, just not routed to an agent that has nothing to
-        # answer. Same convention as the Telegram handler above.
-        _record_event("WhatsApp", body)
-        return {"ok": True}
-
-    if _resolve_sender("WhatsApp", chat_id) is None:
-        # SEC-030: see the Telegram handler's matching check above.
-        _record_event("WhatsApp", body)
-        return {"ok": True}
-
-    _record_event_and_route(
-        channel="WhatsApp",
-        raw_body=body,
-        external_chat_key=chat_id,
-        user_text=text,
-        external_metadata={"chat_id": chat_id},
-        notify_kwargs={"channel": "whatsapp", "to": chat_id},
-    )
-    return {"ok": True}
 
 
 @router.post("/slack")

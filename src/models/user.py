@@ -29,7 +29,7 @@ class User(Base, UUIDPKMixin, TimestampMixin):
 
 
 class NotificationChannel(Base, UUIDPKMixin, TimestampMixin):
-    """DB-002. Omni-channel bot bindings (Telegram/WhatsApp/Discord/Slack/Email) per FR-10."""
+    """DB-002. Omni-channel bot bindings (Telegram/Discord/Slack/Email) per FR-10."""
 
     __tablename__ = "notification_channels"
 

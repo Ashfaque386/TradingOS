@@ -31,13 +31,6 @@ def main() -> None:
     else:
         print("DISCORD_PUBLIC_KEY not configured in .env -- nothing to seed for it.")
 
-    if settings.whatsapp_app_secret:
-        ok = vault.write_webhook_secret("whatsapp", {"app_secret": settings.whatsapp_app_secret})
-        print(f"WhatsApp app secret {'written to' if ok else 'FAILED to write to'} Vault.")
-        wrote_any = wrote_any or ok
-    else:
-        print("WHATSAPP_APP_SECRET not configured in .env -- nothing to seed for it.")
-
     if not wrote_any:
         print(
             "WARNING: nothing was written to Vault -- either no webhook platform is configured "

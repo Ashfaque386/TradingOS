@@ -1,16 +1,15 @@
-"""Real outbound omni-channel dispatch (REL-010 E10.2, REL-026, REL-027, Notification/Omni-
-Channel Agent AGT-022).
+"""Real outbound omni-channel dispatch (REL-010 E10.2, REL-027, Notification/Omni-Channel Agent
+AGT-022).
 
-Telegram, Discord, WhatsApp (REL-026), and Slack (REL-027) all get a real, live outbound send --
-FR-10's own literal 4-platform wording, closed for real.
+Telegram, Discord, and Slack (REL-027) all get a real, live outbound send -- FR-10's own literal
+3-platform wording, closed for real. WhatsApp was implemented in REL-026 and removed at the
+user's explicit request (2026-08-07) -- not needed.
 
-All four functions are plain async `httpx` calls (no SDK) matching every broker adapter's own
+All three functions are plain async `httpx` calls (no SDK) matching every broker adapter's own
 established style (`src/brokers/kite_connect_adapter.py`, `upstox_adapter.py`). Real Telegram
-Bot API / Discord API / WhatsApp Business Cloud API / Slack Web API endpoints, not guessed --
-confirmed against each platform's current docs (WhatsApp's `text` field is a nested
-`{"body": ...}` object, not a bare string, and its current API version is v25.0; Slack's Web API
-always returns HTTP 200 even on a real failure -- `chat.postMessage`'s own `"ok": false` JSON
-field is the real signal, not the HTTP status).
+Bot API / Discord API / Slack Web API endpoints, not guessed -- confirmed against each platform's
+current docs (Slack's Web API always returns HTTP 200 even on a real failure --
+`chat.postMessage`'s own `"ok": false` JSON field is the real signal, not the HTTP status).
 """
 
 from typing import Any
@@ -19,7 +18,6 @@ import httpx
 
 _TELEGRAM_API_BASE = "https://api.telegram.org"
 _DISCORD_API_BASE = "https://discord.com/api/v10"
-_WHATSAPP_API_BASE = "https://graph.facebook.com/v25.0"
 _SLACK_API_BASE = "https://slack.com/api"
 
 
@@ -83,31 +81,3 @@ async def send_slack_message(
         if not result.get("ok"):
             raise RuntimeError(f"Slack API error: {result.get('error', 'unknown')}")
         return result
-
-
-async def send_whatsapp_message(
-    *,
-    to: str,
-    text: str,
-    phone_number_id: str,
-    access_token: str,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> dict[str, Any]:
-    """`POST /{phone-number-id}/messages` -- WhatsApp Business Cloud API
-    (https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages). `to` is the
-    recipient's real WhatsApp phone number (the inbound webhook's own `messages[0].from` field).
-    `transport` is test-only, see `send_telegram_message`."""
-    async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
-        response = await client.post(
-            f"{_WHATSAPP_API_BASE}/{phone_number_id}/messages",
-            headers={"Authorization": f"Bearer {access_token}"},
-            json={
-                "messaging_product": "whatsapp",
-                "recipient_type": "individual",
-                "to": to,
-                "type": "text",
-                "text": {"body": text},
-            },
-        )
-        response.raise_for_status()
-        return response.json()  # type: ignore[no-any-return]

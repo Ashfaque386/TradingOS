@@ -1,7 +1,7 @@
 """Per-platform webhook signature verification (REL-007 E7.7 SEC-025..028, REL-027 SEC-047): real
-cryptographic verification for each of the four supported inbound webhook sources, genuinely
+cryptographic verification for each of the three supported inbound webhook sources, genuinely
 testable with synthetic signed payloads (real HMAC/Ed25519 primitives) without needing a live
-Telegram/Discord/WhatsApp/Slack account or bot registration.
+Telegram/Discord/Slack account or bot registration.
 
 All three verify against the *exact raw request bytes* -- callers (src/api/routers/webhooks.py)
 must read `await request.body()` before any JSON parsing and pass those raw bytes here.
@@ -39,17 +39,6 @@ def verify_discord_signature(
     except (InvalidSignature, ValueError):
         return False
     return True
-
-
-def verify_whatsapp_signature(
-    raw_body: bytes, signature_header: str | None, *, app_secret: str
-) -> bool:
-    """SEC-027: HMAC-SHA256 over the raw body, header format `sha256=<hex>`."""
-    if signature_header is None or not signature_header.startswith("sha256="):
-        return False
-    provided_hex = signature_header[len("sha256=") :]
-    expected = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(provided_hex, expected)
 
 
 def verify_slack_signature(

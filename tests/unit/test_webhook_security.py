@@ -11,7 +11,6 @@ from src.core.webhook_security import (
     verify_discord_signature,
     verify_slack_signature,
     verify_telegram_secret_token,
-    verify_whatsapp_signature,
 )
 
 
@@ -82,27 +81,6 @@ def test_discord_malformed_signature_hex_is_rejected_not_raised():
         )
         is False
     )
-
-
-def test_whatsapp_correctly_signed_payload_is_accepted():
-    app_secret = "real-app-secret"
-    raw_body = b'{"entry": []}'
-    expected_hex = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    header = f"sha256={expected_hex}"
-    assert verify_whatsapp_signature(raw_body, header, app_secret=app_secret) is True
-
-
-def test_whatsapp_tampered_payload_is_rejected():
-    app_secret = "real-app-secret"
-    raw_body = b'{"entry": []}'
-    expected_hex = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    header = f"sha256={expected_hex}"
-    tampered_body = b'{"entry": ["tampered"]}'
-    assert verify_whatsapp_signature(tampered_body, header, app_secret=app_secret) is False
-
-
-def test_whatsapp_missing_prefix_is_rejected():
-    assert verify_whatsapp_signature(b"body", "deadbeef", app_secret="secret") is False
 
 
 def _slack_signature(signing_secret: str, timestamp: str, raw_body: bytes) -> str:

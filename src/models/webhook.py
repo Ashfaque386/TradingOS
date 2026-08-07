@@ -9,7 +9,7 @@ from src.models.base import Base, UUIDPKMixin
 
 
 class WebhookEvent(Base, UUIDPKMixin):
-    """DB-018. Raw + normalized inbound omni-channel messages (Telegram/Discord/WhatsApp/Slack).
+    """DB-018. Raw + normalized inbound omni-channel messages (Telegram/Discord/Slack).
     30-day retention only — operational debugging, not a system of record (Phase_11 §5.2)."""
 
     __tablename__ = "webhook_events"

@@ -230,7 +230,7 @@ def write_webhook_secret(
 ) -> bool:
     """REL-007 E7.7 (SEC-028): "shared secrets/app secrets used for signature verification are
     themselves stored in Vault (same KV engine as broker keys), never in application config
-    files." `channel` is one of "telegram"/"discord"/"whatsapp"."""
+    files." `channel` is one of "telegram"/"discord"/"slack"."""
     return _write_secret(
         f"{_WEBHOOK_SECRETS_PREFIX}/{channel}", secret, settings=settings or get_settings()
     )

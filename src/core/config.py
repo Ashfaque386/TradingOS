@@ -153,10 +153,8 @@ class Settings(BaseSettings):
     # because no bot is registered yet in this dev environment.
     telegram_webhook_secret: str | None = None
     discord_public_key: str | None = None
-    whatsapp_app_secret: str | None = None
-    whatsapp_verify_token: str | None = None
     # REL-027: Slack's own request-signing secret (verifies X-Slack-Signature), distinct from
-    # slack_bot_token below the same way whatsapp_app_secret is distinct from whatsapp_access_token.
+    # slack_bot_token below.
     slack_signing_secret: str | None = None
 
     # REL-010 E10.2 (Notification/Omni-Channel Agent, AGT-022): OUTBOUND credentials -- distinct
@@ -167,16 +165,10 @@ class Settings(BaseSettings):
     # `/webhooks/{application_id}/{interaction_token}` follow-up URL).
     telegram_bot_token: str | None = None
     discord_application_id: str | None = None
-    # REL-026: WhatsApp's outbound pair, same split as Discord above -- whatsapp_access_token is
-    # the real secret (Vault-first via read_bot_token("whatsapp"), same as telegram_bot_token),
-    # whatsapp_business_phone_number_id is a public identifier (needed to build the real
-    # `/{phone_number_id}/messages` send URL), not a secret.
-    whatsapp_access_token: str | None = None
-    whatsapp_business_phone_number_id: str | None = None
     # REL-027: Slack's outbound bot token (xoxb-...), same Vault-first pattern via
-    # read_bot_token("slack"). Unlike Discord/WhatsApp there's no separate public identifier
-    # needed -- chat.postMessage takes the target channel ID directly per-call, not a fixed
-    # per-app URL component.
+    # read_bot_token("slack"). Unlike Discord there's no separate public identifier needed --
+    # chat.postMessage takes the target channel ID directly per-call, not a fixed per-app URL
+    # component.
     slack_bot_token: str | None = None
 
     # REL-007 E7.6 (TLS, SEC-023/024). Gates src/agents/scheduler.py's APScheduler so the
