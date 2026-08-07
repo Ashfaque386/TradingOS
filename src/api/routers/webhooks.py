@@ -4,9 +4,10 @@ verification, replay prevention, and rate limiting for each platform.
 REL-010 E10.1: Telegram and Discord messages are now actually routed to the CEO Agent (via the
 same real, already-tested reply pipeline the in-dashboard chat uses --
 src/api/routers/chat.py::generate_and_store_reply) and a real reply is sent back via
-`notify_omni_channel` (src/agents/tools/skills.py, REL-010 E10.2). WhatsApp stays
-recording-only (`_record_event`) -- not routed this release, per the user's explicit platform
-decision, not silently pretended.
+`notify_omni_channel` (src/agents/tools/skills.py, REL-010 E10.2). REL-026: WhatsApp now routes
+the exact same way -- the inbound receiver's real Meta webhook verification handshake, real
+signature verification, and real replay/rate-limit checks were already fully real since REL-007;
+only the routing/reply half was ever missing.
 
 No JWT/require_role auth on any route here -- the platform's own signature IS the
 authentication for "this really came from Telegram/Discord". UPDATE 2026-08-01 (REL-014 E14.3,
@@ -349,27 +350,41 @@ async def whatsapp_webhook(request: Request) -> dict[str, bool]:
         raise HTTPException(status_code=401, detail="Invalid request signature")
 
     body = await request.json()
-    message_id = (
-        body.get("entry", [{}])[0]
-        .get("changes", [{}])[0]
-        .get("value", {})
-        .get("messages", [{}])[0]
-        .get("id", "unknown")
+    # REL-026: extracted once (was repeated inline 2x before this release, for message_id/
+    # chat_id only -- now also needs the message text, so pulled out to avoid a 3rd repetition
+    # of this same nested-dict chain).
+    message = (
+        body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [{}])[0]
     )
+    message_id = message.get("id", "unknown")
 
     redis_client = get_redis_client()
     if is_replay("whatsapp", str(message_id), redis_client=redis_client):
         return {"ok": True}
 
-    chat_id = str(
-        body.get("entry", [{}])[0]
-        .get("changes", [{}])[0]
-        .get("value", {})
-        .get("messages", [{}])[0]
-        .get("from", "unknown")
-    )
+    chat_id = str(message.get("from", "unknown"))
     if not check_rate_limit("whatsapp", chat_id, redis_client=redis_client):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    _record_event("WhatsApp", body)
+    text = message.get("text", {}).get("body")
+    if not text:
+        # A real WhatsApp message with no text body (an image, a reaction, a status update,
+        # etc.) -- still recorded for real, just not routed to an agent that has nothing to
+        # answer. Same convention as the Telegram handler above.
+        _record_event("WhatsApp", body)
+        return {"ok": True}
+
+    if _resolve_sender("WhatsApp", chat_id) is None:
+        # SEC-030: see the Telegram handler's matching check above.
+        _record_event("WhatsApp", body)
+        return {"ok": True}
+
+    _record_event_and_route(
+        channel="WhatsApp",
+        raw_body=body,
+        external_chat_key=chat_id,
+        user_text=text,
+        external_metadata={"chat_id": chat_id},
+        notify_kwargs={"channel": "whatsapp", "to": chat_id},
+    )
     return {"ok": True}

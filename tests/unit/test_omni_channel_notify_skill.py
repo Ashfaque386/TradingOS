@@ -48,6 +48,44 @@ def test_discord_dispatch_raises_when_no_application_id_configured():
             OmniChannelNotifySkill().execute(channel="discord", text="hi", interaction_token="t")
 
 
-def test_whatsapp_stays_honestly_stubbed():
-    with pytest.raises(SkillNotImplementedError, match="WhatsApp"):
-        OmniChannelNotifySkill().execute(channel="whatsapp", text="hi")
+@patch("src.agents.tools.skills._whatsapp_access_token", return_value="real-token")
+@patch("src.agents.tools.skills.send_whatsapp_message", new_callable=AsyncMock)
+def test_whatsapp_dispatch_calls_the_real_send_function(mock_send, _mock_token):
+    mock_send.return_value = {"messages": [{"id": "wamid.1"}]}
+    result = OmniChannelNotifySkill().execute(
+        channel="whatsapp", text="hi", to="911234567890", phone_number_id="123456"
+    )
+    assert result == {"messages": [{"id": "wamid.1"}]}
+    mock_send.assert_awaited_once_with(
+        to="911234567890", text="hi", phone_number_id="123456", access_token="real-token"
+    )
+
+
+@patch("src.agents.tools.skills._whatsapp_access_token", return_value="real-token")
+@patch("src.agents.tools.skills.send_whatsapp_message", new_callable=AsyncMock)
+def test_whatsapp_dispatch_falls_back_to_configured_phone_number_id(mock_send, _mock_token):
+    mock_send.return_value = {"messages": [{"id": "wamid.1"}]}
+    with patch("src.agents.tools.skills.get_settings") as mock_settings:
+        mock_settings.return_value.whatsapp_business_phone_number_id = "configured-id"
+        OmniChannelNotifySkill().execute(channel="whatsapp", text="hi", to="911234567890")
+    mock_send.assert_awaited_once_with(
+        to="911234567890", text="hi", phone_number_id="configured-id", access_token="real-token"
+    )
+
+
+def test_whatsapp_dispatch_raises_when_no_phone_number_id_configured():
+    with patch("src.agents.tools.skills.get_settings") as mock_settings:
+        mock_settings.return_value.whatsapp_business_phone_number_id = None
+        with pytest.raises(SkillNotImplementedError, match="phone_number_id"):
+            OmniChannelNotifySkill().execute(channel="whatsapp", text="hi", to="911234567890")
+
+
+def test_whatsapp_dispatch_raises_when_no_access_token_configured():
+    with (
+        patch("src.agents.tools.skills.vault.read_bot_token", return_value=None),
+        patch("src.agents.tools.skills.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.whatsapp_business_phone_number_id = "configured-id"
+        mock_settings.return_value.whatsapp_access_token = None
+        with pytest.raises(SkillNotImplementedError, match="access token"):
+            OmniChannelNotifySkill().execute(channel="whatsapp", text="hi", to="911234567890")

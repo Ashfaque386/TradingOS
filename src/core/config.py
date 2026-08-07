@@ -164,6 +164,12 @@ class Settings(BaseSettings):
     # `/webhooks/{application_id}/{interaction_token}` follow-up URL).
     telegram_bot_token: str | None = None
     discord_application_id: str | None = None
+    # REL-026: WhatsApp's outbound pair, same split as Discord above -- whatsapp_access_token is
+    # the real secret (Vault-first via read_bot_token("whatsapp"), same as telegram_bot_token),
+    # whatsapp_business_phone_number_id is a public identifier (needed to build the real
+    # `/{phone_number_id}/messages` send URL), not a secret.
+    whatsapp_access_token: str | None = None
+    whatsapp_business_phone_number_id: str | None = None
 
     # REL-007 E7.6 (TLS, SEC-023/024). Gates src/agents/scheduler.py's APScheduler so the
     # sibling `app-tls` compose service (same image, HTTPS-only) doesn't double-fire the daily
