@@ -117,6 +117,27 @@ def archive_row(row: AuditLog, *, settings: Settings | None = None) -> None:
     )
 
 
+def fetch_archived_row(row_id: int, *, settings: Settings | None = None) -> dict[str, Any] | None:
+    """REL-031 (SEC-040): reads one archived object's real JSON body back out of the WORM bucket
+    -- `src/core/audit_chain_monitor.py` uses this to independently recompute the archived copy's
+    own hash and to cross-check it against the live table's stored `entry_hash` for the same id.
+    Returns `None` (not an exception) for a missing key, the one expected "not archived yet" case
+    a caller iterating `list_archived_ids()` output would never actually hit, but a caller probing
+    an arbitrary id might."""
+    settings = settings or get_settings()
+    client = _client(settings)
+    try:
+        response = client.get_object(
+            Bucket=settings.audit_archive_s3_bucket, Key=_object_key(row_id)
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return None
+        raise
+    body: dict[str, Any] = json.loads(response["Body"].read())
+    return body
+
+
 def list_archived_ids(settings: Settings | None = None) -> set[int]:
     """Real S3 ListObjectsV2 pagination -- every row id already archived, so the caller can skip
     re-uploading them (idempotency by object existence, see module docstring)."""

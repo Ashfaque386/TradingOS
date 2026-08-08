@@ -114,7 +114,7 @@ def write_audit_entry(
     prev_hash = last_hash if last_hash is not None else GENESIS_PREV_HASH
 
     created_at = datetime.now(UTC)
-    payload = _canonical_payload(
+    entry_hash = recompute_entry_hash(
         actor_type=actor_type,
         actor_id=actor_id,
         action=action,
@@ -125,8 +125,8 @@ def write_audit_entry(
         prompt_snapshot=prompt_snapshot,
         ip_address=ip_address,
         created_at=created_at,
+        prev_hash=prev_hash,
     )
-    entry_hash = hashlib.sha256((payload + prev_hash).encode("utf-8")).hexdigest()
 
     row = AuditLog(
         actor_type=actor_type,
@@ -154,6 +154,39 @@ class ChainVerificationResult:
     rows_checked: int
 
 
+def recompute_entry_hash(
+    *,
+    actor_type: str,
+    actor_id: str,
+    action: str,
+    entity_type: str,
+    entity_id: uuid.UUID | None,
+    before_state: dict[str, Any] | None,
+    after_state: dict[str, Any] | None,
+    prompt_snapshot: str | None,
+    ip_address: str | None,
+    created_at: datetime,
+    prev_hash: str,
+) -> str:
+    """The one real hash-chain link computation (write_audit_entry's own inline version and
+    verify_chain's per-row recompute used to duplicate this) -- also reused by REL-031's
+    src/core/audit_chain_monitor.py to independently recompute a WORM-archived row's own hash
+    from its archived content, without needing a live AuditLog ORM instance."""
+    payload = _canonical_payload(
+        actor_type=actor_type,
+        actor_id=actor_id,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        before_state=before_state,
+        after_state=after_state,
+        prompt_snapshot=prompt_snapshot,
+        ip_address=ip_address,
+        created_at=created_at,
+    )
+    return hashlib.sha256((payload + prev_hash).encode("utf-8")).hexdigest()
+
+
 def verify_chain(session: Session) -> ChainVerificationResult:
     """SEC-040: re-walks audit_log in id order, recomputing each row's expected hash from its
     own stored content and the previous row's stored entry_hash, and compares against what's
@@ -168,7 +201,7 @@ def verify_chain(session: Session) -> ChainVerificationResult:
             return ChainVerificationResult(
                 valid=False, first_broken_id=row.id, rows_checked=len(rows)
             )
-        payload = _canonical_payload(
+        recomputed = recompute_entry_hash(
             actor_type=row.actor_type,
             actor_id=row.actor_id,
             action=row.action,
@@ -179,8 +212,8 @@ def verify_chain(session: Session) -> ChainVerificationResult:
             prompt_snapshot=row.prompt_snapshot,
             ip_address=row.ip_address,
             created_at=row.created_at,
+            prev_hash=expected_prev,
         )
-        recomputed = hashlib.sha256((payload + expected_prev).encode("utf-8")).hexdigest()
         if recomputed != row.entry_hash:
             return ChainVerificationResult(
                 valid=False, first_broken_id=row.id, rows_checked=len(rows)

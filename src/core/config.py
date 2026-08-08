@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     audit_archive_s3_secret_key: str = "tradingos_minio_dev_password"
     audit_archive_s3_bucket: str = "audit-archive"
 
+    # REL-031 (SEC-040): the same real Telegram/Discord/Slack downtime-alert credentials REL-029
+    # already put in the host's gitignored .env for Grafana's own contact-point provisioning
+    # (monitoring/grafana/provisioning/alerting/contact-points.yaml) -- reused here because
+    # scripts/verify_audit_chain.py is a one-shot scheduled script with no running Prometheus
+    # target for Grafana to alert on, so it sends these directly via src/core/ops_alerts.py
+    # instead of going through Grafana's alerting pipeline. Read straight from .env like the LLM
+    # provider keys above (dev-only; Vault-backed secrets aren't in scope for this dev stack).
+    slack_webhook_url: str | None = None
+    telegram_alert_bot_token: str | None = None
+    telegram_alert_chat_id: str | None = None
+    discord_alert_webhook_url: str | None = None
+
     # LLM providers (Phase 2 E2.2 — see Phase_14_Master_Development_Roadmap.md §3.2).
     # Ollama always runs (local, no key). Every cloud provider is optional (`| None`) so an
     # unconfigured provider is simply skipped by src/agents/llm_router.py's fallback chains
