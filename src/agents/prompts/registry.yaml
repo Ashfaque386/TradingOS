@@ -66,10 +66,10 @@ sentiment_agent_task:
   active_version: 1
 options_strategy_agent:
   prompt_id: PMPT-042
-  active_version: 1
+  active_version: 2
 options_strategy_agent_task:
   prompt_id: PMPT-043
-  active_version: 1
+  active_version: 2
 portfolio_manager_agent:
   prompt_id: PMPT-044
   active_version: 1
