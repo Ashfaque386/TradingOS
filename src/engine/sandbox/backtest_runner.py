@@ -22,6 +22,13 @@ sandbox, previously discarded once the sandbox run completed. Walk-Forward Optim
 (src/engine/optimization/walk_forward_adapter.py) needs real close prices alongside
 `entries_exits` to re-run the strategy's own signals against rolling windows; re-reading the
 data lake a second time for that would be redundant I/O for data this function already has.
+
+REL-032 (2026-08-08, NFR-01): `run_real_backtest` now executes through `execute_in_pool()`
+(src/engine/sandbox/pool.py) instead of the original one-shot `execute_in_sandbox()` -- a warm
+sandbox worker pool that cuts real, measured latency from ~9-29s (cold process, every call) to
+~0.06s (already-warm process) once a worker has run at least once. See that module's own
+docstring for the full research (why numba's on-disk cache alone doesn't solve this) and the
+real security tradeoff pooling accepts and mitigates.
 """
 
 import tempfile
@@ -34,7 +41,8 @@ import polars as pl
 
 from src.core.config import get_settings
 from src.data.datalake.query import DataLake
-from src.engine.sandbox.runner import DEFAULT_TIMEOUT_SECONDS, execute_in_sandbox
+from src.engine.sandbox.pool import execute_in_pool
+from src.engine.sandbox.runner import DEFAULT_TIMEOUT_SECONDS
 
 REAL_BACKTEST_TIMEOUT_SECONDS = 120.0
 
@@ -241,7 +249,11 @@ def run_real_backtest(
         data_path = Path(tmpdir_str) / f"{symbol}.parquet"
         data.write_parquet(data_path)
 
-        result = execute_in_sandbox(
+        # REL-032 (NFR-01): the warm sandbox pool, not the original one-shot execute_in_sandbox()
+        # -- see src/engine/sandbox/pool.py's own module docstring for why (real, measured
+        # ~9-29s-cold vs ~0.06s-warm latency) and what changes about the security model. Falls
+        # back to execute_in_sandbox() automatically if the pool is disabled or fails.
+        result = execute_in_pool(
             code,
             config,
             timeout=max(REAL_BACKTEST_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS),

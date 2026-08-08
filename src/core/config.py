@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     telegram_alert_chat_id: str | None = None
     discord_alert_webhook_url: str | None = None
 
+    # REL-032 (NFR-01): src/engine/sandbox/pool.py -- a small pool of persistent, warm sandbox
+    # worker subprocesses for the real-backtest path only (see that module's own docstring for
+    # the real, measured ~9-29s-cold vs ~0.06s-warm finding this exists to fix, and the real
+    # security tradeoff it accepts and mitigates). `sandbox_pool_enabled=False` reverts
+    # run_real_backtest() to the original one-shot execute_in_sandbox() path -- a real, tested
+    # escape hatch, not a dead flag.
+    sandbox_pool_enabled: bool = True
+    sandbox_pool_size: int = 2
+
     # LLM providers (Phase 2 E2.2 — see Phase_14_Master_Development_Roadmap.md §3.2).
     # Ollama always runs (local, no key). Every cloud provider is optional (`| None`) so an
     # unconfigured provider is simply skipped by src/agents/llm_router.py's fallback chains

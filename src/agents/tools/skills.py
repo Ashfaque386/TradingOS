@@ -48,8 +48,29 @@ from src.engine.sandbox.runner import execute_in_sandbox
 from src.memory.embeddings import embed_text
 from src.models.trading import PortfolioPosition
 
-BANNED_AST_CALLS = {"eval", "exec", "compile", "__import__"}
+BANNED_AST_CALLS = {"eval", "exec", "compile", "__import__", "setattr"}
 BANNED_IMPORT_MODULES = {"os", "subprocess", "socket", "shutil", "sys", "ctypes"}
+
+# REL-032 (NFR-01): added when src/engine/sandbox/pool.py started reusing a warm sandbox
+# subprocess across MULTIPLE strategies' runs (previously every execute_in_sandbox() call got a
+# brand-new process, so no strategy's code could ever affect a later, unrelated one). A strategy
+# that reassigns an attribute on one of these shared, pre-imported library modules/classes (e.g.
+# `vbt.Portfolio.from_signals = something_else`) could otherwise poison every SUBSEQUENT
+# strategy's run in the same warm worker until that worker is retired -- a real, new threat this
+# pooling change introduces that a fresh-process-per-call model never had. `setattr` is banned
+# outright above (a legitimate strategy has no real need for it); this catches the equivalent
+# `.`-syntax attribute assignment specifically for the libraries a warm worker keeps imported.
+BANNED_ATTRIBUTE_ASSIGNMENT_TARGETS = {
+    "vbt",
+    "vectorbt",
+    "pl",
+    "polars",
+    "pd",
+    "pandas",
+    "np",
+    "numpy",
+    "numba",
+}
 
 # Attribute-style calls (e.g. `os.system(...)`) flagged regardless of whether the matching
 # `import os` statement is present in the SAME snippet -- catches the intent even when an
@@ -148,6 +169,16 @@ def _is_negative_number(node: ast.expr) -> bool:
     )
 
 
+def _attribute_root_name(node: ast.expr) -> str | None:
+    """Walks an `ast.Attribute` chain (e.g. `vbt.Portfolio.from_signals`) down to its root
+    `ast.Name`, or `None` if the chain doesn't bottom out in a plain name (e.g. a function call
+    result's attribute, which this check doesn't need to cover -- see REL-032's
+    BANNED_ATTRIBUTE_ASSIGNMENT_TARGETS comment for what this is defending against)."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
 class StaticSafetyCheckSkill(BaseSkill):
     name = "static_safety_check"
     description = "AST-based static safety scan (banned calls/imports/look-ahead bias)."
@@ -176,6 +207,20 @@ class StaticSafetyCheckSkill(BaseSkill):
                 and node.module.split(".")[0] in BANNED_IMPORT_MODULES
             ):
                 violations.append(f"banned import: {node.module} at line {node.lineno}")
+            # REL-032: banned attribute-assignment targets, see BANNED_ATTRIBUTE_ASSIGNMENT_TARGETS'
+            # own comment for why this matters now that the real-backtest path reuses a warm
+            # sandbox worker across strategies.
+            if isinstance(node, ast.Assign | ast.AugAssign):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and _attribute_root_name(target) in BANNED_ATTRIBUTE_ASSIGNMENT_TARGETS
+                    ):
+                        violations.append(
+                            f"banned attribute assignment onto a shared sandbox library at "
+                            f"line {node.lineno}"
+                        )
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)

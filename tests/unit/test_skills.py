@@ -82,6 +82,52 @@ def test_static_safety_check_allows_positive_shift():
     assert result["passed"] is True
 
 
+def test_static_safety_check_flags_setattr():
+    """REL-032: setattr is banned outright now that the real-backtest path reuses a warm
+    sandbox worker across strategies (src/engine/sandbox/pool.py) -- a legitimate strategy has
+    no real need for it."""
+    skill = StaticSafetyCheckSkill()
+    result = skill.execute(code="setattr(some_obj, 'x', 1)")
+    assert result["passed"] is False
+    assert any("setattr" in v for v in result["violations"])
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "vbt.Portfolio.from_signals = lambda *a, **kw: None",
+        "vectorbt.something = 1",
+        "pl.DataFrame = None",
+        "np.array = None",
+        "numba.njit = None",
+    ],
+)
+def test_static_safety_check_flags_attribute_assignment_onto_shared_sandbox_libraries(code):
+    """REL-032: a strategy that reassigns an attribute on a shared, pre-imported pool library
+    could otherwise poison every SUBSEQUENT strategy's run in the same warm worker -- a real,
+    new threat pooling introduces that a fresh-process-per-call model never had."""
+    skill = StaticSafetyCheckSkill()
+    result = skill.execute(code=code)
+    assert result["passed"] is False
+    assert any("banned attribute assignment" in v for v in result["violations"])
+
+
+def test_static_safety_check_allows_attribute_assignment_onto_a_strategys_own_object():
+    """Only the specific shared sandbox-library aliases are banned -- a strategy assigning
+    attributes on its own local objects (e.g. inside a class it defines) is unaffected."""
+    skill = StaticSafetyCheckSkill()
+    code = """
+class MyStrategy:
+    def __init__(self):
+        self.position = 0
+
+s = MyStrategy()
+s.position = 10
+"""
+    result = skill.execute(code=code)
+    assert result["passed"] is True
+
+
 def test_stub_skills_raise_not_implemented_rather_than_fabricate_data():
     with pytest.raises(SkillNotImplementedError):
         GlobalIndicesSkill().execute()
