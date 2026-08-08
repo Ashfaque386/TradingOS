@@ -309,6 +309,20 @@ def get_pool(settings: Settings | None = None) -> SandboxWorkerPool:
         return _pool
 
 
+def shutdown_pool() -> None:
+    """Tears down the process-wide singleton (if one was ever created) and clears it, so the
+    next `get_pool()` call creates a fresh one. The real FastAPI app process never needs to call
+    this -- staying warm for the process's whole lifetime is the entire point of the pool. It
+    exists for test-suite hygiene: tests/conftest.py calls this at session end so a warm pool's
+    real, non-trivial memory footprint (~400MB+ per worker, measured) doesn't stay resident for
+    the rest of a long pytest run once any single test exercises the real-backtest path."""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            _pool.shutdown()
+            _pool = None
+
+
 def execute_in_pool(
     code: str,
     config: dict[str, Any] | None = None,
