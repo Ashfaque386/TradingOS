@@ -4,10 +4,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { api, downloadAuthenticated } from "@/lib/api";
-import { RequireAuth } from "@/lib/auth";
 import { usePermission } from "@/lib/usePermission";
-import { Sidebar } from "@/components/layout/sidebar";
-import { PageHeader } from "@/components/layout/page-header";
+import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AuditLogTable } from "@/components/audit/audit-log-table";
@@ -110,24 +108,16 @@ function AuditView() {
 export default function AuditPage() {
   const canReadAudit = usePermission("readAudit");
 
-  return (
-    <RequireAuth>
-      <div className="flex flex-1">
-        <Sidebar />
-        <div className="flex flex-1 flex-col">
-          <PageHeader connected={false} subtitle="Compliance & Trade-History Audit" />
-          {canReadAudit ? (
-            <AuditView />
-          ) : (
-            <main className="mx-auto flex w-full max-w-[1440px] flex-1 items-center justify-center p-8">
-              <p data-testid="audit-insufficient-role" className="text-sm text-text-faint">
-                Your role does not have access to audit logs. Requires System Administrator or
-                Read-Only Auditor.
-              </p>
-            </main>
-          )}
-        </div>
-      </div>
-    </RequireAuth>
+  usePageStatus("Compliance & Trade-History Audit", false);
+
+  return canReadAudit ? (
+    <AuditView />
+  ) : (
+    <main className="mx-auto flex w-full max-w-[1440px] flex-1 items-center justify-center p-8">
+      <p data-testid="audit-insufficient-role" className="text-sm text-text-faint">
+        Your role does not have access to audit logs. Requires System Administrator or
+        Read-Only Auditor.
+      </p>
+    </main>
   );
 }

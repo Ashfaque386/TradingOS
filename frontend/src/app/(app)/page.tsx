@@ -4,9 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { formatCompactINR } from "@/lib/utils";
 import { usePortfolioSocket } from "@/hooks/usePortfolioSocket";
-import { RequireAuth } from "@/lib/auth";
-import { Sidebar } from "@/components/layout/sidebar";
-import { PageHeader } from "@/components/layout/page-header";
+import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { RiskGauge } from "@/components/portfolio/risk-gauge";
@@ -15,10 +13,15 @@ import { PositionsTable } from "@/components/portfolio/positions-table";
 import { MarginPanel } from "@/components/portfolio/margin-panel";
 import { KillSwitchButton } from "@/components/portfolio/kill-switch-button";
 import { CandlestickChart } from "@/components/portfolio/candlestick-chart";
-import { GridWorkspace, type GridPanel } from "@/components/layout/grid-workspace";
 
+/** Phase 2C: fixed premium layout replacing the drag/resize GridWorkspace grid -- a hero row
+ * (P&L + Kill Switch), a risk-gauge row, a secondary allocation/margin/positions row, and the
+ * candlestick chart full-width at the bottom, instead of manually positioned, user-draggable
+ * panels. */
 export default function PortfolioCommandCenter() {
   const { tick, connected } = usePortfolioSocket();
+
+  usePageStatus("Portfolio & Risk Command Center", connected);
 
   const positionsQuery = useQuery({ queryKey: ["positions"], queryFn: api.positions });
   const marginQuery = useQuery({ queryKey: ["margin"], queryFn: api.margin });
@@ -31,12 +34,10 @@ export default function PortfolioCommandCenter() {
   const dailyLimit = riskQuery.data?.daily_loss_limit ?? pnlQuery.data?.daily_loss_limit ?? null;
   const pctOfLimit = riskQuery.data?.pct_of_daily_limit_used ?? tick?.drawdown ?? null;
 
-  const panels: GridPanel[] = [
-    {
-      id: "pnl",
-      defaultLayout: { x: 0, y: 0, w: 8, h: 4, minW: 4, minH: 3 },
-      node: (
-        <Card eyebrow="Live" title="Total P&L" className="h-full">
+  return (
+    <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <Card eyebrow="Live" title="Total P&L" className="lg:col-span-8">
           <div className="flex flex-wrap items-end justify-between gap-6">
             <div>
               <NumberTicker
@@ -70,18 +71,14 @@ export default function PortfolioCommandCenter() {
             </div>
           </div>
         </Card>
-      ),
-    },
-    {
-      id: "kill-switch",
-      defaultLayout: { x: 8, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
-      node: <KillSwitchButton />,
-    },
-    {
-      id: "gauge-sharpe",
-      defaultLayout: { x: 0, y: 4, w: 4, h: 3, minW: 3, minH: 2 },
-      node: (
-        <Card eyebrow="Backtested" title="Sharpe Ratio" className="h-full">
+
+        <div className="lg:col-span-4">
+          <KillSwitchButton />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Card eyebrow="Backtested" title="Sharpe Ratio">
           <RiskGauge
             label="Sharpe"
             value={riskQuery.data?.sharpe_ratio ?? null}
@@ -93,13 +90,8 @@ export default function PortfolioCommandCenter() {
             subtext="Capital-weighted, live strategies"
           />
         </Card>
-      ),
-    },
-    {
-      id: "gauge-daily-limit",
-      defaultLayout: { x: 4, y: 4, w: 4, h: 3, minW: 3, minH: 2 },
-      node: (
-        <Card eyebrow="Risk" title="Daily P&L vs Limit" className="h-full">
+
+        <Card eyebrow="Risk" title="Daily P&L vs Limit">
           <RiskGauge
             label="Of daily limit"
             value={pctOfLimit}
@@ -111,13 +103,8 @@ export default function PortfolioCommandCenter() {
             subtext="Share of max daily loss used"
           />
         </Card>
-      ),
-    },
-    {
-      id: "gauge-beta",
-      defaultLayout: { x: 8, y: 4, w: 4, h: 3, minW: 3, minH: 2 },
-      node: (
-        <Card eyebrow="vs Nifty 50" title="Portfolio Beta" className="h-full">
+
+        <Card eyebrow="vs Nifty 50" title="Portfolio Beta">
           <RiskGauge
             label="Beta"
             value={riskQuery.data?.beta_vs_nifty50 ?? null}
@@ -128,13 +115,10 @@ export default function PortfolioCommandCenter() {
             colorVar="var(--color-brand-to)"
           />
         </Card>
-      ),
-    },
-    {
-      id: "exposure",
-      defaultLayout: { x: 0, y: 7, w: 5, h: 6, minW: 3, minH: 4 },
-      node: (
-        <Card eyebrow="Allocation" title="Live Exposure" className="h-full">
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <Card eyebrow="Allocation" title="Live Exposure" className="lg:col-span-5">
           <ExposureDonut
             bySymbol={allocationQuery.data?.by_symbol ?? []}
             grossExposure={allocationQuery.data?.gross_exposure ?? 0}
@@ -142,48 +126,19 @@ export default function PortfolioCommandCenter() {
             strategyAvailable={allocationQuery.data?.strategy_data_available ?? false}
           />
         </Card>
-      ),
-    },
-    {
-      id: "margin",
-      defaultLayout: { x: 5, y: 7, w: 3, h: 6, minW: 2, minH: 3 },
-      node: (
-        <Card eyebrow="Broker" title="Margin" className="h-full">
+
+        <Card eyebrow="Broker" title="Margin" className="lg:col-span-3">
           <MarginPanel margin={marginQuery.data} />
         </Card>
-      ),
-    },
-    {
-      id: "positions",
-      defaultLayout: { x: 8, y: 7, w: 4, h: 6, minW: 3, minH: 4 },
-      node: (
-        <Card eyebrow="Open" title="Positions" className="h-full">
+
+        <Card eyebrow="Open" title="Positions" className="lg:col-span-4">
           <PositionsTable positions={positionsQuery.data ?? []} />
         </Card>
-      ),
-    },
-    {
-      id: "candlestick",
-      defaultLayout: { x: 0, y: 13, w: 12, h: 9, minW: 6, minH: 6 },
-      node: (
-        <Card eyebrow="Market" title="Candlestick Chart" className="h-full">
-          <CandlestickChart />
-        </Card>
-      ),
-    },
-  ];
-
-  return (
-    <RequireAuth>
-      <div className="flex flex-1">
-        <Sidebar />
-        <div className="flex flex-1 flex-col">
-          <PageHeader connected={connected} subtitle="Portfolio & Risk Command Center" />
-          <main className="mx-auto w-full max-w-[1440px] flex-1 p-6 sm:p-8">
-            <GridWorkspace storageKey="tradingos:grid:portfolio" panels={panels} />
-          </main>
-        </div>
       </div>
-    </RequireAuth>
+
+      <Card eyebrow="Market" title="Candlestick Chart">
+        <CandlestickChart />
+      </Card>
+    </main>
   );
 }

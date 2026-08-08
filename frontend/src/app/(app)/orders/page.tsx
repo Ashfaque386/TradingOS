@@ -3,10 +3,17 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { RequireAuth } from "@/lib/auth";
-import { Sidebar } from "@/components/layout/sidebar";
-import { PageHeader } from "@/components/layout/page-header";
+import { cn } from "@/lib/utils";
+import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { OrdersTable } from "@/components/orders/orders-table";
 import { TradesTable } from "@/components/orders/trades-table";
 
@@ -18,8 +25,10 @@ import { TradesTable } from "@/components/orders/trades-table";
  * orders exist in this environment today (both CANCELLED by the kill switch during an earlier
  * chaos-engineering test), 0 real trades yet -- honestly shown as empty, not faked.
  */
-function LiveTradeMonitoringView() {
+export default function OrdersPage() {
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>("");
+
+  usePageStatus("Live Trade & Order Monitoring — Real Capital Only", false);
 
   const strategiesQuery = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   // `?? []` creates a fresh array reference every render when .data is undefined, which would
@@ -151,49 +160,36 @@ function LiveTradeMonitoringView() {
           <p className="text-xs text-text-faint">No real trades to attribute yet.</p>
         ) : (
           <div className="overflow-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="text-text-faint">
-                  <th className="pb-2 font-medium">Strategy</th>
-                  <th className="pb-2 text-right font-medium">Trades</th>
-                  <th className="pb-2 text-right font-medium">Net P&amp;L</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="text-xs">
+              <TableHeader>
+                <TableRow className="text-text-faint hover:bg-transparent">
+                  <TableHead className="h-auto px-0 pb-2 font-medium">Strategy</TableHead>
+                  <TableHead className="h-auto px-0 pb-2 text-right font-medium">Trades</TableHead>
+                  <TableHead className="h-auto px-0 pb-2 text-right font-medium">Net P&amp;L</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {attribution.map(([strategyId, row]) => (
-                  <tr key={strategyId} className="border-t border-card-edge">
-                    <td className="py-row-dense text-text">{strategyName(strategyId)}</td>
-                    <td className="py-row-dense text-right font-mono-tabular text-text-dim">
+                  <TableRow key={strategyId} className="border-card-edge">
+                    <TableCell className="px-0 py-row-dense text-text">{strategyName(strategyId)}</TableCell>
+                    <TableCell className="px-0 py-row-dense text-right font-mono-tabular text-text-dim">
                       {row.trades}
-                    </td>
-                    <td
-                      className={`py-row-dense text-right font-mono-tabular font-medium ${
-                        row.netPnl >= 0 ? "text-up" : "text-down"
-                      }`}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        "px-0 py-row-dense text-right font-mono-tabular font-medium",
+                        row.netPnl >= 0 ? "text-up" : "text-down",
+                      )}
                     >
                       ₹{row.netPnl.toFixed(2)}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         )}
       </Card>
     </main>
-  );
-}
-
-export default function OrdersPage() {
-  return (
-    <RequireAuth>
-      <div className="flex flex-1">
-        <Sidebar />
-        <div className="flex flex-1 flex-col">
-          <PageHeader connected={false} subtitle="Live Trade & Order Monitoring — Real Capital Only" />
-          <LiveTradeMonitoringView />
-        </div>
-      </div>
-    </RequireAuth>
   );
 }

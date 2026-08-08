@@ -3,10 +3,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api";
-import { RequireAuth } from "@/lib/auth";
-import { Sidebar } from "@/components/layout/sidebar";
-import { PageHeader } from "@/components/layout/page-header";
+import { cn } from "@/lib/utils";
+import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
 import { DrawdownChart } from "@/components/strategies/drawdown-chart";
 import type {
@@ -39,9 +46,11 @@ const BENCHMARK_SYMBOL = "^NSEI";
  * real per-window pass/fail results via GET .../walk-forward. Empty (not missing) for a backtest
  * that predates the contract, or one with too little real history for even one rolling window.
  */
-function BacktestingDashboardView() {
+export default function BacktestsPage() {
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null);
   const [selectedBacktestId, setSelectedBacktestId] = useState<string | null>(null);
+
+  usePageStatus("Backtesting Dashboard — Full Metrics & Comparison", false);
 
   const strategiesQuery = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   const strategies = strategiesQuery.data ?? [];
@@ -125,26 +134,29 @@ function BacktestingDashboardView() {
             {backtests.length === 0 ? (
               <p className="text-xs text-text-faint">No backtests run yet for this strategy.</p>
             ) : (
-              <>
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  {backtests.map((b) => (
-                    <button
-                      key={b.id}
-                      onClick={() => setSelectedBacktestId(b.id)}
-                      className={
-                        b.id === effectiveBacktestId
-                          ? "rounded-full bg-panel px-2.5 py-1 text-[10px] font-medium text-text"
-                          : "rounded-full bg-bg px-2.5 py-1 text-[10px] font-medium text-text-faint hover:text-text-dim"
-                      }
-                    >
-                      {new Date(b.created_at).toLocaleDateString("en-IN")}
-                    </button>
-                  ))}
-                </div>
-                {selectedBacktest && <FullMetricGrid backtest={selectedBacktest} />}
-              </>
+              <div className="flex flex-wrap gap-1.5">
+                {backtests.map((b) => (
+                  <button
+                    key={b.id}
+                    onClick={() => setSelectedBacktestId(b.id)}
+                    className={
+                      b.id === effectiveBacktestId
+                        ? "rounded-full bg-panel px-2.5 py-1 text-[10px] font-medium text-text"
+                        : "rounded-full bg-bg px-2.5 py-1 text-[10px] font-medium text-text-faint hover:text-text-dim"
+                    }
+                  >
+                    {new Date(b.created_at).toLocaleDateString("en-IN")}
+                  </button>
+                ))}
+              </div>
             )}
           </Card>
+
+          {selectedBacktest && (
+            <Card eyebrow="Snapshot" title="Key Metrics">
+              <FullMetricGrid backtest={selectedBacktest} />
+            </Card>
+          )}
 
           {selectedBacktest && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -224,60 +236,60 @@ function WalkForwardTable({
         positive-expectancy rule.
       </p>
       <div className="max-h-80 overflow-y-auto overflow-x-auto">
-        <table className="w-full text-left text-[11px]">
-          <thead className="sticky top-0 bg-panel">
-            <tr className="text-[9px] uppercase tracking-wider text-text-faint">
-              <th className="pb-2 pr-3">Train Window</th>
-              <th className="pb-2 pr-3">Test Window</th>
-              <th className="pb-2 pr-3 text-right">Train Expectancy</th>
-              <th className="pb-2 pr-3 text-right">Test Expectancy</th>
-              <th className="pb-2 pr-3 text-right">Test Sharpe</th>
-              <th className="pb-2 pr-3 text-right">Test Trades</th>
-              <th className="pb-2 text-right">Out-of-Sample</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table className="text-[11px]">
+          <TableHeader className="sticky top-0 z-10 bg-panel">
+            <TableRow className="text-[9px] uppercase tracking-wider text-text-faint hover:bg-transparent">
+              <TableHead className="h-auto px-0 pb-2 pr-3 font-normal">Train Window</TableHead>
+              <TableHead className="h-auto px-0 pb-2 pr-3 font-normal">Test Window</TableHead>
+              <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Train Expectancy</TableHead>
+              <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Test Expectancy</TableHead>
+              <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Test Sharpe</TableHead>
+              <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Test Trades</TableHead>
+              <TableHead className="h-auto px-0 pb-2 text-right font-normal">Out-of-Sample</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {windows.map((w, i) => (
-              <tr key={`${w.train_start}-${i}`} className="border-t border-card-edge">
-                <td className="py-1.5 pr-3 text-text-dim">
+              <TableRow key={`${w.train_start}-${i}`} className="border-card-edge">
+                <TableCell className="px-0 py-1.5 pr-3 text-text-dim">
                   {w.train_start} → {w.train_end}
-                </td>
-                <td className="py-1.5 pr-3 text-text-dim">
+                </TableCell>
+                <TableCell className="px-0 py-1.5 pr-3 text-text-dim">
                   {w.test_start} → {w.test_end}
-                </td>
-                <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                </TableCell>
+                <TableCell className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                   {w.train_expectancy !== null ? `₹${w.train_expectancy.toFixed(2)}` : "—"}
-                </td>
-                <td
-                  className={
+                </TableCell>
+                <TableCell
+                  className={cn(
+                    "px-0 py-1.5 pr-3 text-right font-mono-tabular",
                     w.test_expectancy !== null && w.test_expectancy >= 0
-                      ? "py-1.5 pr-3 text-right font-mono-tabular text-up"
+                      ? "text-up"
                       : w.test_expectancy !== null
-                        ? "py-1.5 pr-3 text-right font-mono-tabular text-down"
-                        : "py-1.5 pr-3 text-right font-mono-tabular text-text-faint"
-                  }
+                        ? "text-down"
+                        : "text-text-faint",
+                  )}
                 >
                   {w.test_expectancy !== null ? `₹${w.test_expectancy.toFixed(2)}` : "—"}
-                </td>
-                <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                </TableCell>
+                <TableCell className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                   {w.test_sharpe_ratio !== null ? w.test_sharpe_ratio.toFixed(2) : "—"}
-                </td>
-                <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                </TableCell>
+                <TableCell className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                   {w.test_total_trades ?? "—"}
-                </td>
-                <td
-                  className={
-                    w.out_of_sample_passed
-                      ? "py-1.5 text-right font-medium text-up"
-                      : "py-1.5 text-right font-medium text-down"
-                  }
+                </TableCell>
+                <TableCell
+                  className={cn(
+                    "px-0 py-1.5 text-right font-medium",
+                    w.out_of_sample_passed ? "text-up" : "text-down",
+                  )}
                 >
                   {w.out_of_sample_passed ? "Pass" : "Fail"}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
@@ -304,64 +316,61 @@ function TradeListTable({
   }
   return (
     <div className="max-h-80 overflow-y-auto overflow-x-auto">
-      <table className="w-full text-left text-[11px]">
-        <thead className="sticky top-0 bg-panel">
-          <tr className="text-[9px] uppercase tracking-wider text-text-faint">
-            <th className="pb-2 pr-3">Entry</th>
-            <th className="pb-2 pr-3">Exit</th>
-            <th className="pb-2 pr-3">Side</th>
-            <th className="pb-2 pr-3 text-right">Size</th>
-            <th className="pb-2 pr-3 text-right">Entry Px</th>
-            <th className="pb-2 pr-3 text-right">Exit Px</th>
-            <th className="pb-2 pr-3 text-right">PnL</th>
-            <th className="pb-2 text-right">Return</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table className="text-[11px]">
+        <TableHeader className="sticky top-0 z-10 bg-panel">
+          <TableRow className="text-[9px] uppercase tracking-wider text-text-faint hover:bg-transparent">
+            <TableHead className="h-auto px-0 pb-2 pr-3 font-normal">Entry</TableHead>
+            <TableHead className="h-auto px-0 pb-2 pr-3 font-normal">Exit</TableHead>
+            <TableHead className="h-auto px-0 pb-2 pr-3 font-normal">Side</TableHead>
+            <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Size</TableHead>
+            <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Entry Px</TableHead>
+            <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">Exit Px</TableHead>
+            <TableHead className="h-auto px-0 pb-2 pr-3 text-right font-normal">PnL</TableHead>
+            <TableHead className="h-auto px-0 pb-2 text-right font-normal">Return</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {trades.map((t, i) => (
-            <tr key={`${t.entry_date}-${i}`} className="border-t border-card-edge">
-              <td className="py-1.5 pr-3 text-text-dim">{t.entry_date}</td>
-              <td className="py-1.5 pr-3 text-text-dim">{t.exit_date}</td>
-              <td
-                className={
-                  t.side === "long"
-                    ? "py-1.5 pr-3 font-medium text-up"
-                    : "py-1.5 pr-3 font-medium text-down"
-                }
+            <TableRow key={`${t.entry_date}-${i}`} className="border-card-edge">
+              <TableCell className="px-0 py-1.5 pr-3 text-text-dim">{t.entry_date}</TableCell>
+              <TableCell className="px-0 py-1.5 pr-3 text-text-dim">{t.exit_date}</TableCell>
+              <TableCell
+                className={cn(
+                  "px-0 py-1.5 pr-3 font-medium",
+                  t.side === "long" ? "text-up" : "text-down",
+                )}
               >
                 {t.side}
-              </td>
-              <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+              </TableCell>
+              <TableCell className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                 {t.size.toFixed(2)}
-              </td>
-              <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+              </TableCell>
+              <TableCell className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                 ₹{t.entry_price.toFixed(2)}
-              </td>
-              <td className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+              </TableCell>
+              <TableCell className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                 ₹{t.exit_price.toFixed(2)}
-              </td>
-              <td
-                className={
-                  t.pnl >= 0
-                    ? "py-1.5 pr-3 text-right font-mono-tabular text-up"
-                    : "py-1.5 pr-3 text-right font-mono-tabular text-down"
-                }
+              </TableCell>
+              <TableCell
+                className={cn(
+                  "px-0 py-1.5 pr-3 text-right font-mono-tabular",
+                  t.pnl >= 0 ? "text-up" : "text-down",
+                )}
               >
                 ₹{t.pnl.toFixed(2)}
-              </td>
-              <td
-                className={
-                  t.return_pct >= 0
-                    ? "py-1.5 text-right font-mono-tabular text-up"
-                    : "py-1.5 text-right font-mono-tabular text-down"
-                }
+              </TableCell>
+              <TableCell
+                className={cn(
+                  "px-0 py-1.5 text-right font-mono-tabular",
+                  t.return_pct >= 0 ? "text-up" : "text-down",
+                )}
               >
                 {(t.return_pct * 100).toFixed(2)}%
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -385,13 +394,30 @@ function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-IN");
 }
 
-const METRICS: { key: keyof BacktestSummary; label: string; fmt: (v: number) => string }[] = [
-  { key: "sharpe_ratio", label: "Sharpe", fmt: (v) => v.toFixed(2) },
+const METRICS: {
+  key: keyof BacktestSummary;
+  label: string;
+  fmt: (v: number) => string;
+  /** Only set for metrics with an unambiguous, standard good/bad threshold -- avoids guessing at
+   * a sign convention (e.g. drawdown) that isn't worth risking a wrong-direction color cue on. */
+  tone?: (v: number) => "up" | "warn" | "down";
+}[] = [
+  {
+    key: "sharpe_ratio",
+    label: "Sharpe",
+    fmt: (v) => v.toFixed(2),
+    tone: (v) => (v >= 1 ? "up" : v >= 0 ? "warn" : "down"),
+  },
   { key: "sortino_ratio", label: "Sortino", fmt: (v) => v.toFixed(2) },
   { key: "calmar_ratio", label: "Calmar", fmt: (v) => v.toFixed(2) },
   { key: "max_drawdown", label: "Max DD", fmt: (v) => `${(v * 100).toFixed(1)}%` },
   { key: "cagr", label: "CAGR", fmt: (v) => `${(v * 100).toFixed(1)}%` },
-  { key: "win_rate", label: "Win Rate", fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  {
+    key: "win_rate",
+    label: "Win Rate",
+    fmt: (v) => `${(v * 100).toFixed(0)}%`,
+    tone: (v) => (v >= 0.5 ? "up" : v >= 0.4 ? "warn" : "down"),
+  },
   { key: "profit_factor", label: "Profit Factor", fmt: (v) => v.toFixed(2) },
   { key: "expectancy", label: "Expectancy", fmt: (v) => `₹${v.toFixed(2)}` },
   { key: "total_trades", label: "Trades", fmt: (v) => v.toString() },
@@ -402,17 +428,28 @@ const METRICS: { key: keyof BacktestSummary; label: string; fmt: (v: number) => 
   },
 ];
 
+const TONE_CLASS: Record<"up" | "warn" | "down", string> = {
+  up: "text-up",
+  warn: "text-warn",
+  down: "text-down",
+};
+
 function FullMetricGrid({ backtest }: { backtest: BacktestSummary }) {
   return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-10">
-      {METRICS.map(({ key, label, fmt }) => {
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5 lg:grid-cols-10">
+      {METRICS.map(({ key, label, fmt, tone }) => {
         const raw = backtest[key];
+        const isNum = typeof raw === "number";
+        const toneClass = isNum && tone ? TONE_CLASS[tone(raw)] : "text-text";
         return (
-          <div key={key} className="rounded-lg bg-bg p-2 text-center">
-            <div className="font-mono-tabular text-sm font-semibold text-text">
-              {typeof raw === "number" ? fmt(raw) : "—"}
+          <div
+            key={key}
+            className="rounded-btn border border-card-edge bg-bg p-3 text-center transition-colors hover:border-text-faint/40"
+          >
+            <div className={cn("font-mono-tabular text-base font-semibold", toneClass)}>
+              {isNum ? fmt(raw) : "—"}
             </div>
-            <div className="text-[9px] uppercase tracking-wider text-text-faint">{label}</div>
+            <div className="mt-0.5 text-[9px] uppercase tracking-wider text-text-faint">{label}</div>
           </div>
         );
       })}
@@ -426,47 +463,33 @@ function BacktestComparisonTable({ rows }: { rows: { label: string; backtest: Ba
   }
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left text-[11px]">
-        <thead>
-          <tr className="text-[9px] uppercase tracking-wider text-text-faint">
-            <th className="pb-2 pr-3">Run</th>
+      <Table className="text-[11px]">
+        <TableHeader>
+          <TableRow className="text-[9px] uppercase tracking-wider text-text-faint hover:bg-transparent">
+            <TableHead className="h-auto px-0 pb-2 pr-3 font-normal">Run</TableHead>
             {METRICS.map((m) => (
-              <th key={m.key} className="pb-2 pr-3 text-right">
+              <TableHead key={m.key} className="h-auto px-0 pb-2 pr-3 text-right font-normal">
                 {m.label}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map(({ label, backtest }) => (
-            <tr key={backtest.id} className="border-t border-card-edge">
-              <td className="py-1.5 pr-3 text-text-dim">{label}</td>
+            <TableRow key={backtest.id} className="border-card-edge">
+              <TableCell className="px-0 py-1.5 pr-3 text-text-dim">{label}</TableCell>
               {METRICS.map(({ key, fmt }) => {
                 const raw = backtest[key];
                 return (
-                  <td key={key} className="py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
+                  <TableCell key={key} className="px-0 py-1.5 pr-3 text-right font-mono-tabular text-text-faint">
                     {typeof raw === "number" ? fmt(raw) : "—"}
-                  </td>
+                  </TableCell>
                 );
               })}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
-  );
-}
-
-export default function BacktestsPage() {
-  return (
-    <RequireAuth>
-      <div className="flex flex-1">
-        <Sidebar />
-        <div className="flex flex-1 flex-col">
-          <PageHeader connected={false} subtitle="Backtesting Dashboard — Full Metrics & Comparison" />
-          <BacktestingDashboardView />
-        </div>
-      </div>
-    </RequireAuth>
   );
 }

@@ -20,20 +20,41 @@ const VARIANT_CLASSES = {
   secondary:
     "bg-panel text-text border border-card-edge hover:bg-bg",
   destructive: "bg-down text-white hover:brightness-110 hover:-translate-y-0.5",
+  // Phase 2A: added for the new shadcn Dialog/Sheet/Command primitives' own generated markup
+  // (icon-only close buttons, InputGroup's default button treatment) -- transparent, no border,
+  // no gradient/shadow, since these are chrome (close a panel) not a primary/secondary CTA.
+  ghost: "bg-transparent text-text-faint hover:bg-bg hover:text-text-dim",
+  // Same Phase 2A source (DialogFooter's optional secondary "Close" action) -- a bordered variant
+  // distinct from `secondary` only in starting fully transparent instead of bg-panel.
+  outline: "bg-transparent text-text border border-card-edge hover:bg-bg",
 } as const;
 
 export type ButtonVariant = keyof typeof VARIANT_CLASSES;
 
+// Phase 2A: `size` didn't exist before this -- every pre-existing call site renders with the
+// same px-4/py-2/text-xs treatment (now `size="default"`, the default), so this is additive.
+// `icon-sm` exists only for the new Dialog/Sheet primitives' square icon-only close buttons.
+const SIZE_CLASSES = {
+  default: "px-4 py-2 text-xs",
+  "icon-sm": "size-7 p-0",
+} as const;
+
+export type ButtonSize = keyof typeof SIZE_CLASSES;
+
 export const Button = forwardRef<
   HTMLButtonElement,
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }
->(function Button({ className, variant = "primary", ...props }, ref) {
+  React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: ButtonVariant;
+    size?: ButtonSize;
+  }
+>(function Button({ className, variant = "primary", size = "default", ...props }, ref) {
   return (
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center gap-1.5 rounded-btn px-4 py-2 text-xs font-semibold transition duration-300 ease-out disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center gap-1.5 rounded-btn font-semibold transition duration-300 ease-out disabled:pointer-events-none disabled:opacity-50",
         VARIANT_CLASSES[variant],
+        SIZE_CLASSES[size],
         className,
       )}
       {...props}

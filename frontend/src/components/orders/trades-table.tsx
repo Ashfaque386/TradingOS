@@ -1,6 +1,14 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { LiveTrade } from "@/lib/api";
 
 export function TradesTable({ trades }: { trades: LiveTrade[] }) {
@@ -14,22 +22,22 @@ export function TradesTable({ trades }: { trades: LiveTrade[] }) {
 
   return (
     <div className="max-h-[420px] overflow-auto">
-      <table className="w-full text-left text-xs">
-        <thead className="sticky top-0 bg-panel">
-          <tr className="text-text-faint">
-            <th className="pb-2 font-medium">Time</th>
-            <th className="pb-2 font-medium">Symbol</th>
-            <th className="pb-2 font-medium">Side</th>
-            <th className="pb-2 text-right font-medium">Qty</th>
-            <th className="pb-2 text-right font-medium">Price</th>
-            <th className="pb-2 text-right font-medium">Fees</th>
-            <th className="pb-2 text-right font-medium">Net P&amp;L</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table className="text-xs">
+        <TableHeader className="sticky top-0 z-10 bg-panel">
+          <TableRow className="text-text-faint hover:bg-transparent">
+            <TableHead className="h-auto px-0 pb-2 font-medium">Time</TableHead>
+            <TableHead className="h-auto px-0 pb-2 font-medium">Symbol</TableHead>
+            <TableHead className="h-auto px-0 pb-2 font-medium">Side</TableHead>
+            <TableHead className="h-auto px-0 pb-2 text-right font-medium">Qty</TableHead>
+            <TableHead className="h-auto px-0 pb-2 text-right font-medium">Price</TableHead>
+            <TableHead className="h-auto px-0 pb-2 text-right font-medium">Fees</TableHead>
+            <TableHead className="h-auto px-0 pb-2 text-right font-medium">Net P&amp;L</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {trades.map((t) => (
-            <tr key={t.id} className="border-t border-card-edge">
-              <td className="py-row-dense font-mono-tabular text-text-faint">
+            <TableRow key={t.id} className="border-card-edge">
+              <TableCell className="px-0 py-row-dense font-mono-tabular text-text-faint">
                 {new Date(t.executed_at).toLocaleString("en-IN", {
                   timeZone: "Asia/Kolkata",
                   day: "2-digit",
@@ -37,26 +45,28 @@ export function TradesTable({ trades }: { trades: LiveTrade[] }) {
                   hour: "2-digit",
                   minute: "2-digit",
                 })}
-              </td>
-              <td className="py-row-dense font-medium text-text">{t.symbol}</td>
-              <td
+              </TableCell>
+              <TableCell className="px-0 py-row-dense font-medium text-text">{t.symbol}</TableCell>
+              <TableCell
                 className={cn(
-                  "py-row-dense font-medium",
+                  "px-0 py-row-dense font-medium",
                   t.side === "BUY" ? "text-brand-via" : "text-brand-to",
                 )}
               >
                 {t.side}
-              </td>
-              <td className="py-row-dense text-right font-mono-tabular text-text-dim">{t.quantity}</td>
-              <td className="py-row-dense text-right font-mono-tabular text-text-dim">
+              </TableCell>
+              <TableCell className="px-0 py-row-dense text-right font-mono-tabular text-text-dim">
+                {t.quantity}
+              </TableCell>
+              <TableCell className="px-0 py-row-dense text-right font-mono-tabular text-text-dim">
                 {t.price.toFixed(2)}
-              </td>
-              <td className="py-row-dense text-right font-mono-tabular text-text-faint">
+              </TableCell>
+              <TableCell className="px-0 py-row-dense text-right font-mono-tabular text-text-faint">
                 {(t.brokerage + t.stt + t.gst).toFixed(2)}
-              </td>
-              <td
+              </TableCell>
+              <TableCell
                 className={cn(
-                  "py-row-dense text-right font-mono-tabular font-medium",
+                  "px-0 py-row-dense text-right font-mono-tabular font-medium",
                   t.net_pnl === null
                     ? "text-text-faint"
                     : t.net_pnl >= 0
@@ -65,11 +75,11 @@ export function TradesTable({ trades }: { trades: LiveTrade[] }) {
                 )}
               >
                 {t.net_pnl !== null ? t.net_pnl.toFixed(2) : "—"}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

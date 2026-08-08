@@ -1,9 +1,6 @@
 @import "tailwindcss";
 
 :root {
-  --background: #09090b;
-  --foreground: #f4f4f5;
-
   /* Neon accent signals, per the retired 2026-08-01 direction (Phase_7_Frontend_Architecture.md
      §1.1, superseded 2026-08-04). Left in place -- REL-012 Phase A only adds the new token set
      below, it does not touch any component still reading these; that's Phase B/D's job. */
@@ -31,6 +28,26 @@
   --text-dim: #666666;
   --text-faint: #999999;
   --shadow-card: 0 20px 50px rgba(0, 0, 0, 0.08);
+
+  /* Phase 1 top-nav migration: shadcn/ui (style base-nova) semantic tokens, aliased onto the
+     mode-scoped tokens above rather than kept at the CLI's own generated values -- re-skins
+     every scaffolded primitive (Table/Badge/Select/Tabs/DropdownMenu) onto this app's existing
+     identity instead of shadcn's own defaults. Mode-invariant ones (primary/destructive/ring)
+     live in the mode-agnostic :root block below alongside brand-gradient/color-up/etc. */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--panel);
+  --card-foreground: var(--text);
+  --popover: var(--panel);
+  --popover-foreground: var(--text);
+  --secondary: var(--panel);
+  --secondary-foreground: var(--text);
+  --muted: var(--bg);
+  --muted-foreground: var(--text-faint);
+  --accent: var(--bg);
+  --accent-foreground: var(--text);
+  --border: var(--card-edge);
+  --input: var(--card-edge);
 }
 
 :root[data-mode="dark"] {
@@ -41,6 +58,22 @@
   --text-dim: #a1a1aa;
   --text-faint: #71717a;
   --shadow-card: 0 20px 50px rgba(0, 0, 0, 0.35);
+
+  /* Same shadcn re-skin as the light block above -- see that block's own comment. */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--panel);
+  --card-foreground: var(--text);
+  --popover: var(--panel);
+  --popover-foreground: var(--text);
+  --secondary: var(--panel);
+  --secondary-foreground: var(--text);
+  --muted: var(--bg);
+  --muted-foreground: var(--text-faint);
+  --accent: var(--bg);
+  --accent-foreground: var(--text);
+  --border: var(--card-edge);
+  --input: var(--card-edge);
 }
 
 :root {
@@ -62,6 +95,16 @@
   --radius-btn: 16px;
   --shadow-glow-brand: 0 8px 20px rgba(255, 110, 170, 0.12);
 
+  /* Phase 1 top-nav migration: the shadcn semantic tokens that don't change by theme, matching
+     how --color-up/--color-down/--color-warn above are already mode-invariant. --primary proxies
+     the 3-stop brand gradient with its middle stop -- anything needing the literal gradient keeps
+     using .bg-brand-gradient/.text-brand-gradient directly, never bg-primary. */
+  --primary: var(--color-brand-via);
+  --primary-foreground: #ffffff;
+  --destructive: var(--color-down);
+  --destructive-foreground: #ffffff;
+  --ring: var(--color-brand-via);
+
   --font-heading: var(--font-plex-jakarta);
 
   /* REL-012 Phase B (2026-08-04): row-padding scale for the dense-vs-default table rule (Phase
@@ -77,6 +120,28 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-plex-sans);
   --font-mono: var(--font-plex-mono);
+
+  /* Phase 1 top-nav migration: shadcn/ui semantic tokens exposed as real Tailwind utilities
+     (bg-card, text-muted-foreground, border-border, ...) -- values themselves are aliased onto
+     the app's own tokens above, in the mode-scoped blocks (light/dark) and the mode-invariant
+     :root block, not shadcn's own defaults. */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 
   /* REL-012 Phase A: mode-scoped tokens exposed as real Tailwind utilities (bg-panel,
      text-text-dim, border-card-edge, shadow-card, rounded-card, font-heading, ...) so Phase B's

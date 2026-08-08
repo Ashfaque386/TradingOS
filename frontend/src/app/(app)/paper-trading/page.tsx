@@ -2,9 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { RequireAuth } from "@/lib/auth";
-import { Sidebar } from "@/components/layout/sidebar";
-import { PageHeader } from "@/components/layout/page-header";
+import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
 import { ShadowModePanel } from "@/components/paper-trading/shadow-mode-panel";
 import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
@@ -18,7 +16,9 @@ import { PaperTradesTable } from "@/components/paper-trading/paper-trades-table"
  * Readiness Gate on each strategy's review panel), independent of whether the connected broker
  * itself offers any paper-trading feature (neither Zerodha nor Upstox does).
  */
-function PaperTradingDeskView() {
+export default function PaperTradingPage() {
+  usePageStatus("Paper Trading Desk — Simulated Fills, Zero Real Capital", false);
+
   const positionsQuery = useQuery({
     queryKey: ["paper-positions"],
     queryFn: () => api.paperPositions(),
@@ -73,19 +73,5 @@ function PaperTradingDeskView() {
         </p>
       </Card>
     </main>
-  );
-}
-
-export default function PaperTradingPage() {
-  return (
-    <RequireAuth>
-      <div className="flex flex-1">
-        <Sidebar />
-        <div className="flex flex-1 flex-col">
-          <PageHeader connected={false} subtitle="Paper Trading Desk — Simulated Fills, Zero Real Capital" />
-          <PaperTradingDeskView />
-        </div>
-      </div>
-    </RequireAuth>
   );
 }

@@ -53,10 +53,14 @@ describe("Audit view role gating", () => {
         cy.contains("does not have access").should("not.exist");
 
         if (realEntries.length > 0) {
-          cy.get("table, [data-testid=audit-log-table]").should("exist");
-          cy.contains(/LOGIN_SUCCESS|RBAC_DENIED|KILL_SWITCH|STRATEGY_PROMOTED|.+/).should(
-            "be.visible",
-          );
+          // Scoped to the table itself, not the whole document -- an unscoped cy.contains()
+          // with this catch-all `.+` fallback matches the FIRST element anywhere on the page
+          // whose text satisfies the regex, which is TopNav's own persistent "TRADINGOS" brand
+          // heading (always present, early in DOM order) rather than a real audit-log row.
+          cy.get("table, [data-testid=audit-log-table]")
+            .should("exist")
+            .contains(/LOGIN_SUCCESS|RBAC_DENIED|KILL_SWITCH|STRATEGY_PROMOTED|.+/)
+            .should("be.visible");
         } else {
           cy.log("No audit rows exist yet in this environment -- nothing further to assert.");
         }

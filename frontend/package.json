@@ -11,9 +11,12 @@
     "cypress:run": "cypress run"
   },
   "dependencies": {
+    "@base-ui/react": "^1.7.0",
     "@tanstack/react-query": "^5.101.4",
     "@types/diff": "^7.0.2",
+    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "diff": "^9.0.0",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
@@ -23,7 +26,6 @@
     "next": "16.2.11",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "react-grid-layout": "^2.2.4",
     "tailwind-merge": "^3.6.0",
     "zustand": "^5.0.14"
   },
