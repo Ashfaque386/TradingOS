@@ -14,6 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # before the source COPY steps below so ordinary source-only rebuilds don't re-trigger it.
 RUN pip install --no-cache-dir --upgrade "pip>=26.1.2"
 
+# Same class of bug, same fix, found by a later pip-audit run: the base image's bundled
+# setuptools (78.1.0) has 4 real, known CVEs (PYSEC-2025-49, PYSEC-2026-3447) -- fixed by
+# upgrading to the version that resolves both (83.0.0 covers PYSEC-2026-3447's own higher bar),
+# not suppressed. Same placement rationale as the pip upgrade above.
+RUN pip install --no-cache-dir --upgrade "setuptools>=83.0.0"
+
 COPY pyproject.toml ./
 COPY src ./src
 COPY tests ./tests

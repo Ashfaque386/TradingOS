@@ -32,7 +32,11 @@ describe("Agent Console", () => {
           const realRuns = response.body as Array<{ run_id: string; agent_name: string }>;
 
           cy.visit("/agents");
-          cy.contains("Agent Console").should("be.visible");
+          // Scoped to the nav specifically -- an unscoped cy.contains("Agent Console") matches
+          // the FIRST element anywhere on the page with that text, which is now TopNav's own
+          // status subtitle (usePageStatus("Agent Console", ...) sets that exact string), not
+          // the nav link this assertion actually means to check.
+          cy.get("nav").contains("Agent Console").should("be.visible");
           cy.contains("Research Cycle").should("be.visible");
 
           if (realRuns.length > 0) {
