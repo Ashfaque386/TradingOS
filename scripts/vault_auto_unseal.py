@@ -26,6 +26,7 @@ simplification, not an oversight.
 """
 
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -39,8 +40,37 @@ logger = logging.getLogger("vault_auto_unseal")
 KEYS_DIR = Path("/app/vault/keys")
 UNSEAL_KEY_PATH = KEYS_DIR / "unseal_key"
 ROOT_TOKEN_PATH = KEYS_DIR / "root_token"
+ENV_PATH = Path("/app/.env")
 
 POLL_INTERVAL_SECONDS = 5
+
+
+def _sync_env_token(root_token: str) -> None:
+    """Keeps `.env`'s VAULT_TOKEN in sync with the real root token this file holds.
+
+    docker-compose.yml deliberately no longer sets a static VAULT_TOKEN env var (it used to,
+    which meant it permanently shadowed the real token everywhere, since pydantic-settings
+    resolves an env var before it ever looks at `.env`) -- this file is now the only source the
+    real token is persisted to. That makes pydantic-settings' own `.env` fallback the mechanism
+    that gives EVERY process reading `Settings()` the real token, not just the entrypoint
+    wrapper's own PID 1 (scripts/docker-entrypoint-with-vault-token.sh, which still separately
+    exports it for its own process). This specifically fixes `docker compose exec app <script>`,
+    which attaches a fresh process to the container's static (docker-compose.yml) environment,
+    not PID 1's runtime-exported one -- that fresh process has no VAULT_TOKEN env var at all, so
+    it falls through to `.env`. Never logs the token itself. No-ops if `.env` doesn't exist
+    (`docker compose exec` into a container with no bind-mounted `.env` has nothing to sync)."""
+    if not ENV_PATH.exists():
+        return
+    text = ENV_PATH.read_text(encoding="utf-8")
+    if f"VAULT_TOKEN={root_token}" in text.splitlines():
+        return
+    new_text, count = re.subn(
+        r"^VAULT_TOKEN=.*$", f"VAULT_TOKEN={root_token}", text, count=1, flags=re.MULTILINE
+    )
+    if count == 0:
+        new_text = text.rstrip("\n") + f"\nVAULT_TOKEN={root_token}\n"
+    ENV_PATH.write_text(new_text, encoding="utf-8")
+    logger.info(".env VAULT_TOKEN synced to the real root token.")
 
 
 def _initialize(client: hvac.Client) -> None:
@@ -61,6 +91,7 @@ def _initialize(client: hvac.Client) -> None:
         "Vault initialized for real -- unseal key + root token saved to %s (never logged).",
         KEYS_DIR,
     )
+    _sync_env_token(root_token)
 
 
 def _unseal(client: hvac.Client) -> None:
@@ -86,6 +117,12 @@ def run_once() -> None:
     # unseal() are always two separate real steps, even on the very first run.
     if client.sys.is_sealed():
         _unseal(client)
+
+    # Covers the restart case _initialize() doesn't run for (Vault already initialized on a
+    # persisted data volume, but `.env` itself got reset/recreated) -- cheap no-op re-check every
+    # poll when already in sync, see _sync_env_token's own docstring for why this matters.
+    if ROOT_TOKEN_PATH.exists():
+        _sync_env_token(ROOT_TOKEN_PATH.read_text(encoding="utf-8").strip())
 
 
 def main() -> None:

@@ -39,10 +39,15 @@ services:
       # Local dev Vault (see the `vault` service below) -- src/core/vault.py falls back to .env
       # Settings if this is unreachable, so it's here but not a hard startup dependency.
       VAULT_ADDR: http://vault:8200
-      # REL-015 E15.1: this fixed value is now only the fallback the entrypoint wrapper below
-      # falls back to if the real, dynamically-generated root token isn't available yet -- see
-      # scripts/docker-entrypoint-with-vault-token.sh.
-      VAULT_TOKEN: dev-only-root-token
+      # REL-015 E15.1: deliberately NOT set here. An env var here would permanently shadow the
+      # real token everywhere (pydantic-settings resolves an env var before it ever reads
+      # `.env`), including for `docker compose exec app <script>` -- which attaches a fresh
+      # process to this static environment, not the entrypoint wrapper's runtime-exported one.
+      # The real, dynamically-generated root token is instead kept in sync in `.env` by
+      # scripts/vault_auto_unseal.py's own `_sync_env_token()`, so pydantic-settings' `.env`
+      # fallback is what every process -- PID 1 included -- actually resolves it from.
+      # Settings.vault_token's own Pydantic default ("dev-only-root-token") is the final
+      # fallback if Vault hasn't finished its first real init yet.
     ports:
       # Host port moved off the default 8000: another unrelated project on this machine
       # (dataops_backend / ai_data_automation-backend) already binds host 0.0.0.0:8000,
@@ -117,8 +122,7 @@ services:
       DATA_LAKE_ROOT: /app/data/lake
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       VAULT_ADDR: http://vault:8200
-      # REL-015 E15.1: fallback only -- see the `app` service's own comment above.
-      VAULT_TOKEN: dev-only-root-token
+      # REL-015 E15.1: deliberately NOT set here -- see the `app` service's own comment above.
       RUN_SCHEDULER: "false"
       # REL-009 E9.4: `false` by default (real deployments never set this) -- lets a real ZAP
       # scan run (scripts/run_zap_scan.sh) be pointed at this real, deliberately-unsafe endpoint
@@ -242,8 +246,7 @@ services:
       DATA_LAKE_ROOT: /app/data/lake
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       VAULT_ADDR: http://vault:8200
-      # REL-015 E15.1: fallback only -- see the `app` service's own comment above.
-      VAULT_TOKEN: dev-only-root-token
+      # REL-015 E15.1: deliberately NOT set here -- see the `app` service's own comment above.
     volumes:
       - .:/app
       - data_lake:/app/data/lake
@@ -271,7 +274,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       DATA_LAKE_ROOT: /app/data/lake
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: dev-only-root-token
+      # REL-015 E15.1: deliberately NOT set here -- see the `app` service's own comment above.
     volumes:
       - .:/app
       - data_lake:/app/data/lake
