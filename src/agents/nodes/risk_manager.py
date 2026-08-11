@@ -25,9 +25,12 @@ gives `naked_options_scanner.scan_for_naked_options()` real, declared legs to ch
 nothing. `naked_options_checked` stays `False` (not fabricated True) for "Equity" strategies or
 any "F&O" strategy the LLM didn't populate legs for.
 
-Position sizing (`position_sizing.compute_position_sizes`) still needs real account capital,
-which isn't threaded into `TradingOSGraphState` anywhere -- this one honest gap remains, unchanged
-by REL-016 (no epic in this release scoped it).
+REL-034 closes the position-sizing gap: `state.account_capital` (the Paper Trading Account's
+real live equity, injected by `src/api/routers/agents.py::_execute_graph_run`) is now threaded
+through, and `_compute_position_sizing` below calls the real, hardcoded, tested
+`position_sizing.compute_position_sizes()` against it. Still honestly `None` (not fabricated)
+whenever no Paper account has been seeded yet, or the candidate has no real close-price history
+to size against.
 """
 
 import json
@@ -50,6 +53,7 @@ from src.data.datalake.query import DataLake
 from src.engine.risk import kill_switch_service
 from src.engine.risk.correlation import CorrelationCheckResult, check_correlation_constraint
 from src.engine.risk.naked_options_scanner import OptionLeg, scan_for_naked_options
+from src.engine.risk.position_sizing import compute_position_sizes
 
 PROMPT_SLUG = "risk_manager_agent"
 TASK_PROMPT_SLUG = "risk_manager_agent_task"
@@ -126,12 +130,48 @@ def _run_naked_options_check(
     return True, result.naked_legs
 
 
+def _compute_position_sizing(state: TradingOSGraphState) -> tuple[str, int | None]:
+    """Returns (summary_text, shares). `shares=None` (not fabricated) whenever
+    `state.account_capital` is unavailable, the candidate has no real close-price history, or
+    the computed size rounds down to zero whole shares at the current price."""
+    if state.account_capital is None:
+        return NOT_COMPUTED_NOTE, None
+    if not state.strategy_logic or not state.strategy_logic.universe:
+        return NOT_COMPUTED_NOTE, None
+    if len(state.close_curve) < 2:
+        return NOT_COMPUTED_NOTE, None
+
+    symbol = state.strategy_logic.universe[0]
+    closes = [p.close for p in state.close_curve]
+    returns = pd.Series(closes).pct_change().dropna()
+    last_price = closes[-1]
+
+    sizes = compute_position_sizes(
+        {symbol: returns}, {symbol: last_price}, total_capital=state.account_capital
+    )
+    result = sizes.get(symbol)
+    if result is None or result.shares <= 0:
+        return (
+            f"Computed a zero-share allocation for {symbol} at the account's current "
+            f"₹{state.account_capital:,.2f} equity -- position too small to size at "
+            f"₹{last_price:,.2f}/share.",
+            None,
+        )
+    return (
+        f"{result.shares} shares of {symbol} (~₹{result.capital_allocation:,.2f}, "
+        f"{result.weight:.0%} of the ₹{state.account_capital:,.2f} account equity, "
+        "inverse-volatility weighted).",
+        result.shares,
+    )
+
+
 def _generate_narrative(
     *,
     hypothesis: str,
     correlation_result: CorrelationCheckResult | None,
     naked_options_checked: bool,
     naked_legs: list[OptionLeg],
+    position_sizing_summary: str,
 ) -> str:
     if correlation_result is None:
         correlation_summary = NOT_COMPUTED_NOTE
@@ -158,7 +198,7 @@ def _generate_narrative(
             kill_switch_tripped=False,
             correlation_summary=correlation_summary,
             naked_options_summary=naked_options_summary,
-            position_sizing_summary=NOT_COMPUTED_NOTE,
+            position_sizing_summary=position_sizing_summary,
         )
         response = complete(
             "research",
@@ -174,7 +214,7 @@ def _generate_narrative(
         logger.warning("risk_manager_narrative_fallback", error=str(exc))
         return (
             f"Kill switch armed (not tripped). Correlation: {correlation_summary} "
-            f"Naked-options: {naked_options_summary} Position sizing: {NOT_COMPUTED_NOTE}"
+            f"Naked-options: {naked_options_summary} Position sizing: {position_sizing_summary}"
         )
 
 
@@ -200,6 +240,7 @@ def risk_manager_node(state: TradingOSGraphState) -> dict[str, object]:
     correlation_result = _compute_correlation(state)
     declared_legs = state.strategy_logic.option_legs if state.strategy_logic else None
     naked_options_checked, naked_legs = _run_naked_options_check(declared_legs)
+    position_sizing_summary, position_sizing_shares = _compute_position_sizing(state)
 
     hypothesis = state.strategy_logic.hypothesis if state.strategy_logic else "unknown strategy"
     narrative = _generate_narrative(
@@ -207,6 +248,7 @@ def risk_manager_node(state: TradingOSGraphState) -> dict[str, object]:
         correlation_result=correlation_result,
         naked_options_checked=naked_options_checked,
         naked_legs=naked_legs,
+        position_sizing_summary=position_sizing_summary,
     )
 
     # Advisory decision, deliberately asymmetric between the two checks:
@@ -233,6 +275,7 @@ def risk_manager_node(state: TradingOSGraphState) -> dict[str, object]:
             kill_switch_tripped=False,
             correlation_passed=None if correlation_result is None else correlation_result.passed,
             naked_options_checked=naked_options_checked,
+            position_sizing_shares=position_sizing_shares,
             narrative=narrative,
         )
     }

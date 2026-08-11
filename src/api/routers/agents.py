@@ -22,6 +22,7 @@ publishes each step to Redis so the Thought Stream panel has real content to sho
 Auth/RBAC gap matches every other Phase 4 router: no JWT/auth module exists yet.
 """
 
+import asyncio
 import json
 import threading
 import uuid
@@ -48,11 +49,14 @@ from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT
 from src.agents.prompt_registry import PromptNotFoundError
 from src.agents.state import TradingOSGraphState
 from src.api.deps import require_role
+from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake
+from src.engine.paper_trading.account_equity import compute_account_equity
+from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account
@@ -458,13 +462,31 @@ def _persist_strategy_progress(
         return
 
 
+def _fetch_account_capital() -> float | None:
+    """REL-034: the seeded Paper Trading Account's real live equity, for `risk_manager_node`'s
+    real `compute_position_sizes()` call -- `None` (not fabricated) whenever no broker is
+    configured or no Paper account has been seeded yet (`scripts/seed_paper_account.py`), both
+    honest, real "not available" states this codebase already has an established convention for
+    (see risk_manager.py's own NOT_COMPUTED_NOTE)."""
+    try:
+        broker = build_broker()
+    except NoBrokerConfigured:
+        return None
+    try:
+        with get_session() as session:
+            account = get_paper_account(session)
+            return asyncio.run(compute_account_equity(str(account.id), session, broker))
+    except RuntimeError:
+        return None
+
+
 def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
     """Runs in a FastAPI BackgroundTasks worker thread (dispatched after the trigger endpoint
     already returned). Synchronous end-to-end because every graph node (src/agents/nodes/*.py)
     and `graph.stream()` itself are synchronous."""
     redis_client = get_redis_client()
     graph = build_graph()
-    state = TradingOSGraphState(thread_id=thread_id)
+    state = TradingOSGraphState(thread_id=thread_id, account_capital=_fetch_account_capital())
     checkpoint_wall = datetime.now(UTC)
     tracking = _StrategyTracking()
 

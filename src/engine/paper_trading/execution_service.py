@@ -2,9 +2,16 @@
 whichever broker is configured (src/brokers/factory.py, read-only, no funds at risk), simulates
 the fill via src/engine/paper_trading/slippage_model.py's real depth-walking logic, and persists
 the result to PAPER_TRADES (src/models/paper_trading.py) -- never calls place_order.
+
+REL-034: every fill belongs to a real Account (`account_id`, required) -- see
+src/engine/paper_trading/paper_account.py for how callers find the one seeded Paper account.
+`instrument_type`/`underlying`/`strike`/`expiry` are populated for F&O fills (the daily signal
+job and the intraday pipeline resolve each option leg to its own real tradable broker symbol
+before calling this once per leg); they default to a plain EQUITY fill, matching every trade
+this function has ever placed before this release.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from src.brokers.base import BrokerAdapter, Side
 from src.core.db import get_session
@@ -23,7 +30,12 @@ async def execute_paper_trade(
     symbol: str,
     side: Side,
     quantity: int,
+    account_id: str,
     strategy_id: str | None = None,
+    instrument_type: str = "EQUITY",
+    underlying: str | None = None,
+    strike: float | None = None,
+    expiry: date | None = None,
 ) -> PaperTrade:
     quote = await broker.get_quote(symbol)
     depth = quote.sell_depth if side == "BUY" else quote.buy_depth
@@ -36,7 +48,12 @@ async def execute_paper_trade(
 
     with get_session() as session:
         trade = PaperTrade(
+            account_id=account_id,
             strategy_id=strategy_id,
+            instrument_type=instrument_type,
+            underlying=underlying,
+            strike=strike,
+            expiry=expiry,
             symbol=symbol,
             side=side,
             requested_quantity=quantity,

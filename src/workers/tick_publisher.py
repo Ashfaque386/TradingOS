@@ -32,7 +32,7 @@ from zoneinfo import ZoneInfo
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.config import get_settings
 from src.data.datalake.query import DataLake
-from src.data.reference.nse_holiday_calendar import is_trading_holiday
+from src.data.reference.market_hours import is_market_open
 from src.engine.live.tick_listener import get_async_redis_client
 from src.memory.redis_client import TICK_CHANNEL_PREFIX
 
@@ -42,19 +42,11 @@ logger = logging.getLogger("tick_publisher")
 IST = ZoneInfo("Asia/Kolkata")
 POLL_INTERVAL_SECONDS = 5
 
-# NSE/BSE real cash-market session, matching the same 09:15-15:30 IST window
-# src/agents/scheduler.py's news/sentiment cron job already targets.
-_MARKET_OPEN_MINUTES = 9 * 60 + 15
-_MARKET_CLOSE_MINUTES = 15 * 60 + 30
-
 
 def _is_market_open(now_ist: datetime) -> bool:
-    if now_ist.weekday() >= 5:  # Monday=0 .. Saturday=5, Sunday=6
-        return False
-    if is_trading_holiday(now_ist.date()):
-        return False
-    now_minutes = now_ist.hour * 60 + now_ist.minute
-    return _MARKET_OPEN_MINUTES <= now_minutes <= _MARKET_CLOSE_MINUTES
+    # REL-034: delegates to the shared src/data/reference/market_hours.py check -- kept as a
+    # thin wrapper under this module's own original name so nothing else here needs to change.
+    return is_market_open(now_ist)
 
 
 async def _publish_once(symbols: list[str]) -> None:

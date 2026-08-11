@@ -16,6 +16,8 @@ from src.agents.scheduler import (
     CORPORATE_ACTIONS_JOB_ID,
     DAILY_CYCLE_JOB_ID,
     NEWS_SENTIMENT_JOB_ID,
+    PAPER_TRADING_DAILY_CYCLE_JOB_ID,
+    PAPER_TRADING_EQUITY_SNAPSHOT_JOB_ID,
     WEEKEND_MEMORY_JOB_ID,
     build_scheduler,
     run_corporate_actions_ingestion,
@@ -112,6 +114,8 @@ def test_build_scheduler_registers_every_real_cron_job():
     assert WEEKEND_MEMORY_JOB_ID in job_ids
     assert CORPORATE_ACTIONS_JOB_ID in job_ids
     assert NEWS_SENTIMENT_JOB_ID in job_ids
+    assert PAPER_TRADING_DAILY_CYCLE_JOB_ID in job_ids
+    assert PAPER_TRADING_EQUITY_SNAPSHOT_JOB_ID in job_ids
 
 
 def test_run_corporate_actions_ingestion_with_no_seed_file_is_a_real_silent_no_op(monkeypatch):

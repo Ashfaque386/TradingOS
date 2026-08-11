@@ -171,6 +171,10 @@ class RiskAssessment(StrictModel):
     kill_switch_tripped: bool
     correlation_passed: bool | None = None  # None = check not applicable/unavailable
     naked_options_checked: bool  # False -- no structured leg data existed to check against
+    # REL-034: real inverse-volatility position sizing (src/engine/risk/position_sizing.py),
+    # computed against the Paper Trading Account's own live equity once state.account_capital
+    # is populated -- None (not fabricated) whenever no real capital figure was threaded in.
+    position_sizing_shares: int | None = None
     narrative: str
 
 
@@ -231,6 +235,12 @@ class TradingOSGraphState(StrictModel):
     optimization_result: OptimizationResult | None = None
     risk_assessment: RiskAssessment | None = None
     deployment_recommendation: DeploymentRecommendation | None = None
+    # REL-034: the Paper Trading Account's real live equity (starting capital + realized P&L -
+    # margin blocked), injected by src/api/routers/agents.py::_execute_graph_run before the
+    # graph runs -- None (not fabricated) whenever no seeded Paper account exists yet. Closes
+    # the long-documented gap risk_manager.py's own module docstring names: position sizing
+    # "still needs real account capital, which isn't threaded into TradingOSGraphState anywhere."
+    account_capital: float | None = None
 
     # Retry/escalation counters enforcing the business rules from Phase_9/Phase_4:
     code_validation_retry_count: int = 0  # max 3, Code_Validation_Loop

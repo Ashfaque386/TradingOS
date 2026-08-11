@@ -281,6 +281,37 @@ services:
     entrypoint: ["sh", "scripts/docker-entrypoint-with-vault-token.sh"]
     command: ["python", "-m", "src.workers.tick_publisher"]
 
+  # REL-034: Layer 2 of the Paper Trading Account's two-layer execution engine -- see
+  # src/workers/paper_trading_worker.py's own module docstring. Genuinely wires up
+  # LiveExecutionPipeline's tick-handling mechanics (Phase 4, fully built but never before
+  # instantiated anywhere in the running app) for real-time stop-loss/re-entry management of
+  # currently-open paper positions. A real separate compose service, same reasoning as
+  # tick-publisher above: an API redeploy shouldn't kill in-flight intraday position management,
+  # and this worker's own bug/crash shouldn't take down user-facing endpoints.
+  paper-trading-worker:
+    image: tradingos-app:latest
+    build: .
+    container_name: tradingos-paper-trading-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      vault-unsealer:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://tradingos_app:tradingos_app_dev_password@postgres:5432/tradingos
+      REDIS_URL: redis://redis:6379/0
+      DATA_LAKE_ROOT: /app/data/lake
+      VAULT_ADDR: http://vault:8200
+      # REL-015 E15.1: deliberately NOT set here -- see the `app` service's own comment above.
+    volumes:
+      - .:/app
+      - data_lake:/app/data/lake
+    entrypoint: ["sh", "scripts/docker-entrypoint-with-vault-token.sh"]
+    command: ["python", "-m", "src.workers.paper_trading_worker"]
+
   # Local Vault (Phase 4 E4.1 exit criterion: "Wire Vault-issued short-lived tokens for broker
   # API key retrieval"). Originally stood up in `-dev` mode (in-memory storage, auto-unsealed,
   # fixed root token) -- real Vault infrastructure and a real client against it, but with

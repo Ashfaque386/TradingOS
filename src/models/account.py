@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import CHAR, Boolean, ForeignKey, Numeric, String
+from sqlalchemy import CHAR, Boolean, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,32 @@ class Account(Base, UUIDPKMixin, TimestampMixin):
     capital_allocated: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(CHAR(3), default="INR")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AccountEquitySnapshot(Base, UUIDPKMixin, TimestampMixin):
+    """REL-034: one row per account per real trading day -- the one deliberate exception to
+    src/engine/paper_trading/position_accounting.py's usual "replay from the immutable ledger,
+    never cache" philosophy. See alembic/versions/c5d6e7f8a9b0's own docstring for why: an
+    equity curve queried repeatedly over months would otherwise force a full ledger replay plus
+    a historical close-price lookup per day in range on every single poll, unlike every other
+    figure in this feature (bounded by *currently open* positions only). Written once daily by
+    src/engine/paper_trading/equity_snapshot.py; "today" (not yet snapshotted) is always
+    computed live instead, never estimated from a stale prior row."""
+
+    __tablename__ = "account_equity_snapshots"
+    __table_args__ = (
+        UniqueConstraint("account_id", "snapshot_date", name="uq_account_equity_snapshot_date"),
+    )
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    snapshot_date: Mapped[date] = mapped_column(nullable=False)
+    cash: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    realized_pnl_cumulative: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    unrealized_pnl: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    margin_blocked: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    equity: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
 
 
 class BrokerCredential(Base, UUIDPKMixin, TimestampMixin):

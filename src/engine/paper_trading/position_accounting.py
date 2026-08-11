@@ -21,6 +21,10 @@ class SymbolPosition:
     average_cost: float = 0.0
     realized_pnl: float = 0.0
     trade_count: int = 0
+    # REL-034: a given `symbol` string always carries exactly one instrument type by
+    # construction (an option's own broker trading symbol already encodes its strike/expiry/
+    # type) -- set from the first trade seen for this symbol, never re-derived per fill.
+    instrument_type: str = "EQUITY"
 
 
 @dataclass(frozen=True)
@@ -46,7 +50,9 @@ def replay_ledger(
     closes: list[RealizedClose] = []
 
     for t in trades:
-        pos = positions.setdefault(t.symbol, SymbolPosition(symbol=t.symbol))
+        pos = positions.setdefault(
+            t.symbol, SymbolPosition(symbol=t.symbol, instrument_type=t.instrument_type)
+        )
         pos.trade_count += 1
         signed_qty = t.filled_quantity if t.side == "BUY" else -t.filled_quantity
         fill_price = float(t.fill_price)

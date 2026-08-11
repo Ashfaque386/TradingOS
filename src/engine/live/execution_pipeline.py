@@ -71,6 +71,31 @@ class RiskRejected(Exception):
     """Raised when a signal fails a hardcoded risk check and must not reach the broker."""
 
 
+def run_risk_checks(
+    signal: TradeSignal,
+    *,
+    kill_switch: MaxDrawdownKillSwitch,
+    latency_guard: WebSocketLatencyGuard | None = None,
+    pre_trade_checks: "list[PreTradeCheck] | None" = None,
+) -> None:
+    """The same kill-switch/latency-guard/pre-trade-check gate `LiveExecutionPipeline` runs
+    before ever constructing an `OrderRequest` -- extracted to a free function (REL-034) so
+    `src/engine/paper_trading/paper_execution_pipeline.py::PaperExecutionPipeline` reuses this
+    exact logic unmodified rather than duplicating it, the same way it reuses `Tick`/
+    `TradeSignal`/`SymbolState` unmodified. `LiveExecutionPipeline._run_risk_checks` below is now
+    a thin wrapper around this -- behavior is unchanged."""
+    if kill_switch.triggered:
+        raise RiskRejected(f"Kill switch is triggered -- rejecting signal for {signal.symbol}")
+    if latency_guard is not None and latency_guard.paused:
+        raise RiskRejected(
+            f"WebSocket latency guard is paused ({latency_guard.last_latency_seconds}s "
+            f"> {latency_guard.threshold_seconds}s threshold) -- rejecting signal for "
+            f"{signal.symbol} until the feed is synced"
+        )
+    for check in pre_trade_checks or ():
+        check(signal)
+
+
 def compliance_pre_trade_check(signal: TradeSignal) -> None:
     """REL-006 E6.1 (AGT-020): a `PreTradeCheck`-shaped adapter around the deterministic
     `evaluate_compliance()` core (src/engine/risk/compliance_checker.py), reused unmodified --
@@ -187,13 +212,9 @@ class LiveExecutionPipeline:
             return await self.broker.place_order(order)
 
     def _run_risk_checks(self, signal: TradeSignal) -> None:
-        if self.kill_switch.triggered:
-            raise RiskRejected(f"Kill switch is triggered -- rejecting signal for {signal.symbol}")
-        if self.latency_guard is not None and self.latency_guard.paused:
-            raise RiskRejected(
-                f"WebSocket latency guard is paused ({self.latency_guard.last_latency_seconds}s "
-                f"> {self.latency_guard.threshold_seconds}s threshold) -- rejecting signal for "
-                f"{signal.symbol} until the feed is synced"
-            )
-        for check in self.pre_trade_checks:
-            check(signal)
+        run_risk_checks(
+            signal,
+            kill_switch=self.kill_switch,
+            latency_guard=self.latency_guard,
+            pre_trade_checks=self.pre_trade_checks,
+        )

@@ -34,6 +34,9 @@ from src.core.db import get_session
 from src.data.datalake.freshness import DataFreshnessError, require_fresh
 from src.data.datalake.query import DataLake
 from src.data.ingest.corporate_actions import CorporateActionsAdapter, CorporateActionsWriter
+from src.engine.paper_trading.daily_signal_job import run_daily_paper_trading_cycle
+from src.engine.paper_trading.equity_snapshot import take_daily_snapshot
+from src.engine.paper_trading.paper_account import get_paper_account
 
 logger = structlog.get_logger(__name__)
 
@@ -42,6 +45,8 @@ DAILY_CYCLE_JOB_ID = "scheduler_daily_research_cycle"
 WEEKEND_MEMORY_JOB_ID = "scheduler_weekend_memory_consolidation"
 CORPORATE_ACTIONS_JOB_ID = "scheduler_corporate_actions_ingestion"
 NEWS_SENTIMENT_JOB_ID = "scheduler_news_sentiment_cycle"
+PAPER_TRADING_DAILY_CYCLE_JOB_ID = "scheduler_paper_trading_daily_cycle"
+PAPER_TRADING_EQUITY_SNAPSHOT_JOB_ID = "scheduler_paper_trading_equity_snapshot"
 # REL-010 E10.7: no intraday-ingestion job is wired here -- Upstox's real historical-candle
 # endpoint 404s in sandbox mode (confirmed empirically, see
 # src/brokers/upstox_adapter.py::get_historical_candles's own docstring) and this dev
@@ -138,6 +143,47 @@ def run_news_sentiment_cycle() -> None:
         logger.warning("scheduler_news_sentiment_cycle_failed", error=str(exc))
 
 
+async def run_paper_trading_daily_cycle() -> None:
+    """REL-034: the once-per-real-trading-day directional signal for every strategy in
+    `"PaperTrading"` status -- see src/engine/paper_trading/daily_signal_job.py's own module
+    docstring for the full design. Scheduled after the 06:00 research cycle so an
+    overnight-decided position executes at a real live-market-open quote."""
+    try:
+        results = await run_daily_paper_trading_cycle()
+        logger.info("scheduler_paper_trading_daily_cycle_completed", strategy_count=len(results))
+    except Exception as exc:  # noqa: BLE001 - a failed cycle must not crash the app
+        logger.warning("scheduler_paper_trading_daily_cycle_failed", error=str(exc))
+
+
+async def run_paper_trading_equity_snapshot() -> None:
+    """REL-034: one AccountEquitySnapshot row per real trading day, ~5 minutes after NSE close
+    -- see src/engine/paper_trading/equity_snapshot.py's own module docstring."""
+    from src.brokers.factory import NoBrokerConfigured, build_broker
+    from src.data.reference.nse_holiday_calendar import is_trading_holiday
+
+    if is_trading_holiday(date.today()):
+        logger.info("scheduler_paper_trading_equity_snapshot_skipped", reason="not a trading day")
+        return
+
+    try:
+        broker = build_broker()
+    except NoBrokerConfigured:
+        logger.info(
+            "scheduler_paper_trading_equity_snapshot_skipped", reason="no broker configured"
+        )
+        return
+    try:
+        with get_session() as session:
+            account = get_paper_account(session)
+            snapshot = await take_daily_snapshot(str(account.id), session, broker)
+        logger.info(
+            "scheduler_paper_trading_equity_snapshot_completed",
+            equity=snapshot.equity if snapshot else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed snapshot must not crash the app
+        logger.warning("scheduler_paper_trading_equity_snapshot_failed", error=str(exc))
+
+
 def run_weekend_memory_consolidation() -> None:
     """REL-019 E19.2 (ADR 11): checks the Memory Agent's real control state first."""
     try:
@@ -182,6 +228,21 @@ def build_scheduler() -> AsyncIOScheduler:
         run_weekend_memory_consolidation,
         CronTrigger(day_of_week="sat", hour=2, minute=0, timezone=IST_TIMEZONE),
         id=WEEKEND_MEMORY_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_paper_trading_daily_cycle,
+        # After the 06:00 research cycle, before market open (09:15 IST) -- overnight-decided
+        # positions execute at a real live quote shortly after the session opens.
+        CronTrigger(hour=6, minute=30, timezone=IST_TIMEZONE),
+        id=PAPER_TRADING_DAILY_CYCLE_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_paper_trading_equity_snapshot,
+        # ~5 minutes after NSE's real 15:30 IST close.
+        CronTrigger(hour=15, minute=35, timezone=IST_TIMEZONE),
+        id=PAPER_TRADING_EQUITY_SNAPSHOT_JOB_ID,
         replace_existing=True,
     )
     return scheduler

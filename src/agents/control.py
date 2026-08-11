@@ -96,6 +96,10 @@ KNOWN_AGENTS: tuple[AgentDescriptor, ...] = (
     AgentDescriptor("news_agent", "AGT-013", "News Agent", "scheduled", True),
     AgentDescriptor("sentiment_agent", "AGT-014", "Sentiment Agent", "scheduled", True),
     AgentDescriptor("data_ingestion_agent", "AGT-024", "Data Ingestion Agent", "scheduled", True),
+    # REL-034: real skip-this-call enforcement in src/engine/paper_trading/daily_signal_job.py,
+    # same pattern as the other scheduled entries above -- an operator can halt the paper
+    # account's autonomous daily trading without redeploying.
+    AgentDescriptor("paper_trading_engine", "AGT-027", "Paper Trading Engine", "scheduled", True),
     # Non-graph agents invoked via API/skill dispatch -- real, toggleable state; call-site
     # enforcement not yet wired this pass (see module docstring).
     AgentDescriptor("execution_agent", "AGT-010", "Execution Agent (Live)", "registry_only", False),

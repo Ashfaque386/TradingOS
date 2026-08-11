@@ -586,7 +586,9 @@ export interface OhlcvBar {
 // place_order (src/engine/paper_trading/execution_service.py).
 export interface PaperTrade {
   id: string;
+  account_id: string;
   strategy_id: string | null;
+  instrument_type: string;
   symbol: string;
   side: "BUY" | "SELL";
   requested_quantity: number;
@@ -603,6 +605,27 @@ export interface PaperPosition {
   average_cost: number | null;
   realized_pnl: number;
   trade_count: number;
+}
+
+// REL-034: the Paper Trading Account's real broker-style summary/report -- see
+// src/api/routers/paper_trading.py's own /account/* endpoints.
+export interface AccountSummary {
+  account_id: string;
+  starting_capital: number;
+  cash: number;
+  margin_blocked: number;
+  realized_pnl_total: number;
+  unrealized_pnl_total: number;
+  realized_pnl_by_instrument_class: Record<string, number>;
+  equity: number;
+}
+
+export interface EquityCurvePoint {
+  snapshot_date: string;
+  equity: number;
+  cash: number;
+  unrealized_pnl: number;
+  margin_blocked: number;
 }
 
 // REL-018 E18.1 -- src/api/routers/orders.py's real response models, over the real (live)
@@ -781,6 +804,12 @@ export const api = {
     get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),
   paperPositions: (strategyId?: string) =>
     get<PaperPosition[]>(`/api/v1/paper-trading/positions${toQuery({ strategy_id: strategyId })}`),
+
+  accountSummary: () => get<AccountSummary>("/api/v1/paper-trading/account/summary"),
+  accountEquityCurve: (from?: string, to?: string) =>
+    get<EquityCurvePoint[]>(
+      `/api/v1/paper-trading/account/equity-curve${toQuery({ from, to })}`,
+    ),
 
   orders: (strategyId?: string) =>
     get<LiveOrder[]>(`/api/v1/orders${toQuery({ strategy_id: strategyId })}`),

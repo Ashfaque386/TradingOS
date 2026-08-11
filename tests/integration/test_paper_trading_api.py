@@ -87,9 +87,53 @@ def _cleanup_strategy(strategy_id: uuid.UUID) -> None:
             session.commit()
 
 
-def _seed_trade(*, symbol: str, side: str, qty: int, price: float, strategy_id=None) -> uuid.UUID:
+def _seed_account() -> uuid.UUID:
+    """REL-034: PaperTrade.account_id has a real NOT NULL FK to accounts.id -- a throwaway
+    Account per test, cleaned up by the caller, same isolation pattern _seed_strategy already
+    uses rather than depending on scripts/seed_paper_account.py's own global seeded account."""
+    user_id, account_id = uuid.uuid4(), uuid.uuid4()
+    with get_session() as session:
+        session.add(
+            User(
+                id=user_id,
+                email=f"paper-trading-api-{user_id}@example.invalid",
+                hashed_password="x",
+                role="Trader",
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        session.add(
+            Account(
+                id=account_id,
+                user_id=user_id,
+                broker="Zerodha",
+                account_type="Paper",
+                capital_allocated=Decimal("100000.00"),
+            )
+        )
+        session.commit()
+    return account_id
+
+
+def _cleanup_account(account_id: uuid.UUID) -> None:
+    with get_session() as session:
+        account = session.get(Account, account_id)
+        if account is None:
+            return
+        user_id = account.user_id
+        session.query(Account).filter(Account.id == account_id).delete()
+        session.commit()
+        session.query(User).filter(User.id == user_id).delete()
+        session.commit()
+
+
+def _seed_trade(
+    *, symbol: str, side: str, qty: int, price: float, account_id, strategy_id=None
+) -> uuid.UUID:
     with get_session() as session:
         trade = PaperTrade(
+            account_id=account_id,
             strategy_id=strategy_id,
             symbol=symbol,
             side=side,
@@ -114,11 +158,12 @@ def _cleanup(*trade_ids: uuid.UUID) -> None:
 
 
 def test_positions_computes_average_cost_basis_and_realized_pnl():
+    account_id = _seed_account()
     symbol = f"TESTSYM{uuid.uuid4().hex[:6].upper()}"
     ids = [
-        _seed_trade(symbol=symbol, side="BUY", qty=100, price=50.00),
-        _seed_trade(symbol=symbol, side="BUY", qty=100, price=52.00),
-        _seed_trade(symbol=symbol, side="SELL", qty=150, price=55.00),
+        _seed_trade(symbol=symbol, side="BUY", qty=100, price=50.00, account_id=account_id),
+        _seed_trade(symbol=symbol, side="BUY", qty=100, price=52.00, account_id=account_id),
+        _seed_trade(symbol=symbol, side="SELL", qty=150, price=55.00, account_id=account_id),
     ]
     try:
         response = client.get("/api/v1/paper-trading/positions")
@@ -133,15 +178,31 @@ def test_positions_computes_average_cost_basis_and_realized_pnl():
         assert position["trade_count"] == 3
     finally:
         _cleanup(*ids)
+        _cleanup_account(account_id)
 
 
 def test_positions_filters_by_strategy_id():
+    account_id = _seed_account()
     strategy_a = _seed_strategy()
     strategy_b = _seed_strategy()
     symbol = f"TESTSYM{uuid.uuid4().hex[:6].upper()}"
     ids = [
-        _seed_trade(symbol=symbol, side="BUY", qty=10, price=100.0, strategy_id=strategy_a),
-        _seed_trade(symbol=symbol, side="BUY", qty=20, price=100.0, strategy_id=strategy_b),
+        _seed_trade(
+            symbol=symbol,
+            side="BUY",
+            qty=10,
+            price=100.0,
+            account_id=account_id,
+            strategy_id=strategy_a,
+        ),
+        _seed_trade(
+            symbol=symbol,
+            side="BUY",
+            qty=20,
+            price=100.0,
+            account_id=account_id,
+            strategy_id=strategy_b,
+        ),
     ]
     try:
         response = client.get(f"/api/v1/paper-trading/positions?strategy_id={strategy_a}")
@@ -152,17 +213,20 @@ def test_positions_filters_by_strategy_id():
         _cleanup(*ids)
         _cleanup_strategy(strategy_a)
         _cleanup_strategy(strategy_b)
+        _cleanup_account(account_id)
 
 
 def test_trades_endpoint_lists_real_seeded_rows():
+    account_id = _seed_account()
     symbol = f"TESTSYM{uuid.uuid4().hex[:6].upper()}"
-    trade_id = _seed_trade(symbol=symbol, side="BUY", qty=5, price=10.0)
+    trade_id = _seed_trade(symbol=symbol, side="BUY", qty=5, price=10.0, account_id=account_id)
     try:
         response = client.get("/api/v1/paper-trading/trades")
         assert response.status_code == 200
         assert any(t["id"] == str(trade_id) for t in response.json())
     finally:
         _cleanup(trade_id)
+        _cleanup_account(account_id)
 
 
 @pytest.mark.asyncio

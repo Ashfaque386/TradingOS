@@ -115,7 +115,9 @@ def _cleanup(
         session.commit()
 
 
-def _seed_round_trip_trades(*, strategy_id: uuid.UUID, win_count: int, loss_count: int) -> None:
+def _seed_round_trip_trades(
+    *, account_id: uuid.UUID, strategy_id: uuid.UUID, win_count: int, loss_count: int
+) -> None:
     """win_count + loss_count round trips (2 PaperTrade rows each), spread across the last 25
     days so the calendar-span condition (>=21 days) is also satisfied by the same fixture."""
     total = win_count + loss_count
@@ -130,6 +132,7 @@ def _seed_round_trip_trades(*, strategy_id: uuid.UUID, win_count: int, loss_coun
             exit_price = 110.0 if is_win else 90.0
             session.add(
                 PaperTrade(
+                    account_id=account_id,
                     strategy_id=strategy_id,
                     symbol=symbol,
                     side="BUY",
@@ -144,6 +147,7 @@ def _seed_round_trip_trades(*, strategy_id: uuid.UUID, win_count: int, loss_coun
             )
             session.add(
                 PaperTrade(
+                    account_id=account_id,
                     strategy_id=strategy_id,
                     symbol=symbol,
                     side="SELL",
@@ -177,10 +181,12 @@ def test_a_fresh_strategy_with_no_data_fails_every_condition():
 
 def test_strategy_specific_conditions_pass_when_live_win_rate_matches_the_backtest():
     ids = _seed_strategy_with_backtest(win_rate=0.60)
-    strategy_id = ids[2]
+    account_id, strategy_id = ids[1], ids[2]
     # 12 wins, 8 losses = 0.60 live win rate, exactly matching the backtest -> zero divergence.
     # 40 total filled trades (>= MIN_TRADE_COUNT=30), spanning ~25 days (>= MIN_CALENDAR_DAYS=21).
-    _seed_round_trip_trades(strategy_id=strategy_id, win_count=12, loss_count=8)
+    _seed_round_trip_trades(
+        account_id=account_id, strategy_id=strategy_id, win_count=12, loss_count=8
+    )
     try:
         response = client.get(f"/api/v1/go-live/readiness/{strategy_id}")
         assert response.status_code == 200

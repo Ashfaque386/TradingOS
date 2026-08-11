@@ -8,13 +8,25 @@ channel names (`ticks:<symbol>`).
 """
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Protocol
 
 import redis.asyncio as aioredis
 
 from src.core.config import get_settings
 from src.engine.live.execution_pipeline import LiveExecutionPipeline, Tick
 from src.memory.redis_client import TICK_CHANNEL_PREFIX
+
+
+class _TickHandler(Protocol):
+    """Structural type for anything with `LiveExecutionPipeline.handle_tick`'s own shape (async,
+    takes a `Tick`, returns whatever) -- lets `run_multi_symbol_tick_listener` below stay
+    properly typed without `src.engine.live` (a lower-level primitive module) importing
+    `PaperExecutionPipeline` from `src.engine.paper_trading` (a higher-level consumer package),
+    which would invert that layering even though it wouldn't be a literal circular import."""
+
+    async def handle_tick(self, tick: Tick) -> object: ...
 
 
 def get_async_redis_client() -> aioredis.Redis:
@@ -48,6 +60,39 @@ async def run_tick_listener(
                 continue
             channel: str = message["channel"]
             symbol = channel.removeprefix(TICK_CHANNEL_PREFIX)
+            tick = parse_tick_payload(symbol, message["data"])
+            await pipeline.handle_tick(tick)
+    finally:
+        await pubsub.punsubscribe(pattern)
+        await pubsub.aclose()  # type: ignore[no-untyped-call]  # redis-py's async PubSub is untyped here
+
+
+async def run_multi_symbol_tick_listener(
+    client: aioredis.Redis,
+    pipelines_by_symbol: Mapping[str, _TickHandler],
+    *,
+    pattern: str = f"{TICK_CHANNEL_PREFIX}*",
+) -> None:
+    """REL-034: the same subscribe/dispatch mechanics as `run_tick_listener` above (`psubscribe`,
+    `parse_tick_payload` reused unmodified), but fans a SINGLE Redis subscription out across
+    however many pipelines currently need this symbol's ticks, keyed by symbol, instead of one
+    subscription per pipeline. `pipelines_by_symbol` is read live on every message (not
+    snapshotted at call time) -- src/workers/paper_trading_worker.py mutates a real `dict` it
+    passes in here in place as strategies/positions come and go during the day (this function
+    only ever reads it, hence the covariant `Mapping` type, which is what actually lets a
+    `dict[str, PaperExecutionPipeline]` be passed here at all), so callers never need to restart
+    this listener task just to pick up a changed pipeline set."""
+    pubsub = client.pubsub()
+    await pubsub.psubscribe(pattern)
+    try:
+        async for message in pubsub.listen():
+            if message["type"] != "pmessage":
+                continue
+            channel: str = message["channel"]
+            symbol = channel.removeprefix(TICK_CHANNEL_PREFIX)
+            pipeline = pipelines_by_symbol.get(symbol)
+            if pipeline is None:
+                continue
             tick = parse_tick_payload(symbol, message["data"])
             await pipeline.handle_tick(tick)
     finally:

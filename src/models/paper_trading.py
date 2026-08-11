@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import ForeignKey, Integer, Numeric, String
@@ -28,6 +28,20 @@ class PaperTrade(Base, UUIDPKMixin, TimestampMixin):
     strategy_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("strategies.id")
     )
+    # REL-034: every paper trade belongs to a real account with real (virtual) capital -- see
+    # src/models/account.py::Account. NOT NULL as of migration b4c5d6e7f8a9; every row before
+    # this column existed was backfilled to the one seeded Paper account first.
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    # EQUITY | FUTURE | CE | PE. Defaults to EQUITY -- every trade placed before this column
+    # existed really was a plain equity trade (the only kind execute_paper_trade() supported).
+    instrument_type: Mapped[str] = mapped_column(String(10), nullable=False, default="EQUITY")
+    # Populated only for F&O rows (underlying symbol, strike, expiry) -- NULL for EQUITY, not a
+    # fabricated value.
+    underlying: Mapped[str | None] = mapped_column(String(30))
+    strike: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    expiry: Mapped[date | None]
     symbol: Mapped[str] = mapped_column(String(30), nullable=False)
     side: Mapped[str] = mapped_column(String(4), nullable=False)  # BUY | SELL
     requested_quantity: Mapped[int] = mapped_column(Integer, nullable=False)

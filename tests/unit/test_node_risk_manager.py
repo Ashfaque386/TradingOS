@@ -4,6 +4,7 @@ import pytest
 
 from src.agents.nodes.risk_manager import risk_manager_node
 from src.agents.state import (
+    ClosePricePoint,
     OptimizationResult,
     StrategyLogic,
     StrategyOptionLeg,
@@ -147,3 +148,42 @@ def test_risk_manager_node_does_not_flag_a_real_hedged_spread():
     assessment = result["risk_assessment"]
     assert assessment.naked_options_checked is True
     assert "no naked exposure" in assessment.narrative.lower()
+
+
+def test_risk_manager_node_leaves_position_sizing_none_without_account_capital():
+    """REL-034: state.account_capital defaults to None (no seeded Paper account, or none
+    injected) -- position_sizing_shares must stay honestly None, not fabricated."""
+    with (
+        patch("src.agents.nodes.risk_manager.kill_switch_service.is_tripped", return_value=False),
+        patch("src.agents.nodes.risk_manager.complete", side_effect=RuntimeError("LLM down")),
+    ):
+        result = risk_manager_node(_state())
+
+    assert result["risk_assessment"].position_sizing_shares is None
+
+
+def test_risk_manager_node_computes_real_position_sizing_with_account_capital():
+    """REL-034: closes the long-documented gap -- real account_capital + a real close-price
+    history must produce a real, non-fabricated share count via the hardcoded, tested
+    compute_position_sizes()."""
+    close_curve = [
+        ClosePricePoint(date=f"2026-07-{day:02d}", close=100.0 + day) for day in range(1, 21)
+    ]
+    state = TradingOSGraphState(
+        thread_id="t1",
+        strategy_logic=_STRATEGY,
+        optimization_result=OptimizationResult(passed=True),
+        close_curve=close_curve,
+        account_capital=100_000.0,
+    )
+    with (
+        patch("src.agents.nodes.risk_manager.kill_switch_service.is_tripped", return_value=False),
+        patch("src.agents.nodes.risk_manager.complete", side_effect=RuntimeError("LLM down")),
+    ):
+        result = risk_manager_node(state)
+
+    assessment = result["risk_assessment"]
+    assert assessment.position_sizing_shares is not None
+    assert assessment.position_sizing_shares > 0
+    assert "shares of RELIANCE" in assessment.narrative
+    assert "₹100,000.00" in assessment.narrative
