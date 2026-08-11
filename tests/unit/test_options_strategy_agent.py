@@ -85,6 +85,83 @@ def test_accepts_a_valid_defined_risk_spread(mock_complete):
 
 
 @patch("src.agents.nodes.options_strategy_agent.complete")
+def test_naked_check_legs_carry_the_underlying_not_a_real_contract_symbol(mock_complete):
+    """`naked_options_scanner.OptionLeg.symbol` means "same underlying" (see that module's own
+    tests, e.g. test_hedge_on_a_different_underlying_does_not_count) -- `_parse_legs` must keep
+    populating it with `underlying`, not a real per-contract symbol, or the hedge-pairing check
+    would falsely flag every real multi-strike spread as naked (every real leg's own broker
+    symbol is, by construction, different from every other leg's -- they're different strikes)."""
+    mock_complete.return_value = _fake_response(
+        '{"legs": ['
+        '{"strike": 24000, "option_type": "CE", "side": "sell", "quantity": 50}, '
+        '{"strike": 24200, "option_type": "CE", "side": "buy", "quantity": 50}'
+        '], "rationale": "Bear call spread on a neutral-to-bearish view."}'
+    )
+
+    proposal = generate_options_strategy(
+        underlying="NIFTY", chain=_real_chain(), research_directive="Neutral to bearish on NIFTY"
+    )
+
+    assert proposal is not None
+    assert all(leg.symbol == "NIFTY" for leg in proposal.legs)
+
+
+@patch("src.agents.nodes.options_strategy_agent.generate_options_strategy")
+@patch("src.agents.nodes.options_strategy_agent.build_broker")
+def test_node_resolves_the_real_broker_symbol_from_the_chain_for_persisted_legs(
+    mock_build_broker, mock_generate
+):
+    """REL-035: the real, live bug this fix closes -- `options_strategy_agent_task`'s active
+    prompt never asks the LLM for a `symbol` field, so `naked_options_scanner.OptionLeg.symbol`
+    is always just `underlying` (see the test above). The `StrategyOptionLeg`s this node
+    actually persists must still carry the REAL, tradable per-contract broker symbol, resolved
+    here from the chain's own `OptionInstrument.symbol` -- never left as the bare underlying and
+    never empty."""
+    mock_broker = mock_build_broker.return_value
+    mock_broker.list_expiries = AsyncMock(return_value=[date(2026, 8, 6)])
+    mock_broker.get_option_chain = AsyncMock(return_value=_real_chain())
+    mock_generate.return_value = OptionsStrategyProposal(
+        legs=[
+            OptionLeg(symbol="NIFTY", option_type="CE", strike=24000.0, side="sell", quantity=50),
+            OptionLeg(symbol="NIFTY", option_type="CE", strike=24200.0, side="buy", quantity=50),
+        ],
+        rationale="Bear call spread.",
+    )
+
+    state = TradingOSGraphState(thread_id="t1", strategy_logic=_fo_strategy())
+    result = options_strategy_node(state)
+
+    legs = result["strategy_logic"].option_legs
+    assert legs is not None
+    symbols = {leg.strike: leg.symbol for leg in legs}
+    assert symbols[24000.0] == "NIFTY26AUG24000CE"
+    assert symbols[24200.0] == "NIFTY26AUG24200CE"
+    assert all(leg.symbol for leg in legs)  # never empty
+
+
+@patch("src.agents.nodes.options_strategy_agent.complete")
+def test_rejects_a_real_strike_paired_with_an_option_type_not_present_at_that_strike(
+    mock_complete,
+):
+    """REL-035: stricter than the old strike-only membership check -- a real strike (24000)
+    exists in the chain, but only as CE, never PE; pairing it with PE must be rejected the same
+    way a wholly fabricated strike already was, not silently accepted."""
+    mismatched_type = _fake_response(
+        '{"legs": ['
+        '{"strike": 24000, "option_type": "PE", "side": "sell", "quantity": 50}, '
+        '{"strike": 24200, "option_type": "CE", "side": "buy", "quantity": 50}'
+        '], "rationale": "bad"}'
+    )
+    mock_complete.return_value = mismatched_type
+
+    proposal = generate_options_strategy(
+        underlying="NIFTY", chain=_real_chain(), research_directive="test"
+    )
+
+    assert proposal is None
+
+
+@patch("src.agents.nodes.options_strategy_agent.complete")
 def test_rejects_a_naked_short_and_retries_then_succeeds(mock_complete):
     naked_response = _fake_response(
         '{"legs": [{"strike": 24000, "option_type": "CE", "side": "sell", "quantity": 50}], '
@@ -225,6 +302,8 @@ def test_node_degrades_honestly_when_no_grounded_proposal(mock_build_broker, moc
     state = TradingOSGraphState(thread_id="t1", strategy_logic=_fo_strategy())
     result = options_strategy_node(state)
     assert result["strategy_logic"].option_legs is None
+    # REL-035: a degrade path grounded nothing real -- no option_expiry key, not a fabricated one.
+    assert "option_expiry" not in result
 
 
 @patch("src.agents.nodes.options_strategy_agent.generate_options_strategy")
@@ -268,3 +347,6 @@ def test_node_replaces_option_legs_with_a_real_chain_grounded_proposal(
     assert legs[0].symbol == "NIFTY26AUG24000CE"
     assert legs[0].strike == 24000.0
     assert legs[0].side == "sell"
+    # REL-035: the expiry this proposal was actually grounded against is now surfaced too, for
+    # src/api/routers/agents.py to persist alongside the legs (a leg itself has no expiry field).
+    assert result["option_expiry"] == date(2026, 8, 6)

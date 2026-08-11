@@ -27,7 +27,7 @@ import json
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -47,7 +47,7 @@ from src.agents.graph import build_graph
 from src.agents.llm_router import fetch_langsmith_trace_url, pop_last_langsmith_run_id
 from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT_INITIAL_CAPITAL
 from src.agents.prompt_registry import PromptNotFoundError
-from src.agents.state import TradingOSGraphState
+from src.agents.state import StrategyOptionLeg, TradingOSGraphState
 from src.api.deps import require_role
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.audit import write_audit_entry
@@ -295,6 +295,12 @@ class _StrategyTracking:
     # in the Backtest_Loop gets its own real BacktestResult row, a real audit trail rather than
     # overwriting history.
     backtest_result_id: uuid.UUID | None = None
+    # REL-035: the Options Strategy Agent's real, chain-grounded legs/expiry -- staged here
+    # between the `options_strategy_agent` node firing and `python_code_generator` firing next
+    # (the two are adjacent in the graph, see options_strategy_agent.py's own module docstring),
+    # since StrategyVersion doesn't exist as a row until the latter creates it.
+    pending_option_legs: list[StrategyOptionLeg] | None = None
+    pending_option_expiry: date | None = None
 
 
 def _persist_strategy_progress(
@@ -337,6 +343,11 @@ def _persist_strategy_progress(
     if tracking.strategy_id is None:
         return  # strategy_generator hasn't run yet this thread (or its account lookup failed)
 
+    if node_name == "options_strategy_agent" and "strategy_logic" in output:
+        tracking.pending_option_legs = output["strategy_logic"].option_legs
+        tracking.pending_option_expiry = output.get("option_expiry")
+        return
+
     if node_name == "python_code_generator" and "python_code" in output:
         code = output["python_code"]
         version = StrategyVersion(
@@ -344,6 +355,12 @@ def _persist_strategy_progress(
             version_no=code.version_no,
             python_code=code.code,
             validation_status="Pending",
+            option_legs=(
+                [leg.model_dump() for leg in tracking.pending_option_legs]
+                if tracking.pending_option_legs
+                else None
+            ),
+            option_expiry=tracking.pending_option_expiry,
         )
         session.add(version)
         session.flush()

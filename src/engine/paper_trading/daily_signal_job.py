@@ -19,18 +19,29 @@ position. Position size comes from the same hardcoded, tested `compute_position_
 account's live equity evenly across every strategy active this cycle (an equal-weight approx --
 no per-strategy capital-allocation field exists to size against directly).
 
-Honest, explicitly scoped limitation: F&O strategies (`Strategy.asset_class == "F&O"`) are
-skipped here, not guessed at. The Options Strategy Agent's chain-grounded `OptionLeg` proposals
-(src/agents/nodes/options_strategy_agent.py) live only in the ephemeral LangGraph
-`TradingOSGraphState` at generation time -- confirmed via grep, `option_legs` is never persisted
-to `Strategy`/`StrategyVersion` or anywhere else this standalone scheduled job (running outside
-any graph run) could read it back from. Fabricating a strike/expiry to trade against here would
-risk a real wrong-instrument fill; skipping with a clear log line is the honest choice until F&O
-leg persistence is added as its own real fix.
+REL-035: F&O strategies (`Strategy.asset_class == "F&O"`) now trade too, once the Options
+Strategy Agent's chain-grounded legs are actually persisted (`StrategyVersion.option_legs`/
+`option_expiry`, src/api/routers/agents.py::_persist_strategy_progress) -- the same
+`entries_exits` transition signal still drives *when* to act (unchanged, see above); *what* to
+trade is read off the persisted legs instead of the equity path's single symbol + position
+sizing. A version with no persisted legs (never grounded, or generation degraded) or a persisted
+expiry that has passed is honestly skipped, never guessed at or auto-rolled to a fresh expiry no
+one reviewed -- see `_process_fno_strategy`.
+
+Named, not silently assumed away: multi-leg atomicity. `execute_paper_trade` commits each leg
+independently (its own session, its own commit) -- there is no atomic multi-leg order primitive
+in this codebase, and a paper fill is a persisted fact, not a cancellable order. If one leg of a
+spread fills and the next then fails (a real `NoLiquidityError` or broker timeout), the first
+leg's `PaperTrade` row is already real and not rolled back. `_process_fno_strategy` catches
+per-leg, not per-strategy, and reports a new `"PARTIAL_FILL"` result kind naming exactly which
+legs filled -- never silently reporting `"SKIPPED"` when a real state change actually happened.
+No same-cycle auto-repair is attempted; a partial spread surfaces for the next cycle's per-leg
+open/closed detection (and likely human review), not a same-day guess at completing it.
 """
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any
 
 import pandas as pd
 import structlog
@@ -58,11 +69,18 @@ logger = structlog.get_logger(__name__)
 PAPER_TRADING_AGENT_NAME = "paper_trading_engine"
 BACKTEST_LOOKBACK_DAYS = 730
 
+# REL-035: bridges StrategyOptionLeg.side (lowercase, LLM/schema convention, src/agents/state.py)
+# to execute_paper_trade's uppercase Side (broker-adapter convention, src/brokers/base.py) -- no
+# such mapping existed anywhere before this, every existing caller was consistently one case or
+# the other, never both.
+_SIDE_MAP: dict[str, Side] = {"buy": "BUY", "sell": "SELL"}
+_CLOSING_SIDE_MAP: dict[str, Side] = {"buy": "SELL", "sell": "BUY"}
+
 
 @dataclass(frozen=True)
 class StrategyCycleResult:
     strategy_id: str
-    action: str  # "BUY" | "SELL" | "NO_TRANSITION" | "SKIPPED"
+    action: str  # "BUY" | "SELL" | "NO_TRANSITION" | "SKIPPED" | "PARTIAL_FILL"
     reason: str | None = None
     trade_id: str | None = None
 
@@ -73,12 +91,7 @@ async def _process_strategy(
     sid = str(strategy.id)
 
     if strategy.asset_class == "F&O":
-        return StrategyCycleResult(
-            sid,
-            "SKIPPED",
-            "F&O option legs not persisted outside the "
-            "original agent run -- see module docstring",
-        )
+        return await _process_fno_strategy(strategy, account_id=account_id, not_after=not_after)
     if not strategy.universe:
         return StrategyCycleResult(sid, "SKIPPED", "strategy has no universe")
     if strategy.current_version_id is None:
@@ -171,6 +184,136 @@ async def _process_strategy(
         return StrategyCycleResult(sid, "SKIPPED", f"execution failed: {exc}")
 
     return StrategyCycleResult(sid, action, trade_id=str(trade.id))
+
+
+async def _process_fno_strategy(
+    strategy: Strategy, *, account_id: str, not_after: date
+) -> StrategyCycleResult:
+    """REL-035: the F&O counterpart to `_process_strategy` above -- same `entries_exits`
+    transition signal, but trades the persisted, chain-grounded legs (`StrategyVersion.
+    option_legs`/`option_expiry`) instead of a single symbol + computed position size. See this
+    module's own docstring for the multi-leg atomicity limitation this deliberately does not
+    paper over."""
+    sid = str(strategy.id)
+    if not strategy.universe:
+        return StrategyCycleResult(sid, "SKIPPED", "strategy has no universe")
+    if strategy.current_version_id is None:
+        return StrategyCycleResult(sid, "SKIPPED", "strategy has no current code version")
+
+    underlying = strategy.universe[0]
+    lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+    lake_latest = lake.latest_date(underlying)
+    if lake_latest is None:
+        return StrategyCycleResult(sid, "SKIPPED", f"no historical data ingested for {underlying}")
+    date_to = min(lake_latest, not_after)
+
+    with get_session() as session:
+        version = session.get(StrategyVersion, strategy.current_version_id)
+        if version is None:
+            return StrategyCycleResult(sid, "SKIPPED", "current_version_id points at a missing row")
+        code = version.python_code
+        legs: list[dict[str, Any]] | None = version.option_legs
+        expiry = version.option_expiry
+
+        existing_trades = list(
+            session.execute(
+                select(PaperTrade)
+                .where(PaperTrade.strategy_id == strategy.id)
+                .order_by(PaperTrade.executed_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+
+    if not legs or expiry is None:
+        return StrategyCycleResult(
+            sid, "SKIPPED", "no grounded option legs persisted for the current version"
+        )
+    if expiry < date.today():
+        return StrategyCycleResult(sid, "SKIPPED", f"persisted option plan expired on {expiry}")
+
+    positions, _ = replay_ledger(existing_trades)
+    leg_open = {
+        leg["symbol"]: positions.get(leg["symbol"]) is not None
+        and positions[leg["symbol"]].net_quantity != 0
+        for leg in legs
+    }
+    all_open = all(leg_open.values())
+    any_open = any(leg_open.values())
+
+    outcome = run_real_backtest(
+        code,
+        universe=strategy.universe,
+        date_from=date_to - timedelta(days=BACKTEST_LOOKBACK_DAYS),
+        date_to=date_to,
+    )
+    if not outcome.passed or not outcome.entries_exits:
+        return StrategyCycleResult(
+            sid, "SKIPPED", outcome.error or "no entries_exits signal produced"
+        )
+
+    latest = outcome.entries_exits[-1]
+    if latest.entry and not all_open:
+        intent = "BUY"  # entering: only the legs not already open
+        legs_to_execute = [leg for leg in legs if not leg_open[leg["symbol"]]]
+    elif latest.exit and any_open:
+        intent = "SELL"  # exiting: only the legs actually open
+        legs_to_execute = [leg for leg in legs if leg_open[leg["symbol"]]]
+    else:
+        return StrategyCycleResult(sid, "NO_TRANSITION")
+
+    try:
+        broker = build_broker()
+    except NoBrokerConfigured as exc:
+        return StrategyCycleResult(sid, "SKIPPED", f"no broker configured: {exc}")
+
+    filled: list[tuple[str, str]] = []
+    failed: list[str] = []
+    for leg in legs_to_execute:
+        leg_symbol = str(leg["symbol"])
+        leg_side_key = str(leg["side"])
+        if intent == "BUY":
+            leg_side = _SIDE_MAP[leg_side_key]
+            quantity = int(leg["quantity"])
+        else:
+            leg_side = _CLOSING_SIDE_MAP[leg_side_key]
+            open_position = positions.get(leg_symbol)
+            quantity = abs(open_position.net_quantity) if open_position else int(leg["quantity"])
+        if quantity <= 0:
+            continue
+
+        try:
+            trade = await execute_paper_trade(
+                broker,
+                symbol=leg_symbol,
+                side=leg_side,
+                quantity=quantity,
+                account_id=account_id,
+                strategy_id=sid,
+                instrument_type=str(leg["option_type"]),
+                underlying=underlying,
+                strike=float(leg["strike"]),
+                expiry=expiry,
+            )
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 -- per-leg, not per-strategy: a spread can partially fill
+            failed.append(f"{leg_symbol}: {exc}")
+            continue
+        filled.append((leg_symbol, str(trade.id)))
+
+    if not filled:
+        return StrategyCycleResult(
+            sid, "SKIPPED", f"all legs failed to execute: {'; '.join(failed)}"
+        )
+    if failed:
+        return StrategyCycleResult(
+            sid,
+            "PARTIAL_FILL",
+            f"filled {[s for s, _ in filled]}; failed: {'; '.join(failed)}",
+            trade_id=",".join(tid for _, tid in filled),
+        )
+    return StrategyCycleResult(sid, intent, trade_id=",".join(tid for _, tid in filled))
 
 
 async def run_daily_paper_trading_cycle() -> list[StrategyCycleResult]:

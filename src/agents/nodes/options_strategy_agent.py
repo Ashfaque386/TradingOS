@@ -19,6 +19,13 @@ real future expiry listed, the LLM producing nothing valid within its own retry 
 degrades honestly to `option_legs=None` -- the same "no structured leg data available" state
 compliance_checker.py already treats as an honest skip, not a fabricated pass -- rather than
 silently keeping the LLM's own ungrounded, unverified guess.
+
+REL-035: a real, live bug found while scoping option-leg persistence for the Paper Trading
+Account's daily signal job -- `options_strategy_agent_task`'s active prompt (registry.yaml)
+never asks the LLM for a `symbol` field, so every real leg this agent has ever produced had
+`symbol=""`. Fixed by resolving each leg's real broker symbol from the chain's own
+`OptionInstrument.symbol` (`_symbol_lookup`) instead of trusting/defaulting the LLM's response --
+this data was already available and grounded, it just wasn't being used.
 """
 
 import asyncio
@@ -56,24 +63,42 @@ def _summarize_chain(chain: OptionChain) -> str:
     )
 
 
-def _real_strikes(chain: OptionChain) -> set[float]:
-    return {i.strike for i in chain.instruments}
+def _symbol_lookup(chain: OptionChain) -> dict[tuple[float, str], str]:
+    """REL-035: the real, tradable broker symbol for every (strike, option_type) pair the real
+    chain actually lists -- used to resolve `StrategyOptionLeg.symbol` (the real per-contract
+    identifier `execute_paper_trade` needs) at the one place that value is actually persisted,
+    `options_strategy_node` below. Deliberately NOT used for `naked_options_scanner.OptionLeg.
+    symbol` (see `_parse_legs`'s own docstring for why those are different fields with different
+    meanings, despite the two classes' otherwise-identical shape)."""
+    return {(i.strike, i.option_type): i.symbol for i in chain.instruments}
 
 
-def _parse_legs(parsed: dict[str, object], real_strikes: set[float]) -> list[OptionLeg]:
+def _parse_legs(parsed: dict[str, object], chain: OptionChain, underlying: str) -> list[OptionLeg]:
+    """Returns `naked_options_scanner.OptionLeg`s for the hedge-pairing check only -- `symbol`
+    here is set to `underlying` (e.g. `"NIFTY"`), matching that module's own documented and
+    tested meaning of the field ("same-underlying" grouping, confirmed by
+    tests/unit/test_naked_options_scanner.py's own `test_hedge_on_a_different_underlying_does_
+    not_count`), NOT the real per-contract broker symbol -- those are two different pieces of
+    information this module's own `OptionLeg`/`StrategyOptionLeg` twin types happen to share a
+    field name for. The real per-contract symbol is resolved separately in
+    `options_strategy_node`, only where it's actually needed for persistence/trading."""
     raw_legs = parsed.get("legs", [])
     if not isinstance(raw_legs, list):
         raise ValueError("LLM response 'legs' was not a list")
 
+    real_pairs = {(i.strike, i.option_type) for i in chain.instruments}
     legs: list[OptionLeg] = []
     for raw in raw_legs:
         strike = float(raw["strike"])
-        if strike not in real_strikes:
-            raise ValueError(f"LLM proposed a strike ({strike}) not present in the real chain")
+        option_type = raw["option_type"]
+        if (strike, option_type) not in real_pairs:
+            # Real, stricter validation than the old strike-only check: this also rejects a
+            # real strike paired with an option_type that doesn't actually exist there.
+            raise ValueError(f"LLM proposed ({option_type} {strike}) not present in the real chain")
         legs.append(
             OptionLeg(
-                symbol=str(raw.get("symbol", "")),
-                option_type=raw["option_type"],
+                symbol=underlying,
+                option_type=option_type,
                 strike=strike,
                 side=raw["side"],
                 quantity=int(raw["quantity"]),
@@ -92,7 +117,6 @@ def generate_options_strategy(
         logger.warning("options_strategy_no_chain_data", underlying=underlying)
         return None
 
-    real_strikes = _real_strikes(chain)
     system_prompt = get_active_prompt(PROMPT_SLUG)
     user_prompt = get_active_prompt(TASK_PROMPT_SLUG).format(
         underlying=underlying,
@@ -113,7 +137,7 @@ def generate_options_strategy(
             )
             content = response.choices[0].message.content
             parsed = json.loads(extract_json(content))
-            legs = _parse_legs(parsed, real_strikes)
+            legs = _parse_legs(parsed, chain, underlying)
 
             scan_result = scan_for_naked_options(legs)
             if scan_result.passed:
@@ -186,9 +210,16 @@ def options_strategy_node(state: TradingOSGraphState) -> dict[str, object]:
     if proposal is None:
         return {"strategy_logic": state.strategy_logic.model_copy(update={"option_legs": None})}
 
+    # REL-035: `leg.symbol` here is `underlying` (see _parse_legs's own docstring) -- resolve
+    # the real, tradable per-contract broker symbol from the chain for StrategyOptionLeg, which
+    # persistence (src/api/routers/agents.py) and paper execution (src/engine/paper_trading/)
+    # actually need. `.get(..., leg.symbol)` is a defensive fallback only, never expected to
+    # fire: _parse_legs already validated every (strike, option_type) pair against this same
+    # chain before returning `proposal.legs` in the first place.
+    symbol_lookup = _symbol_lookup(chain)
     grounded_legs = [
         StrategyOptionLeg(
-            symbol=leg.symbol,
+            symbol=symbol_lookup.get((leg.strike, leg.option_type), leg.symbol),
             option_type=leg.option_type,
             strike=leg.strike,
             side=leg.side,
@@ -197,4 +228,8 @@ def options_strategy_node(state: TradingOSGraphState) -> dict[str, object]:
         for leg in proposal.legs
     ]
     updated_strategy = state.strategy_logic.model_copy(update={"option_legs": grounded_legs})
-    return {"strategy_logic": updated_strategy}
+    # REL-035: the expiry this proposal was actually grounded against, previously computed here
+    # (via chain.expiry) and then discarded -- src/api/routers/agents.py::_persist_strategy_
+    # progress now persists it alongside the legs onto StrategyVersion, since a leg itself has
+    # no expiry field (one expiry applies to the whole proposal, not per-leg).
+    return {"strategy_logic": updated_strategy, "option_expiry": chain.expiry}

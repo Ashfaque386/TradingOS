@@ -54,6 +54,13 @@ class StrategyVersion(Base, UUIDPKMixin, TimestampMixin):
     validation_status: Mapped[str] = mapped_column(String(20), default="Pending")
     validator_feedback: Mapped[str | None] = mapped_column(Text)
     qdrant_point_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # REL-035: the Options Strategy Agent's real, chain-grounded legs (list of {symbol,
+    # option_type, strike, side, quantity} dicts) and the real expiry they were grounded
+    # against -- NULL for an equity strategy, or an F&O strategy whose grounding degraded (see
+    # src/agents/nodes/options_strategy_agent.py). Not retroactive: a row created before this
+    # migration has no real legs to backfill.
+    option_legs: Mapped[list[dict[str, float | str | int]] | None] = mapped_column(JSONB)
+    option_expiry: Mapped[date | None]
 
 
 class BacktestResult(Base, UUIDPKMixin, TimestampMixin):

@@ -6,7 +6,7 @@ Every model uses `extra="forbid"` so a malformed or unexpected field is rejected
 construction time rather than silently passed downstream between agents.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -215,6 +215,12 @@ class TradingOSGraphState(StrictModel):
     research_directive: ResearchDirective | None = None
     market_context: MarketContext | None = None
     strategy_logic: StrategyLogic | None = None
+    # REL-035: the real expiry `options_strategy_node` grounded strategy_logic.option_legs
+    # against -- a leg itself has no expiry field (one expiry applies to the whole proposal, not
+    # per-leg), so this is the only place it's carried through to
+    # src/api/routers/agents.py::_persist_strategy_progress for persistence. None whenever
+    # option_legs is also None (nothing was grounded to report an expiry for).
+    option_expiry: date | None = None
     python_code: PythonCode | None = None
     # REL-025: a real, stable identifier for this run's current code version -- set by
     # python_code_generator_node from thread_id+version_no (no node has a real Postgres
