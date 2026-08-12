@@ -38,15 +38,19 @@ vectorbt backtest run. Gated to SystemAdministrator/PortfolioManager/RiskManager
 as agents.py's Orchestrator HITL endpoints), a real fix, not a pre-existing documented gap.
 """
 
+import csv
+import io
+import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+import numpy as np
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.api.deps import require_role
 from src.core.audit import write_audit_entry
@@ -95,6 +99,11 @@ class StrategySummary(BaseModel):
     current_version_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime | None
+    # REL-040: real count of BacktestResult rows across every version of this strategy -- lets
+    # the frontend show which strategies actually have backtest history worth picking, instead
+    # of the user discovering "this one has none" only after selecting it and seeing an empty
+    # detail view.
+    backtest_count: int = 0
 
 
 class StrategyVersionSummary(BaseModel):
@@ -127,6 +136,21 @@ class BacktestSummary(BaseModel):
     # release (not backfilled) or ones with fewer than 2 usable returns either way.
     monte_carlo_p95_max_drawdown: float | None
     created_at: datetime
+    # REL-040: real columns on BacktestResult (src/models/strategy.py, REL-005) written by the
+    # real LangGraph Evaluator/Optimization/RiskManager/Deployment agent nodes
+    # (src/api/routers/agents.py::_persist_strategy_progress) -- computed and persisted for
+    # every real graph-driven backtest since REL-005, but never serialized by this endpoint
+    # until now. `None` for a backtest triggered directly via POST /{id}/backtest (this router's
+    # own _run_backtest_job never sets these -- it's a standalone re-run, not a full graph
+    # pass) or for one created before REL-005, not fabricated either way.
+    evaluation_verdict: str | None = None
+    evaluation_failure_reasons: list[str] | None = None
+    optimization_best_params: dict[str, float] | None = None
+    optimization_robustness_score: float | None = None
+    risk_assessment_passed: bool | None = None
+    risk_assessment_notes: str | None = None
+    deployment_recommendation: str | None = None
+    deployment_rationale: str | None = None
 
 
 class StrategyDetail(StrategySummary):
@@ -134,7 +158,7 @@ class StrategyDetail(StrategySummary):
     backtests: list[BacktestSummary]
 
 
-def _to_summary(strategy: Strategy) -> StrategySummary:
+def _to_summary(strategy: Strategy, *, backtest_count: int = 0) -> StrategySummary:
     return StrategySummary(
         id=strategy.id,
         name=strategy.name,
@@ -146,6 +170,7 @@ def _to_summary(strategy: Strategy) -> StrategySummary:
         current_version_id=strategy.current_version_id,
         created_at=strategy.created_at,
         updated_at=strategy.updated_at,
+        backtest_count=backtest_count,
     )
 
 
@@ -167,14 +192,32 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         has_equity_curve=bool(result.equity_curve_path),
         monte_carlo_p95_max_drawdown=result.monte_carlo_p95_max_drawdown,
         created_at=result.created_at,
+        evaluation_verdict=result.evaluation_verdict,
+        evaluation_failure_reasons=result.evaluation_failure_reasons,
+        optimization_best_params=result.optimization_best_params,
+        optimization_robustness_score=result.optimization_robustness_score,
+        risk_assessment_passed=result.risk_assessment_passed,
+        risk_assessment_notes=result.risk_assessment_notes,
+        deployment_recommendation=result.deployment_recommendation,
+        deployment_rationale=result.deployment_rationale,
     )
 
 
 @router.get("", response_model=list[StrategySummary])
 def list_strategies() -> list[StrategySummary]:
     with get_session() as session:
-        strategies = session.scalars(select(Strategy).order_by(Strategy.created_at.desc()))
-        return [_to_summary(s) for s in strategies]
+        strategies = list(session.scalars(select(Strategy).order_by(Strategy.created_at.desc())))
+        # REL-040: one grouped query for every strategy's real backtest_count, rather than an
+        # N+1 count-per-strategy -- joins through StrategyVersion since BacktestResult only has
+        # a strategy_version_id, not a direct strategy_id.
+        counts: dict[uuid.UUID, int] = dict(
+            session.execute(
+                select(StrategyVersion.strategy_id, func.count(BacktestResult.id))
+                .join(BacktestResult, BacktestResult.strategy_version_id == StrategyVersion.id)
+                .group_by(StrategyVersion.strategy_id)
+            ).all()  # type: ignore[arg-type]
+        )
+        return [_to_summary(s, backtest_count=counts.get(s.id, 0)) for s in strategies]
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetail)
@@ -205,7 +248,7 @@ def get_strategy(strategy_id: uuid.UUID) -> StrategyDetail:
         )
 
         return StrategyDetail(
-            **_to_summary(strategy).model_dump(),
+            **_to_summary(strategy, backtest_count=len(backtests)).model_dump(),
             versions=[
                 StrategyVersionSummary(
                     id=v.id,
@@ -442,21 +485,27 @@ class EquityCurvePoint(BaseModel):
     equity: float
 
 
-@router.get("/backtests/{backtest_id}/equity-curve", response_model=list[EquityCurvePoint])
-def get_equity_curve(backtest_id: uuid.UUID) -> list[EquityCurvePoint]:
+def _read_equity_curve(result: BacktestResult) -> list[EquityCurvePoint]:
+    """REL-040: extracted from get_equity_curve below so the new /compare endpoint can reuse the
+    identical real parquet-read logic per row rather than duplicating it."""
     import polars as pl
 
+    if not result.equity_curve_path:
+        return []
+    df = pl.read_parquet(result.equity_curve_path)
+    return [
+        EquityCurvePoint(date=str(row["date"]), equity=float(row["equity"]))
+        for row in df.iter_rows(named=True)
+    ]
+
+
+@router.get("/backtests/{backtest_id}/equity-curve", response_model=list[EquityCurvePoint])
+def get_equity_curve(backtest_id: uuid.UUID) -> list[EquityCurvePoint]:
     with get_session() as session:
         result = session.get(BacktestResult, backtest_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Backtest not found")
-        if not result.equity_curve_path:
-            return []
-        df = pl.read_parquet(result.equity_curve_path)
-        return [
-            EquityCurvePoint(date=str(row["date"]), equity=float(row["equity"]))
-            for row in df.iter_rows(named=True)
-        ]
+        return _read_equity_curve(result)
 
 
 class TradeSummary(BaseModel):
@@ -512,6 +561,173 @@ def get_walk_forward(backtest_id: uuid.UUID) -> list[WalkForwardWindowResponse]:
         if not result.walk_forward_results:
             return []
         return [WalkForwardWindowResponse(**window) for window in result.walk_forward_results]
+
+
+# --- Cross-strategy views (REL-040) ------------------------------------------------------------
+
+
+class BacktestWithStrategy(BacktestSummary):
+    strategy_id: uuid.UUID
+    strategy_name: str
+
+
+class BacktestCompareRow(BacktestWithStrategy):
+    equity_curve: list[EquityCurvePoint]
+
+
+@router.get("/backtests/latest", response_model=list[BacktestWithStrategy])
+def list_latest_backtests() -> list[BacktestWithStrategy]:
+    """REL-040: real, server-side "most recent backtest per strategy" -- replaces the frontend's
+    own N+1 client-side fetch (one GET /{id} per strategy) that existed only to build this exact
+    cross-strategy view. A strategy with no version or no backtest at all is simply absent from
+    the result, the same honest-omission convention every other endpoint in this router uses."""
+    with get_session() as session:
+        latest_per_strategy = (
+            select(
+                StrategyVersion.strategy_id.label("strategy_id"),
+                func.max(BacktestResult.created_at).label("max_created_at"),
+            )
+            .join(BacktestResult, BacktestResult.strategy_version_id == StrategyVersion.id)
+            .group_by(StrategyVersion.strategy_id)
+            .subquery()
+        )
+        rows = session.execute(
+            select(BacktestResult, Strategy.id, Strategy.name)
+            .join(StrategyVersion, StrategyVersion.id == BacktestResult.strategy_version_id)
+            .join(Strategy, Strategy.id == StrategyVersion.strategy_id)
+            .join(
+                latest_per_strategy,
+                (StrategyVersion.strategy_id == latest_per_strategy.c.strategy_id)
+                & (BacktestResult.created_at == latest_per_strategy.c.max_created_at),
+            )
+            .order_by(Strategy.name)
+        ).all()
+        return [
+            BacktestWithStrategy(
+                **_to_backtest_summary(result).model_dump(),
+                strategy_id=strategy_id,
+                strategy_name=strategy_name,
+            )
+            for result, strategy_id, strategy_name in rows
+        ]
+
+
+@router.get("/backtests/compare", response_model=list[BacktestCompareRow])
+def compare_backtests(
+    ids: str = Query(..., description="Comma-separated backtest UUIDs, max 6"),
+) -> list[BacktestCompareRow]:
+    """REL-040: arbitrary multi-run comparison (not just "latest per strategy") -- a bad or
+    vanished id is silently omitted from the response, not a failed batch, the same per-entry
+    graceful-degradation convention src/api/routers/portfolio.py's by-broker endpoints already
+    established. Includes each row's real equity curve so the frontend can overlay them from one
+    round trip instead of N follow-up requests."""
+    raw_ids = [i.strip() for i in ids.split(",") if i.strip()]
+    if len(raw_ids) > 6:
+        raise HTTPException(
+            status_code=422, detail="At most 6 backtest ids may be compared at once"
+        )
+    try:
+        parsed_ids = [uuid.UUID(i) for i in raw_ids]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid backtest id: {exc}") from exc
+
+    rows: list[BacktestCompareRow] = []
+    with get_session() as session:
+        for backtest_id in parsed_ids:
+            result = session.get(BacktestResult, backtest_id)
+            if result is None:
+                continue
+            version = session.get(StrategyVersion, result.strategy_version_id)
+            if version is None:
+                continue
+            strategy = session.get(Strategy, version.strategy_id)
+            if strategy is None:
+                continue
+            rows.append(
+                BacktestCompareRow(
+                    **_to_backtest_summary(result).model_dump(),
+                    strategy_id=strategy.id,
+                    strategy_name=strategy.name,
+                    equity_curve=_read_equity_curve(result),
+                )
+            )
+    return rows
+
+
+class MonteCarloHistogramResponse(BaseModel):
+    bucket_edges: list[float]
+    bucket_counts: list[int]
+    percentile_95_max_drawdown: float
+    historical_max_drawdown: float
+    n_simulations: int
+
+
+@router.get("/backtests/{backtest_id}/monte-carlo", response_model=MonteCarloHistogramResponse)
+def get_monte_carlo_histogram(backtest_id: uuid.UUID) -> MonteCarloHistogramResponse:
+    """REL-040: recomputes the full Monte Carlo drawdown distribution live from the already-
+    persisted real trade ledger (REL-022) -- cheap (milliseconds, pure numpy resampling), no
+    schema change, no re-running the sandboxed vectorbt backtest. Only the single percentile_95
+    summary is ever persisted (REL-023, BacktestResult.monte_carlo_p95_max_drawdown); the full
+    distribution this endpoint returns is always computed fresh and never written back."""
+    with get_session() as session:
+        result = session.get(BacktestResult, backtest_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        trade_returns = [float(t["return_pct"]) for t in (result.trades or [])]
+
+    if len(trade_returns) < 2:
+        raise HTTPException(
+            status_code=409,
+            detail="Not enough real closed trades (need at least 2) to run a Monte Carlo "
+            "simulation",
+        )
+
+    mc_result = run_monte_carlo_simulation(trade_returns)
+    counts, edges = np.histogram(mc_result.simulated_max_drawdowns, bins=40)
+    return MonteCarloHistogramResponse(
+        bucket_edges=[float(e) for e in edges],
+        bucket_counts=[int(c) for c in counts],
+        percentile_95_max_drawdown=float(mc_result.percentile_95_max_drawdown),
+        historical_max_drawdown=float(mc_result.historical_max_drawdown),
+        n_simulations=mc_result.n_simulations,
+    )
+
+
+_TRADE_EXPORT_FIELDNAMES = [
+    "entry_date",
+    "exit_date",
+    "side",
+    "size",
+    "entry_price",
+    "exit_price",
+    "pnl",
+    "return_pct",
+]
+
+
+@router.get("/backtests/{backtest_id}/export")
+def export_backtest_report(
+    backtest_id: uuid.UUID,
+    export_format: Literal["csv", "ndjson"] = Query(default="csv", alias="format"),
+) -> Response:
+    """REL-040: mirrors src/api/routers/paper_trading.py::account_statement_export's exact
+    CSV/NDJSON pattern -- the real per-trade ledger for this one backtest run."""
+    with get_session() as session:
+        result = session.get(BacktestResult, backtest_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        trades = result.trades or []
+
+    if export_format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=_TRADE_EXPORT_FIELDNAMES)
+        writer.writeheader()
+        for trade in trades:
+            writer.writerow({k: trade.get(k) for k in _TRADE_EXPORT_FIELDNAMES})
+        return Response(content=buffer.getvalue(), media_type="text/csv")
+
+    ndjson_body = "\n".join(json.dumps(trade) for trade in trades)
+    return Response(content=ndjson_body, media_type="application/x-ndjson")
 
 
 # --- Promote (human approval) ------------------------------------------------------------------

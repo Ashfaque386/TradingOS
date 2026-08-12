@@ -9,6 +9,7 @@ fresh sandboxed subprocess every run, matching test_real_backtest_runner.py's ow
 
 import time
 import uuid
+from datetime import date
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -377,3 +378,160 @@ def test_backtest_trigger_requires_the_gated_role():
         assert response.status_code == 403
     finally:
         cleanup_user(user_id)
+
+
+def _run_real_backtest(strategy_id: uuid.UUID, headers: dict[str, str]) -> str:
+    """Shared with the end-to-end test above: triggers and polls a real vectorbt run to
+    completion (~60-90s) and returns the resulting backtest_result_id."""
+    trigger_response = client.post(f"/api/v1/strategies/{strategy_id}/backtest", headers=headers)
+    assert trigger_response.status_code == 202
+    job_id = trigger_response.json()["job_id"]
+
+    deadline = time.monotonic() + 150
+    job_status = None
+    while time.monotonic() < deadline:
+        job_response = client.get(f"/api/v1/strategies/backtests/jobs/{job_id}/status")
+        job_status = job_response.json()
+        if job_status["status"] != "Running":
+            break
+        time.sleep(3)
+
+    assert job_status is not None and job_status["status"] == "Completed", job_status
+    backtest_id: str = job_status["backtest_result_id"]
+    assert backtest_id is not None
+    return backtest_id
+
+
+def test_cross_strategy_backtest_views_rel_040():
+    """REL-040: backtest_count, the 8 hidden AI-pipeline fields, /backtests/latest,
+    /backtests/compare (honest omission + the 6-id cap), /backtests/{id}/monte-carlo (bucket-sum
+    + 409-under-2-trades gate), and /backtests/{id}/export -- one real vectorbt run for strategy A
+    (so equity_curve/trades/Monte Carlo are all real), plus a directly-inserted second
+    BacktestResult row for strategy B (no equity curve, no trades) so /latest and /compare have a
+    genuine second strategy to combine without paying for a second ~60-90s sandbox run."""
+    ids_a = _create_fixture_rows()
+    user_a, account_a, strategy_a, version_a = ids_a
+    ids_b = _create_fixture_rows()
+    user_b, account_b, strategy_b, version_b = ids_b
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+    backtest_b_id = uuid.uuid4()
+
+    try:
+        backtest_a_id = uuid.UUID(_run_real_backtest(strategy_a, headers))
+
+        # REL-005/REL-040: the 8 AI-pipeline columns are real DB columns, populated by the
+        # Evaluator/Optimization/RiskManager/Deployment agents elsewhere, not by the backtest
+        # endpoint itself -- set them directly here to prove the *serialization* path works.
+        with get_session() as session:
+            result_a = session.get(BacktestResult, backtest_a_id)
+            assert result_a is not None
+            result_a.evaluation_verdict = "Pass"
+            result_a.evaluation_failure_reasons = None
+            result_a.optimization_best_params = {"fast": 5.0, "slow": 20.0}
+            result_a.optimization_robustness_score = 0.82
+            result_a.risk_assessment_passed = True
+            result_a.risk_assessment_notes = "Within max drawdown limit."
+            result_a.deployment_recommendation = "Approve"
+            result_a.deployment_rationale = "Sharpe and drawdown both pass gates."
+            session.add(result_a)
+            session.commit()
+
+            session.add(
+                BacktestResult(
+                    id=backtest_b_id,
+                    strategy_version_id=version_b,
+                    date_from=date(2025, 1, 1),
+                    date_to=date(2025, 12, 31),
+                    initial_capital=100000.00,
+                    sharpe_ratio=1.1,
+                    total_trades=0,
+                    trades=[],
+                    evaluation_verdict="Fail",
+                    evaluation_failure_reasons=["Sharpe ratio below 1.5 threshold"],
+                    risk_assessment_passed=False,
+                    risk_assessment_notes="Too few trades to assess risk.",
+                )
+            )
+            session.commit()
+
+        # backtest_count (REL-040): one real backtest each, reflected without an N+1 query.
+        list_response = client.get("/api/v1/strategies")
+        assert list_response.status_code == 200
+        by_id = {s["id"]: s for s in list_response.json()}
+        assert by_id[str(strategy_a)]["backtest_count"] == 1
+        assert by_id[str(strategy_b)]["backtest_count"] == 1
+
+        # Hidden fields now visible via the existing detail endpoint.
+        detail_a = client.get(f"/api/v1/strategies/{strategy_a}").json()
+        backtest_summary_a = next(b for b in detail_a["backtests"] if b["id"] == str(backtest_a_id))
+        assert backtest_summary_a["evaluation_verdict"] == "Pass"
+        assert backtest_summary_a["deployment_recommendation"] == "Approve"
+        assert backtest_summary_a["optimization_best_params"] == {"fast": 5.0, "slow": 20.0}
+
+        # /backtests/latest: both strategies present, each tagged with its own strategy_id/name.
+        latest_response = client.get("/api/v1/strategies/backtests/latest")
+        assert latest_response.status_code == 200
+        latest_by_strategy = {row["strategy_id"]: row for row in latest_response.json()}
+        assert latest_by_strategy[str(strategy_a)]["id"] == str(backtest_a_id)
+        assert (
+            latest_by_strategy[str(strategy_a)]["strategy_name"] == "strategies-api-test-strategy"
+        )
+        assert latest_by_strategy[str(strategy_b)]["id"] == str(backtest_b_id)
+        assert latest_by_strategy[str(strategy_b)]["evaluation_verdict"] == "Fail"
+
+        # /backtests/compare: real equity curve for A, honestly empty for the direct-inserted B,
+        # and a nonexistent id in the middle is silently omitted rather than failing the batch.
+        compare_response = client.get(
+            "/api/v1/strategies/backtests/compare",
+            params={"ids": f"{backtest_a_id},{uuid.uuid4()},{backtest_b_id}"},
+        )
+        assert compare_response.status_code == 200
+        compare_rows = compare_response.json()
+        assert len(compare_rows) == 2
+        compare_by_id = {row["id"]: row for row in compare_rows}
+        assert len(compare_by_id[str(backtest_a_id)]["equity_curve"]) > 200
+        assert compare_by_id[str(backtest_b_id)]["equity_curve"] == []
+
+        # 422 once more than 6 ids are requested, before any DB resolution happens.
+        too_many_ids = ",".join(str(uuid.uuid4()) for _ in range(7))
+        capped_response = client.get(
+            "/api/v1/strategies/backtests/compare", params={"ids": too_many_ids}
+        )
+        assert capped_response.status_code == 422
+
+        # /monte-carlo: real trade-return distribution for A (>=2 trades) resamples cleanly;
+        # zero-trade B hits the same 409 gate the trades/walk-forward endpoints already use.
+        mc_response = client.get(f"/api/v1/strategies/backtests/{backtest_a_id}/monte-carlo")
+        if backtest_summary_a["total_trades"] and backtest_summary_a["total_trades"] >= 2:
+            assert mc_response.status_code == 200
+            mc = mc_response.json()
+            assert sum(mc["bucket_counts"]) == mc["n_simulations"]
+            assert len(mc["bucket_edges"]) == len(mc["bucket_counts"]) + 1
+            assert mc["percentile_95_max_drawdown"] >= 0
+        else:
+            assert mc_response.status_code == 409
+
+        mc_empty_response = client.get(f"/api/v1/strategies/backtests/{backtest_b_id}/monte-carlo")
+        assert mc_empty_response.status_code == 409
+
+        # /export: real per-trade CSV/NDJSON report for A.
+        csv_response = client.get(f"/api/v1/strategies/backtests/{backtest_a_id}/export")
+        assert csv_response.status_code == 200
+        assert csv_response.headers["content-type"].startswith("text/csv")
+        assert "entry_date" in csv_response.text.splitlines()[0]
+
+        ndjson_response = client.get(
+            f"/api/v1/strategies/backtests/{backtest_a_id}/export", params={"format": "ndjson"}
+        )
+        assert ndjson_response.status_code == 200
+        if backtest_summary_a["total_trades"]:
+            first_line = ndjson_response.text.splitlines()[0]
+            assert "entry_date" in first_line
+    finally:
+        with get_session() as session:
+            session.query(BacktestResult).filter(BacktestResult.id == backtest_b_id).delete()
+            session.commit()
+        _cleanup_fixture_rows(*ids_a)
+        _cleanup_fixture_rows(*ids_b)
+        cleanup_user(admin_id)

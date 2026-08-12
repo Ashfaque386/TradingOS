@@ -3,7 +3,7 @@
 import ReactECharts from "echarts-for-react";
 import { useThemeStore } from "@/lib/theme-store";
 import { getChartColors } from "@/lib/chart-theme";
-import type { EquityCurvePoint } from "@/lib/api";
+import type { EquityCurvePoint, TradeSummary } from "@/lib/api";
 
 /** Equity curve vs Nifty 50. REL-017 E17.3: `benchmark` is real ^NSEI OHLCV (ingested by
  * REL-016's E16.2, src/data/ingest/pipeline.py --source yfinance --symbols ^NSEI), filtered by
@@ -11,13 +11,20 @@ import type { EquityCurvePoint } from "@/lib/api";
  * date -- both series are normalized to start at 100 here so they're comparable regardless of
  * the strategy's actual capital base vs. the index's own price level. `benchmark` is optional
  * and omitted (not fabricated as a flat line) whenever the caller has no overlapping real data
- * for the period. */
+ * for the period.
+ *
+ * REL-043: `trades` is optional and purely additive -- a `scatter` series marking each real
+ * trade's entry/exit date on the existing `category` xAxis, layered on top of the untouched
+ * `line`/`benchmark` series above. review-panel.tsx renders this component without ever passing
+ * `trades`, so that usage is byte-for-byte unaffected. */
 export function EquityCurveChart({
   points,
   benchmark,
+  trades,
 }: {
   points: EquityCurvePoint[];
   benchmark?: (number | null)[];
+  trades?: TradeSummary[];
 }) {
   const mode = useThemeStore((s) => s.mode);
   const colors = getChartColors(mode);
@@ -52,6 +59,42 @@ export function EquityCurveChart({
       lineStyle: { color: "#c94bff", width: 1.5, type: "dashed" },
     });
   }
+  if (trades && trades.length > 0) {
+    const indexByDate = new Map(points.map((p, i) => [p.date, i]));
+    const markerAt = (date: string, value: number) => {
+      const i = indexByDate.get(date);
+      return i === undefined ? null : [i, normalizedEquity[i], value];
+    };
+    const entryMarkers = trades
+      .map((t) => markerAt(t.entry_date, t.pnl))
+      .filter((m): m is [number, number, number] => m !== null);
+    const exitMarkers = trades
+      .map((t) => markerAt(t.exit_date, t.pnl))
+      .filter((m): m is [number, number, number] => m !== null);
+    if (entryMarkers.length > 0) {
+      series.push({
+        name: "Entry",
+        type: "scatter",
+        data: entryMarkers,
+        symbol: "triangle",
+        symbolSize: 7,
+        itemStyle: { color: colors.textDim },
+      });
+    }
+    if (exitMarkers.length > 0) {
+      series.push({
+        name: "Exit (PnL)",
+        type: "scatter",
+        data: exitMarkers,
+        symbol: "diamond",
+        symbolSize: 7,
+        itemStyle: {
+          color: (params: { data: [number, number, number] }) =>
+            params.data[2] >= 0 ? "#10b981" : "#f43f5e",
+        },
+      });
+    }
+  }
 
   const option = {
     grid: { left: 48, right: 16, top: 16, bottom: 28 },
@@ -77,9 +120,14 @@ export function EquityCurveChart({
       borderColor: colors.grid,
       textStyle: { color: colors.text, fontFamily: "var(--font-sans)", fontSize: 11 },
     },
-    legend: benchmark
-      ? { data: ["Strategy", "Nifty 50"], textStyle: { color: colors.textDim, fontSize: 10 }, top: 0 }
-      : undefined,
+    legend:
+      series.length > 1
+        ? {
+            data: series.map((s) => s.name as string),
+            textStyle: { color: colors.textDim, fontSize: 10 },
+            top: 0,
+          }
+        : undefined,
     series,
   };
 

@@ -224,6 +224,9 @@ export interface StrategySummary {
   current_version_id: string | null;
   created_at: string;
   updated_at: string | null;
+  // REL-040: real count of this strategy's own backtest_results rows, so the picker can show
+  // which strategies actually have history worth opening.
+  backtest_count: number;
 }
 
 export interface StrategyVersionSummary {
@@ -254,11 +257,42 @@ export interface BacktestSummary {
   // fewer than 2 usable returns either way, exposed honestly rather than hidden.
   monte_carlo_p95_max_drawdown: number | null;
   created_at: string;
+  // REL-040: the real Evaluator/Optimization/RiskManager/Deployment agent-pipeline outcome for
+  // this backtest run (src/api/routers/agents.py::_persist_strategy_progress) -- previously
+  // computed and persisted but never returned by any endpoint. "Not yet evaluated" (null) is a
+  // real, honest state for a backtest the agent pipeline hasn't reached yet, not an error.
+  evaluation_verdict: string | null;
+  evaluation_failure_reasons: string[] | null;
+  optimization_best_params: Record<string, number> | null;
+  optimization_robustness_score: number | null;
+  risk_assessment_passed: boolean | null;
+  risk_assessment_notes: string | null;
+  deployment_recommendation: string | null;
+  deployment_rationale: string | null;
 }
 
 export interface StrategyDetail extends StrategySummary {
   versions: StrategyVersionSummary[];
   backtests: BacktestSummary[];
+}
+
+// REL-040: GET /strategies/backtests/latest and /strategies/backtests/compare tag each row with
+// which strategy it belongs to, since both endpoints span every strategy rather than one.
+export interface BacktestWithStrategy extends BacktestSummary {
+  strategy_id: string;
+  strategy_name: string;
+}
+
+export interface BacktestCompareRow extends BacktestWithStrategy {
+  equity_curve: EquityCurvePoint[];
+}
+
+export interface MonteCarloHistogramResponse {
+  bucket_edges: number[];
+  bucket_counts: number[];
+  percentile_95_max_drawdown: number;
+  historical_max_drawdown: number;
+  n_simulations: number;
 }
 
 export interface VersionCode {
@@ -804,6 +838,15 @@ export const api = {
     get<TradeSummary[]>(`/api/v1/strategies/backtests/${backtestId}/trades`),
   backtestWalkForward: (backtestId: string) =>
     get<WalkForwardWindow[]>(`/api/v1/strategies/backtests/${backtestId}/walk-forward`),
+  // REL-040: cross-strategy views, previously assembled client-side with an N+1 fetch per
+  // strategy -- now one real server-side query each.
+  latestBacktests: () => get<BacktestWithStrategy[]>("/api/v1/strategies/backtests/latest"),
+  compareBacktests: (ids: string[]) =>
+    get<BacktestCompareRow[]>(`/api/v1/strategies/backtests/compare${toQuery({ ids: ids.join(",") })}`),
+  monteCarloHistogram: (backtestId: string) =>
+    get<MonteCarloHistogramResponse>(`/api/v1/strategies/backtests/${backtestId}/monte-carlo`),
+  backtestExportPath: (backtestId: string, format: "csv" | "ndjson") =>
+    `/api/v1/strategies/backtests/${backtestId}/export${toQuery({ format })}`,
   promoteStrategy: (id: string, toStatus: StrategyStatus) =>
     post<StrategySummary>(`/api/v1/strategies/${id}/promote`, { to_status: toStatus }),
 
