@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { usePageStatus } from "@/hooks/usePageStatus";
+import { useAccountScopeStore } from "@/lib/account-scope-store";
 import { Card } from "@/components/ui/card";
 import {
   Table,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { OrdersTable } from "@/components/orders/orders-table";
 import { TradesTable } from "@/components/orders/trades-table";
+import { UnifiedOrderHistory } from "@/components/orders/unified-order-history";
 
 /**
  * REL-018 E18.1/E18.2: Live Trade & Order Monitoring -- the one dashboard gap the 2026-08-01
@@ -24,11 +26,36 @@ import { TradesTable } from "@/components/orders/trades-table";
  * trading before this release (src/api/routers/orders.py). Everything below is real: 2 real
  * orders exist in this environment today (both CANCELLED by the kill switch during an earlier
  * chaos-engineering test), 0 real trades yet -- honestly shown as empty, not faked.
+ *
+ * REL-036: `ORDERS`/`TRADES` above will stay near-empty by design -- nothing in this codebase
+ * writes to them from a real live-execution path (Business Rule 3: no automated live order
+ * placement). The real, useful cross-account view is the Unified History card below, which
+ * merges the real seeded Paper account's own fills with the real broker's own read-only order
+ * book (GET /broker/order-book) -- two already-real data sources, no new writes.
  */
 export default function OrdersPage() {
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>("");
+  const scope = useAccountScopeStore((s) => s.scope);
 
-  usePageStatus("Live Trade & Order Monitoring — Real Capital Only", false);
+  usePageStatus(
+    scope === "paper"
+      ? "Order & Trade History — Paper Account"
+      : scope === "live"
+        ? "Order & Trade History — Real Capital Only"
+        : "Order & Trade History — Paper + Live",
+    false,
+  );
+
+  const paperTradesQuery = useQuery({
+    queryKey: ["paper-trades", selectedStrategyId],
+    queryFn: () => api.paperTrades(selectedStrategyId || undefined),
+    enabled: scope !== "live",
+  });
+  const brokerOrderBookQuery = useQuery({
+    queryKey: ["broker-order-book"],
+    queryFn: api.brokerOrderBook,
+    enabled: scope !== "paper",
+  });
 
   const strategiesQuery = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
   // `?? []` creates a fresh array reference every render when .data is undefined, which would
@@ -92,6 +119,15 @@ export default function OrdersPage() {
         </select>
       </Card>
 
+      <Card eyebrow={scope === "both" ? "Paper + Live" : scope === "paper" ? "Paper" : "Live"} title="Order & Trade History">
+        <UnifiedOrderHistory
+          paper={scope !== "live" ? (paperTradesQuery.data ?? []) : []}
+          live={scope !== "paper" ? (brokerOrderBookQuery.data ?? []) : []}
+        />
+      </Card>
+
+      {scope !== "paper" && (
+      <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card eyebrow="Live" title="Total Net P&L">
           <p
@@ -137,8 +173,17 @@ export default function OrdersPage() {
         </Card>
       </div>
 
+      <p className="text-[11px] leading-relaxed text-text-faint">
+        The two tables below are this app&apos;s own local engine ledger (DB-008/009) -- they only
+        ever record an order this app itself placed programmatically, which this codebase
+        deliberately never does with real capital (Business Rule 3: no automated live execution,
+        a human always places a real order directly with the broker). They will stay near-empty by
+        design; see the Order &amp; Trade History card above for the real, populated cross-account
+        view.
+      </p>
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card eyebrow="Real Ledger" title="Order History">
+        <Card eyebrow="Local Engine Ledger" title="Order History">
           {ordersQuery.isLoading ? (
             <div className="h-40 animate-pulse rounded-xl bg-bg" />
           ) : (
@@ -146,7 +191,7 @@ export default function OrdersPage() {
           )}
         </Card>
 
-        <Card eyebrow="Real Ledger" title="Recent Fills">
+        <Card eyebrow="Local Engine Ledger" title="Recent Fills">
           {tradesQuery.isLoading ? (
             <div className="h-40 animate-pulse rounded-xl bg-bg" />
           ) : (
@@ -190,6 +235,8 @@ export default function OrdersPage() {
           </div>
         )}
       </Card>
+      </>
+      )}
     </main>
   );
 }

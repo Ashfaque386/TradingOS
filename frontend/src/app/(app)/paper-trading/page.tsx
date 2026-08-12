@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { usePageStatus } from "@/hooks/usePageStatus";
@@ -37,6 +38,13 @@ export default function PaperTradingPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
+      <p className="text-[11px] text-text-faint">
+        Looking for account equity, margin, and a downloadable statement?{" "}
+        <Link href="/account" className="font-medium text-text-dim underline underline-offset-2 hover:text-text">
+          Account →
+        </Link>
+      </p>
+
       <Card eyebrow="Rule 3 · Go-Live Precursor" title="Shadow Mode — Broker Validation Streak">
         <ShadowModePanel status={shadowQuery.data} />
       </Card>

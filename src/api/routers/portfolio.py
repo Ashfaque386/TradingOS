@@ -30,6 +30,7 @@ need it; the reads next to them stay open for consistency with the rest of this 
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -92,6 +93,27 @@ def _get_broker() -> BrokerAdapter:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+# REL-036: distinguishes "not configured" (503, from _get_broker above) from "configured but the
+# real broker call itself failed" (502, e.g. an expired Zerodha token) -- previously a real
+# broker-side failure other than NoBrokerConfigured propagated as an unhandled 500, giving the
+# frontend no way to tell that apart from "configured and genuinely returned nothing." Mirrors
+# the same try/except shape src/api/routers/broker_config.py::broker_order_book already uses.
+async def _get_positions(broker: BrokerAdapter) -> list[Position]:
+    try:
+        return await broker.get_positions()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Broker positions request failed: {exc}"
+        ) from exc
+
+
+async def _get_margin(broker: BrokerAdapter) -> Margin:
+    try:
+        return await broker.get_margin()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"Broker margin request failed: {exc}") from exc
+
+
 def _latest_risk_limit(session: Session) -> RiskLimit | None:
     return session.scalars(
         select(RiskLimit)
@@ -110,14 +132,14 @@ def _pct_of_daily_limit(total_pnl: float, daily_limit: float | None) -> float | 
 async def list_positions() -> list[Position]:
     """API-057."""
     broker = _get_broker()
-    return await broker.get_positions()
+    return await _get_positions(broker)
 
 
 @router.get("/portfolio/margin", response_model=Margin)
 async def portfolio_margin() -> Margin:
     """API-059."""
     broker = _get_broker()
-    return await broker.get_margin()
+    return await _get_margin(broker)
 
 
 @router.get("/portfolio/pnl", response_model=PnLResponse)
@@ -125,7 +147,7 @@ async def portfolio_pnl() -> PnLResponse:
     """API-060 (realized/unrealized totals; per-trade STT/GST breakdown lives on Trade rows,
     DB-009, not summarized here)."""
     broker = _get_broker()
-    positions = await broker.get_positions()
+    positions = await _get_positions(broker)
     unrealized = sum(p.unrealized_pnl for p in positions)
     realized = sum(p.realized_pnl for p in positions)
     total = unrealized + realized
@@ -146,7 +168,7 @@ async def portfolio_pnl() -> PnLResponse:
 @router.get("/portfolio/risk-metrics", response_model=RiskMetricsResponse)
 async def portfolio_risk_metrics() -> RiskMetricsResponse:
     broker = _get_broker()
-    positions = await broker.get_positions()
+    positions = await _get_positions(broker)
     daily_pnl = sum(p.unrealized_pnl + p.realized_pnl for p in positions)
 
     with get_session() as session:
@@ -188,7 +210,7 @@ async def portfolio_risk_metrics() -> RiskMetricsResponse:
 @router.get("/portfolio/allocation", response_model=AllocationResponse)
 async def portfolio_allocation() -> AllocationResponse:
     broker = _get_broker()
-    positions = await broker.get_positions()
+    positions = await _get_positions(broker)
     valued = [
         (p.symbol, abs(p.net_quantity) * (p.last_price or p.average_price or 0.0))
         for p in positions

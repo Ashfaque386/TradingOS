@@ -21,6 +21,7 @@ import { useCommandPaletteStore } from "@/lib/command-palette-store";
 import { scaleIn } from "@/lib/motion";
 import { IconBadge } from "@/components/ui/icon-badge";
 import { NotificationCenter } from "@/components/layout/notification-center";
+import { AccountScopeSwitcher } from "@/components/layout/account-scope-switcher";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -229,6 +230,7 @@ export function TopNav() {
         </nav>
 
         <div className="flex items-center gap-2 justify-self-end">
+          <AccountScopeSwitcher className="hidden sm:inline-flex" />
           <CommandPaletteTrigger />
           <NotificationCenter />
           <div className="flex items-center gap-4 pl-1">
@@ -247,6 +249,12 @@ export function TopNav() {
             variants={scaleIn}
             className="flex flex-col border-t border-card-edge px-4 py-2 md:hidden"
           >
+            <div className="flex items-center justify-between border-b border-card-edge py-2">
+              <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-faint">
+                Account scope
+              </span>
+              <AccountScopeSwitcher />
+            </div>
             {links.map((link) => (
               <NavLink
                 key={link.href}

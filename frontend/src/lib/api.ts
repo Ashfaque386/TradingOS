@@ -42,6 +42,35 @@ export interface Margin {
   raw: Record<string, unknown>;
 }
 
+// REL-036: matches src/api/routers/broker_config.py::BrokerStatusResponse -- whether
+// build_broker() can real-construct an adapter right now, the same resolution every Live
+// portfolio/positions/margin endpoint depends on. Named distinctly from the existing
+// `BrokerStatus` below (settings.py's IntegrationsStatus row, which only checks whether a
+// credential string is present) -- TypeScript would otherwise silently merge the two same-named
+// interfaces via declaration merging instead of erroring, which is not what either one means.
+export interface LiveBrokerStatus {
+  configured: boolean;
+  broker_name: string | null;
+  detail: string | null;
+}
+
+// REL-036: matches src/brokers/base.py::OrderResponse -- the real, read-only order book from
+// whichever broker is configured (never a locally-placed order; BrokerAdapter has no
+// place/modify/cancel method anywhere in this codebase, Business Rule 3).
+export interface BrokerOrder {
+  broker_order_id: string;
+  status: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  order_type: string;
+  quantity: number;
+  filled_quantity: number;
+  average_price: number | null;
+  limit_price: number | null;
+  rejection_reason: string | null;
+  raw: Record<string, unknown>;
+}
+
 export interface PnLResponse {
   unrealized_pnl: number;
   realized_pnl: number;
@@ -716,6 +745,8 @@ export const api = {
   pnl: () => get<PnLResponse>("/api/v1/portfolio/pnl"),
   riskMetrics: () => get<RiskMetricsResponse>("/api/v1/portfolio/risk-metrics"),
   allocation: () => get<AllocationResponse>("/api/v1/portfolio/allocation"),
+  brokerStatus: () => get<LiveBrokerStatus>("/api/v1/broker/status"),
+  brokerOrderBook: () => get<BrokerOrder[]>("/api/v1/broker/order-book"),
   killSwitchStatus: () => get<KillSwitchStatus>("/api/v1/system/kill-switch/status"),
   tripKillSwitch: (reason: string) =>
     post<{ status: string; liquidated_positions: number }>("/api/v1/system/kill-switch", {

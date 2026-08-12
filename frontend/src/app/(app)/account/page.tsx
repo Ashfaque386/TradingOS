@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api, downloadAuthenticated } from "@/lib/api";
 import { formatCompactINR } from "@/lib/utils";
 import { usePageStatus } from "@/hooks/usePageStatus";
+import { useAccountScopeStore } from "@/lib/account-scope-store";
 import { Card } from "@/components/ui/card";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { EquityCurveChart } from "@/components/account/equity-curve-chart";
@@ -17,6 +19,7 @@ import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-
  */
 export default function AccountPage() {
   usePageStatus("Account — Live Paper Trading Ledger", false);
+  const scope = useAccountScopeStore((s) => s.scope);
 
   const summaryQuery = useQuery({
     queryKey: ["account-summary"],
@@ -40,6 +43,24 @@ export default function AccountPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
+      {scope === "live" && (
+        <div className="rounded-xl border border-warn/20 bg-warn/[0.04] px-4 py-2.5 text-[11px] text-warn">
+          You&apos;re viewing the Paper account ledger — your account scope is set to Live.{" "}
+          <Link href="/" className="font-medium underline underline-offset-2">
+            View real account data on the Dashboard →
+          </Link>
+        </div>
+      )}
+      <p className="text-[11px] text-text-faint">
+        Looking for Shadow Mode or recent simulated fills?{" "}
+        <Link
+          href="/paper-trading"
+          className="font-medium text-text-dim underline underline-offset-2 hover:text-text"
+        >
+          Paper Trading Desk →
+        </Link>
+      </p>
+
       <Card eyebrow="Real, Working Paper Account" title="Account Equity">
         {summaryQuery.isLoading ? (
           <div className="h-20 animate-pulse rounded-xl bg-bg" />
