@@ -42,6 +42,25 @@ export interface Margin {
   raw: Record<string, unknown>;
 }
 
+// REL-038: build_broker() resolves ONE adapter (Zerodha-primary/Upstox-fallback) -- a real,
+// separately-funded Upstox account never shows up there as long as the Zerodha call itself
+// succeeds, even with a genuinely empty account. These match
+// src/api/routers/portfolio.py::BrokerMarginEntry/BrokerPositionsEntry, which query each real
+// broker independently so both real accounts are shown, never silently shadowed by one another.
+export interface BrokerMarginEntry {
+  broker: string;
+  configured: boolean;
+  margin: Margin | null;
+  error: string | null;
+}
+
+export interface BrokerPositionsEntry {
+  broker: string;
+  configured: boolean;
+  positions: Position[];
+  error: string | null;
+}
+
 // REL-036: matches src/api/routers/broker_config.py::BrokerStatusResponse -- whether
 // build_broker() can real-construct an adapter right now, the same resolution every Live
 // portfolio/positions/margin endpoint depends on. Named distinctly from the existing
@@ -742,6 +761,8 @@ export const api = {
 
   positions: () => get<Position[]>("/api/v1/positions"),
   margin: () => get<Margin>("/api/v1/portfolio/margin"),
+  marginByBroker: () => get<BrokerMarginEntry[]>("/api/v1/portfolio/margin/by-broker"),
+  positionsByBroker: () => get<BrokerPositionsEntry[]>("/api/v1/positions/by-broker"),
   pnl: () => get<PnLResponse>("/api/v1/portfolio/pnl"),
   riskMetrics: () => get<RiskMetricsResponse>("/api/v1/portfolio/risk-metrics"),
   allocation: () => get<AllocationResponse>("/api/v1/portfolio/allocation"),

@@ -12,7 +12,6 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { RiskGauge } from "@/components/portfolio/risk-gauge";
 import { ExposureDonut } from "@/components/portfolio/exposure-donut";
 import { PositionsTable } from "@/components/portfolio/positions-table";
-import { MarginPanel } from "@/components/portfolio/margin-panel";
 import { CapitalSummary } from "@/components/portfolio/capital-summary";
 import { KillSwitchButton } from "@/components/portfolio/kill-switch-button";
 import { CandlestickChart } from "@/components/portfolio/candlestick-chart";
@@ -46,6 +45,14 @@ export default function PortfolioCommandCenter() {
   const riskQuery = useQuery({ queryKey: ["risk-metrics"], queryFn: api.riskMetrics });
   const allocationQuery = useQuery({ queryKey: ["allocation"], queryFn: api.allocation });
   const brokerStatusQuery = useQuery({ queryKey: ["broker-status"], queryFn: api.brokerStatus });
+  const marginByBrokerQuery = useQuery({
+    queryKey: ["margin-by-broker"],
+    queryFn: api.marginByBroker,
+  });
+  const positionsByBrokerQuery = useQuery({
+    queryKey: ["positions-by-broker"],
+    queryFn: api.positionsByBroker,
+  });
 
   const summaryQuery = useQuery({
     queryKey: ["account-summary"],
@@ -184,24 +191,50 @@ export default function PortfolioCommandCenter() {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-            <Card eyebrow="Allocation" title="Live Exposure" className="lg:col-span-5">
-              <ExposureDonut
-                bySymbol={allocationQuery.data?.by_symbol ?? []}
-                grossExposure={allocationQuery.data?.gross_exposure ?? 0}
-                sectorAvailable={allocationQuery.data?.sector_data_available ?? false}
-                strategyAvailable={allocationQuery.data?.strategy_data_available ?? false}
-              />
-            </Card>
+          <Card eyebrow="Allocation" title="Live Exposure">
+            <ExposureDonut
+              bySymbol={allocationQuery.data?.by_symbol ?? []}
+              grossExposure={allocationQuery.data?.gross_exposure ?? 0}
+              sectorAvailable={allocationQuery.data?.sector_data_available ?? false}
+              strategyAvailable={allocationQuery.data?.strategy_data_available ?? false}
+            />
+          </Card>
 
-            <Card eyebrow="Broker" title="Margin" className="lg:col-span-3">
-              <MarginPanel margin={marginQuery.data} state={brokerState} />
-            </Card>
-
-            <Card eyebrow="Open" title="Positions" className="lg:col-span-4">
-              <PositionsTable positions={positionsQuery.data ?? []} />
-            </Card>
-          </div>
+          {/* REL-038: build_broker() resolves ONE adapter (Zerodha-primary/Upstox-fallback) --
+              a real, separately-funded Upstox account never shows up in the single "Margin"
+              card above as long as the Zerodha call itself succeeds, even with a genuinely
+              empty account. Each configured broker gets its own tagged Capital + Positions
+              cards below, queried independently (GET /portfolio/margin/by-broker, GET
+              /positions/by-broker), so neither broker can silently shadow the other. */}
+          {(marginByBrokerQuery.data ?? []).map((entry) => {
+            const positionsEntry = (positionsByBrokerQuery.data ?? []).find(
+              (p) => p.broker === entry.broker,
+            );
+            return (
+              <div key={entry.broker} className="flex flex-col gap-4">
+                <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-faint">
+                  {entry.broker}
+                </p>
+                <Card eyebrow={entry.broker} title="Capital">
+                  {!entry.configured ? (
+                    <p className="text-[11px] text-text-faint">Not connected</p>
+                  ) : entry.error ? (
+                    <p className="text-[11px] text-down">{entry.error}</p>
+                  ) : (
+                    <CapitalSummary
+                      used={entry.margin?.used_margin ?? 0}
+                      available={entry.margin?.available_margin ?? 0}
+                    />
+                  )}
+                </Card>
+                {entry.configured && (
+                  <Card eyebrow={entry.broker} title="Positions">
+                    <PositionsTable positions={positionsEntry?.positions ?? []} />
+                  </Card>
+                )}
+              </div>
+            );
+          })}
         </section>
       )}
 

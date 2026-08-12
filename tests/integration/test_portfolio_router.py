@@ -52,3 +52,103 @@ def test_pnl_returns_502_not_an_unhandled_500_when_positions_call_fails(mock_bui
 
     response = client.get("/api/v1/portfolio/pnl")
     assert response.status_code == 502
+
+
+# REL-038: build_broker() resolves ONE adapter (Zerodha-primary/Upstox-fallback) -- a real,
+# separately-funded Upstox account never shows up there as long as the Zerodha call itself
+# succeeds, even with a genuinely empty account. The by-broker endpoints below query each real
+# broker independently, so both real accounts are shown, never silently shadowed by one another.
+
+
+@patch("src.api.routers.portfolio.build_upstox_adapter")
+@patch("src.api.routers.portfolio.build_zerodha_adapter")
+def test_margin_by_broker_reports_both_real_brokers_independently(
+    mock_build_zerodha, mock_build_upstox
+):
+    from src.brokers.base import Margin
+
+    zerodha = AsyncMock()
+    zerodha.get_margin.return_value = Margin(available_margin=0.0, used_margin=0.0, raw={})
+    mock_build_zerodha.return_value = zerodha
+
+    upstox = AsyncMock()
+    upstox.get_margin.return_value = Margin(available_margin=25000.0, used_margin=5000.0, raw={})
+    mock_build_upstox.return_value = upstox
+
+    response = client.get("/api/v1/portfolio/margin/by-broker")
+    assert response.status_code == 200
+    entries = {e["broker"]: e for e in response.json()}
+    assert entries["Zerodha"]["configured"] is True
+    assert entries["Zerodha"]["margin"]["available_margin"] == 0.0
+    assert entries["Upstox"]["configured"] is True
+    assert entries["Upstox"]["margin"]["available_margin"] == 25000.0
+
+
+@patch("src.api.routers.portfolio.build_upstox_adapter")
+@patch("src.api.routers.portfolio.build_zerodha_adapter")
+def test_margin_by_broker_reports_not_configured_without_failing_the_other_broker(
+    mock_build_zerodha, mock_build_upstox
+):
+    from src.brokers.base import Margin
+    from src.brokers.factory import NoBrokerConfigured
+
+    mock_build_zerodha.side_effect = NoBrokerConfigured("Zerodha is not configured")
+    upstox = AsyncMock()
+    upstox.get_margin.return_value = Margin(available_margin=100.0, used_margin=0.0, raw={})
+    mock_build_upstox.return_value = upstox
+
+    response = client.get("/api/v1/portfolio/margin/by-broker")
+    assert response.status_code == 200
+    entries = {e["broker"]: e for e in response.json()}
+    assert entries["Zerodha"]["configured"] is False
+    assert entries["Zerodha"]["margin"] is None
+    assert entries["Upstox"]["configured"] is True
+    assert entries["Upstox"]["margin"]["available_margin"] == 100.0
+
+
+@patch("src.api.routers.portfolio.build_upstox_adapter")
+@patch("src.api.routers.portfolio.build_zerodha_adapter")
+def test_margin_by_broker_reports_a_real_call_failure_without_500ing_the_whole_request(
+    mock_build_zerodha, mock_build_upstox
+):
+    from src.brokers.base import Margin
+
+    zerodha = AsyncMock()
+    zerodha.get_margin.side_effect = _real_shaped_http_status_error()
+    mock_build_zerodha.return_value = zerodha
+
+    upstox = AsyncMock()
+    upstox.get_margin.return_value = Margin(available_margin=10.0, used_margin=0.0, raw={})
+    mock_build_upstox.return_value = upstox
+
+    response = client.get("/api/v1/portfolio/margin/by-broker")
+    assert response.status_code == 200
+    entries = {e["broker"]: e for e in response.json()}
+    assert entries["Zerodha"]["configured"] is True
+    assert entries["Zerodha"]["margin"] is None
+    assert entries["Zerodha"]["error"] is not None
+    assert entries["Upstox"]["margin"]["available_margin"] == 10.0
+
+
+@patch("src.api.routers.portfolio.build_upstox_adapter")
+@patch("src.api.routers.portfolio.build_zerodha_adapter")
+def test_positions_by_broker_reports_both_real_brokers_independently(
+    mock_build_zerodha, mock_build_upstox
+):
+    from src.brokers.base import Position
+
+    zerodha = AsyncMock()
+    zerodha.get_positions.return_value = []
+    mock_build_zerodha.return_value = zerodha
+
+    upstox = AsyncMock()
+    upstox.get_positions.return_value = [
+        Position(symbol="RELIANCE", net_quantity=10, average_price=2500.0)
+    ]
+    mock_build_upstox.return_value = upstox
+
+    response = client.get("/api/v1/positions/by-broker")
+    assert response.status_code == 200
+    entries = {e["broker"]: e for e in response.json()}
+    assert entries["Zerodha"]["positions"] == []
+    assert entries["Upstox"]["positions"][0]["symbol"] == "RELIANCE"

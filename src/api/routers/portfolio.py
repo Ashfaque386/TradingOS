@@ -28,6 +28,7 @@ need it; the reads next to them stay open for consistency with the rest of this 
 """
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import httpx
@@ -39,7 +40,12 @@ from sqlalchemy.orm import Session
 from src.agents.nodes.portfolio_manager_agent import generate_allocation_recommendation
 from src.api.deps import require_role
 from src.brokers.base import BrokerAdapter, Margin, Position
-from src.brokers.factory import NoBrokerConfigured, build_broker
+from src.brokers.factory import (
+    NoBrokerConfigured,
+    build_broker,
+    build_upstox_adapter,
+    build_zerodha_adapter,
+)
 from src.core.audit import write_audit_entry
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
@@ -112,6 +118,83 @@ async def _get_margin(broker: BrokerAdapter) -> Margin:
         return await broker.get_margin()
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=f"Broker margin request failed: {exc}") from exc
+
+
+# REL-038: build_broker() above resolves ONE adapter (Zerodha-primary/Upstox-fallback via
+# BrokerCircuitBreaker, src/brokers/factory.py) -- Upstox is only ever queried if the Zerodha
+# call itself fails, so a real, separately-funded Upstox account never shows up here as long as
+# Zerodha's own call succeeds, even if it returns a genuinely empty account. The by-broker
+# endpoints below query each real broker independently by name (build_zerodha_adapter()/
+# build_upstox_adapter(), the same named-adapter builders src/api/routers/shadow_mode.py already
+# uses for the identical reason: needing *that specific* broker, not the resolved pairing) so
+# both real accounts are shown side by side, never silently shadowed by one another.
+def _broker_builders() -> dict[str, Callable[[], BrokerAdapter]]:
+    """A fresh dict per call, not a module-level constant -- referencing the module-global
+    `build_zerodha_adapter`/`build_upstox_adapter` names here means a test's `@patch(
+    "src.api.routers.portfolio.build_zerodha_adapter")` is honored on every call; a module-level
+    dict built once at import time would instead freeze in the original, unpatched function
+    objects, silently ignoring any later patch."""
+    return {"Zerodha": build_zerodha_adapter, "Upstox": build_upstox_adapter}
+
+
+class BrokerMarginEntry(BaseModel):
+    broker: str
+    configured: bool
+    margin: Margin | None
+    error: str | None
+
+
+class BrokerPositionsEntry(BaseModel):
+    broker: str
+    configured: bool
+    positions: list[Position]
+    error: str | None
+
+
+@router.get("/portfolio/margin/by-broker", response_model=list[BrokerMarginEntry])
+async def portfolio_margin_by_broker() -> list[BrokerMarginEntry]:
+    entries: list[BrokerMarginEntry] = []
+    for name, build in _broker_builders().items():
+        try:
+            broker = build()
+        except NoBrokerConfigured:
+            entries.append(
+                BrokerMarginEntry(broker=name, configured=False, margin=None, error=None)
+            )
+            continue
+        try:
+            margin = await broker.get_margin()
+        except httpx.HTTPStatusError as exc:
+            entries.append(
+                BrokerMarginEntry(broker=name, configured=True, margin=None, error=str(exc))
+            )
+            continue
+        entries.append(BrokerMarginEntry(broker=name, configured=True, margin=margin, error=None))
+    return entries
+
+
+@router.get("/positions/by-broker", response_model=list[BrokerPositionsEntry])
+async def positions_by_broker() -> list[BrokerPositionsEntry]:
+    entries: list[BrokerPositionsEntry] = []
+    for name, build in _broker_builders().items():
+        try:
+            broker = build()
+        except NoBrokerConfigured:
+            entries.append(
+                BrokerPositionsEntry(broker=name, configured=False, positions=[], error=None)
+            )
+            continue
+        try:
+            positions = await broker.get_positions()
+        except httpx.HTTPStatusError as exc:
+            entries.append(
+                BrokerPositionsEntry(broker=name, configured=True, positions=[], error=str(exc))
+            )
+            continue
+        entries.append(
+            BrokerPositionsEntry(broker=name, configured=True, positions=positions, error=None)
+        )
+    return entries
 
 
 def _latest_risk_limit(session: Session) -> RiskLimit | None:
