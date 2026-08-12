@@ -59,7 +59,6 @@ from src.engine.paper_trading.account_equity import compute_account_equity
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
-from src.models.account import Account
 from src.models.agent import AgentControlState, AgentLog, AgentRun
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
 from src.models.user import User
@@ -319,10 +318,13 @@ def _persist_strategy_progress(
     fabricated intermediate state."""
     if node_name == "strategy_generator" and "strategy_logic" in output:
         if not tracking.account_lookup_done:
-            tracking.account_id = session.scalars(select(Account.id)).first()
+            try:
+                tracking.account_id = get_paper_account(session).id
+            except RuntimeError:
+                tracking.account_id = None
             tracking.account_lookup_done = True
         if tracking.account_id is None:
-            return  # no Account seeded yet -- can't satisfy Strategy.account_id's NOT NULL FK
+            return  # no Paper Account seeded yet -- can't satisfy Strategy.account_id's NOT NULL FK
 
         logic = output["strategy_logic"]
         strategy = Strategy(
