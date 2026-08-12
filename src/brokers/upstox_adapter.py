@@ -167,11 +167,23 @@ class UpstoxAdapter(BrokerAdapter):
         return [self._parse_order(raw) for raw in response.json()["data"]]
 
     async def get_margin(self) -> Margin:
+        """REL-039: `segment=SEC` is accepted (no error), but a real production account's
+        response is NOT the flat `{available_margin, used_margin}` shape this originally assumed
+        -- confirmed live against a real production token (this had only ever been verified
+        against sandbox before, whose response happens to be flatter). The real shape nests
+        figures per segment: `{"commodity": {...}, "equity": {...}}`, each with its own
+        `available_margin`/`used_margin`. `segment=SEC` requests securities (equity), so that's
+        the segment used; `data` itself is kept as a fallback for any environment that does
+        return the flat shape (e.g. if sandbox's own response ever matches the original
+        assumption), rather than assuming every environment matches what production just showed."""
         response = await self._client.get("/user/get-funds-and-margin", params={"segment": "SEC"})
         response.raise_for_status()
         data = response.json()["data"]
+        segment = data.get("equity", data)
         return Margin(
-            available_margin=data["available_margin"], used_margin=data["used_margin"], raw=data
+            available_margin=segment["available_margin"],
+            used_margin=segment["used_margin"],
+            raw=data,
         )
 
     async def get_positions(self) -> list[Position]:

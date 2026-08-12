@@ -239,6 +239,38 @@ async def test_get_margin_maps_the_documented_fields():
 
 
 @pytest.mark.asyncio
+async def test_get_margin_reads_the_real_production_nested_by_segment_shape():
+    """REL-039: confirmed live against a real production Upstox account -- `segment=SEC` is
+    accepted, but the real response nests figures per segment (`commodity`/`equity`), not the
+    flat shape the previous test above (and the original implementation) assumed. `segment=SEC`
+    requests securities, so `equity` is the segment read."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": {
+                    "commodity": {
+                        "used_margin": 0.0,
+                        "available_margin": 0.0,
+                    },
+                    "equity": {
+                        "used_margin": 0.0,
+                        "available_margin": -353.99,
+                    },
+                },
+            },
+        )
+
+    adapter = _adapter_with_transport(handler)
+    margin = await adapter.get_margin()
+
+    assert margin.available_margin == -353.99
+    assert margin.used_margin == 0.0
+
+
+@pytest.mark.asyncio
 async def test_get_positions_maps_the_documented_fields():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
