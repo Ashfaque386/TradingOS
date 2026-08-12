@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { ShadowModePanel } from "@/components/paper-trading/shadow-mode-panel";
 import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
 import { PaperTradesTable } from "@/components/paper-trading/paper-trades-table";
+import { CapitalSummary } from "@/components/portfolio/capital-summary";
 
 /**
  * REL-013: the Paper Trading Desk -- the dashboard the backend has had real, tested APIs for
@@ -35,6 +36,11 @@ export default function PaperTradingPage() {
     queryFn: () => api.shadowModeStatus(),
     refetchInterval: 30_000,
   });
+  const summaryQuery = useQuery({
+    queryKey: ["account-summary"],
+    queryFn: () => api.accountSummary(),
+    refetchInterval: 15_000,
+  });
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
@@ -44,6 +50,17 @@ export default function PaperTradingPage() {
           Account →
         </Link>
       </p>
+
+      <Card eyebrow="Paper" title="Capital">
+        {summaryQuery.isLoading ? (
+          <div className="h-16 animate-pulse rounded-xl bg-bg" />
+        ) : (
+          <CapitalSummary
+            used={summaryQuery.data?.margin_blocked ?? 0}
+            available={(summaryQuery.data?.cash ?? 0) - (summaryQuery.data?.margin_blocked ?? 0)}
+          />
+        )}
+      </Card>
 
       <Card eyebrow="Rule 3 · Go-Live Precursor" title="Shadow Mode — Broker Validation Streak">
         <ShadowModePanel status={shadowQuery.data} />

@@ -13,6 +13,7 @@ import { RiskGauge } from "@/components/portfolio/risk-gauge";
 import { ExposureDonut } from "@/components/portfolio/exposure-donut";
 import { PositionsTable } from "@/components/portfolio/positions-table";
 import { MarginPanel } from "@/components/portfolio/margin-panel";
+import { CapitalSummary } from "@/components/portfolio/capital-summary";
 import { KillSwitchButton } from "@/components/portfolio/kill-switch-button";
 import { CandlestickChart } from "@/components/portfolio/candlestick-chart";
 import {
@@ -276,6 +277,17 @@ export default function PortfolioCommandCenter() {
               )}
             </Card>
           </div>
+
+          <Card eyebrow="Paper" title="Capital">
+            {summaryQuery.isLoading ? (
+              <div className="h-16 animate-pulse rounded-xl bg-bg" />
+            ) : (
+              <CapitalSummary
+                used={summary?.margin_blocked ?? 0}
+                available={(summary?.cash ?? 0) - (summary?.margin_blocked ?? 0)}
+              />
+            )}
+          </Card>
 
           <Card eyebrow="Open" title="Paper Positions">
             {paperPositionsQuery.isLoading ? (

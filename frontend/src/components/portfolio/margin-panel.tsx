@@ -34,6 +34,12 @@ export function MarginPanel({
   return (
     <div>
       <div className="flex items-baseline justify-between">
+        <span className="text-xs text-text-faint">Total Amount</span>
+        <span className="font-mono-tabular text-sm font-semibold text-text">
+          {formatCompactINR(total)}
+        </span>
+      </div>
+      <div className="mt-1.5 flex items-baseline justify-between">
         <span className="text-xs text-text-faint">Used</span>
         <span className="font-mono-tabular text-sm text-text">
           {formatCompactINR(margin.used_margin)}
@@ -46,8 +52,8 @@ export function MarginPanel({
         />
       </div>
       <div className="mt-2 flex items-baseline justify-between">
-        <span className="text-xs text-text-faint">Available</span>
-        <span className="font-mono-tabular text-sm text-text">
+        <span className="text-xs text-text-faint">Available to Trade</span>
+        <span className="font-mono-tabular text-sm font-semibold text-up">
           {formatCompactINR(margin.available_margin)}
         </span>
       </div>

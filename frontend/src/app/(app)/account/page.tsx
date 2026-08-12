@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { EquityCurveChart } from "@/components/account/equity-curve-chart";
 import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
+import { CapitalSummary } from "@/components/portfolio/capital-summary";
 
 /**
  * REL-034: the canonical "real, working ₹100,000 account" surface -- starting capital, cash,
@@ -97,6 +98,17 @@ export default function AccountPage() {
               </p>
             </div>
           </div>
+        )}
+      </Card>
+
+      <Card eyebrow="Real, Working Paper Account" title="Capital">
+        {summaryQuery.isLoading ? (
+          <div className="h-16 animate-pulse rounded-xl bg-bg" />
+        ) : (
+          <CapitalSummary
+            used={summary?.margin_blocked ?? 0}
+            available={(summary?.cash ?? 0) - (summary?.margin_blocked ?? 0)}
+          />
         )}
       </Card>
 
