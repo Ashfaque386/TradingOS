@@ -11,13 +11,18 @@ index-level OHLCV data (src/data/ingest/pipeline.py --source yfinance --symbols 
 `_compute_correlation` below converts it plus the candidate's own real backtest equity curve
 (`state.equity_curve`, already carried for the Optimization Agent's Monte Carlo re-sampling) into
 the two return series `correlation.check_correlation_constraint()` needs. One piece remains
-honestly open: there is still no historical portfolio-equity-curve table to derive "the existing
-live portfolio's own past returns" from (only current position snapshots) -- so this evaluates
-the candidate's correlation to Nifty 50 in isolation (`candidate_weight=1.0`, which algebraically
-zeroes out whatever `existing_portfolio_returns` is passed), not blended with a real existing
-book. `correlation_passed` stays `None` (honestly unavailable, not fabricated) whenever the
-candidate has no equity curve, the benchmark data has no overlapping dates, or too few overlapping
-points exist for a meaningful correlation.
+honestly open: this still evaluates the candidate's correlation to Nifty 50 in isolation
+(`candidate_weight=1.0`, which algebraically zeroes out whatever `existing_portfolio_returns` is
+passed), not blended with a real existing book. UPDATE 2026-08-14: this is no longer a missing-
+data-source gap -- REL-034 (2026-08-12) added a real, queryable historical portfolio-equity-curve
+table (`AccountEquitySnapshot` / `account_equity_snapshots`, DB-035, src/models/account.py,
+`snapshot_date`+`equity` columns, populated daily by
+src/engine/paper_trading/equity_snapshot.py::take_daily_snapshot()). `_compute_correlation`
+below simply hasn't been updated yet to query it and derive a real `existing_portfolio_returns`
+series from it -- the gap is now "not wired," not "no data exists." `correlation_passed` stays
+`None` (honestly unavailable, not fabricated) whenever the candidate has no equity curve, the
+benchmark data has no overlapping dates, or too few overlapping points exist for a meaningful
+correlation.
 
 REL-016 E16.3 (GLH-09) closed the naked-options gap for real: `StrategyLogic.option_legs`
 (populated by the Strategy Generator Agent for "F&O" strategies only, prompt v2/PMPT-029) now
@@ -100,7 +105,9 @@ def _compute_correlation(state: TradingOSGraphState) -> CorrelationCheckResult |
     # candidate_weight=1.0 evaluates the candidate strategy's own correlation to the benchmark in
     # isolation -- algebraically, this zeroes out whatever `existing_portfolio_returns` is passed
     # (see simulate_combined_portfolio_returns), so `aligned_candidate` is passed there too rather
-    # than a fabricated "existing portfolio" series this codebase doesn't have real data for yet.
+    # than a fabricated "existing portfolio" series. A real source for that series now exists
+    # (AccountEquitySnapshot / account_equity_snapshots, DB-035, REL-034) but querying it and
+    # blending it in here is still real, open work -- see module docstring's 2026-08-14 update.
     return check_correlation_constraint(
         existing_portfolio_returns=aligned_candidate,
         candidate_returns=aligned_candidate,
