@@ -47,13 +47,28 @@ def _real_nifty_closes() -> list[tuple[date, float]]:
     return list(zip(df["date"].to_list(), df["close"].to_list(), strict=True))
 
 
-def _state_with_equity_curve(equity_curve: list[EquityCurvePoint]) -> TradingOSGraphState:
+def _state_with_equity_curve(
+    equity_curve: list[EquityCurvePoint],
+    existing_portfolio_equity_curve: list[EquityCurvePoint] | None = None,
+) -> TradingOSGraphState:
     return TradingOSGraphState(
         thread_id="t1",
         strategy_logic=_STRATEGY,
         optimization_result=OptimizationResult(passed=True),
         equity_curve=equity_curve,
+        existing_portfolio_equity_curve=existing_portfolio_equity_curve or [],
     )
+
+
+def _uncorrelated_curve(closes: list[tuple[date, float]]) -> list[EquityCurvePoint]:
+    """The same fixed alternating +1%/-1% pattern the isolated-check PASS test below uses --
+    deliberately independent of the real index's own real day-to-day direction."""
+    equity = 100.0
+    curve: list[EquityCurvePoint] = []
+    for i, (d, _) in enumerate(closes):
+        equity *= 1.01 if i % 2 == 0 else 0.99
+        curve.append(EquityCurvePoint(date=d.isoformat(), equity=equity))
+    return curve
 
 
 def test_a_candidate_that_closely_tracks_real_nifty_50_fails_the_correlation_check():
@@ -91,3 +106,40 @@ def test_a_candidate_uncorrelated_with_real_nifty_50_passes_the_correlation_chec
 def test_correlation_is_honestly_none_when_the_candidate_has_no_equity_curve():
     result = _compute_correlation(_state_with_equity_curve([]))
     assert result is None
+
+
+def test_blending_a_real_uncorrelated_existing_book_lowers_the_candidates_correlation():
+    """REL-0XX: an index-tracking candidate (correlation > 0.85 in isolation, see the first test
+    above) blended at DEFAULT_CANDIDATE_PORTFOLIO_WEIGHT with a real, deliberately uncorrelated
+    existing-portfolio equity curve over the same real dates must show a real, lower combined
+    correlation than the isolated-only figure -- the blend is genuinely doing something, not a
+    no-op under a different name."""
+    closes = _real_nifty_closes()
+    equity_curve = [EquityCurvePoint(date=d.isoformat(), equity=close) for d, close in closes]
+    existing_curve = _uncorrelated_curve(closes)
+
+    isolated = _compute_correlation(_state_with_equity_curve(equity_curve))
+    blended = _compute_correlation(_state_with_equity_curve(equity_curve, existing_curve))
+
+    assert isolated is not None
+    assert blended is not None
+    assert blended.correlation < isolated.correlation
+
+
+def test_correlation_falls_back_to_isolated_when_existing_curve_has_too_few_overlapping_days():
+    """A real existing_portfolio_equity_curve is present, but only 3 real dates -- well under
+    _MIN_OVERLAPPING_DAYS once pct_change() drops the first observation. Must fall back to the
+    exact isolated-only figure, not fabricate a blend from too few points."""
+    closes = _real_nifty_closes()
+    equity_curve = [EquityCurvePoint(date=d.isoformat(), equity=close) for d, close in closes]
+    sparse_existing = _uncorrelated_curve(closes[:3])
+
+    isolated = _compute_correlation(_state_with_equity_curve(equity_curve))
+    with_sparse_existing = _compute_correlation(
+        _state_with_equity_curve(equity_curve, sparse_existing)
+    )
+
+    assert isolated is not None
+    assert with_sparse_existing is not None
+    assert with_sparse_existing.correlation == isolated.correlation
+    assert with_sparse_existing.passed == isolated.passed

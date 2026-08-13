@@ -10,19 +10,25 @@ REL-016 E16.2 (GLH-08) closed the correlation gap: `^NSEI` (Nifty 50) is now rea
 index-level OHLCV data (src/data/ingest/pipeline.py --source yfinance --symbols ^NSEI), and
 `_compute_correlation` below converts it plus the candidate's own real backtest equity curve
 (`state.equity_curve`, already carried for the Optimization Agent's Monte Carlo re-sampling) into
-the two return series `correlation.check_correlation_constraint()` needs. One piece remains
-honestly open: this still evaluates the candidate's correlation to Nifty 50 in isolation
-(`candidate_weight=1.0`, which algebraically zeroes out whatever `existing_portfolio_returns` is
-passed), not blended with a real existing book. UPDATE 2026-08-14: this is no longer a missing-
-data-source gap -- REL-034 (2026-08-12) added a real, queryable historical portfolio-equity-curve
-table (`AccountEquitySnapshot` / `account_equity_snapshots`, DB-035, src/models/account.py,
-`snapshot_date`+`equity` columns, populated daily by
-src/engine/paper_trading/equity_snapshot.py::take_daily_snapshot()). `_compute_correlation`
-below simply hasn't been updated yet to query it and derive a real `existing_portfolio_returns`
-series from it -- the gap is now "not wired," not "no data exists." `correlation_passed` stays
-`None` (honestly unavailable, not fabricated) whenever the candidate has no equity curve, the
-benchmark data has no overlapping dates, or too few overlapping points exist for a meaningful
-correlation.
+the two return series `correlation.check_correlation_constraint()` needs. UPDATE 2026-08-14: the
+candidate is no longer always evaluated in isolation. `state.existing_portfolio_equity_curve`
+(the seeded Paper account's real daily equity history -- `AccountEquitySnapshot` /
+`account_equity_snapshots`, DB-035, populated by
+src/engine/paper_trading/equity_snapshot.py::take_daily_snapshot(), injected by
+src/api/routers/agents.py::_fetch_existing_portfolio_equity_curve()) is now blended in via
+`DEFAULT_CANDIDATE_PORTFOLIO_WEIGHT` (0.20) whenever at least `_MIN_OVERLAPPING_DAYS` real dates
+overlap across the candidate, the existing book, and the benchmark. That weight is a fixed policy
+constant, not a derived dollar-weighted allocation -- `_compute_position_sizing` below always
+sizes a single symbol, so its own inverse-volatility `weight` is trivially always 1.0 and cannot
+serve this purpose. The blend is a standardized stress-test assumption ("if this candidate
+represented a meaningful ~20% of the book, would the combined portfolio breach the correlation
+limit?"), matching Phase_6_Trading_Engine_Design.md's own framing of this check as a guardrail,
+not a precise simulation. Whenever there isn't enough real overlapping account-equity history yet
+(a young Paper account, or a candidate whose backtest window doesn't reach into real recent
+dates), this falls back to the pre-REL-034-era isolated-only check (`candidate_weight=1.0`)
+rather than fabricating a blend from too few points. `correlation_passed` stays `None` (honestly
+unavailable, not fabricated) whenever the candidate has no equity curve, the benchmark data has
+no overlapping dates, or too few overlapping points exist for even the isolated-only fallback.
 
 REL-016 E16.3 (GLH-09) closed the naked-options gap for real: `StrategyLogic.option_legs`
 (populated by the Strategy Generator Agent for "F&O" strategies only, prompt v2/PMPT-029) now
@@ -65,6 +71,10 @@ TASK_PROMPT_SLUG = "risk_manager_agent_task"
 NOT_COMPUTED_NOTE = "Not checked this pass -- no real data source available (see module docstring)."
 BENCHMARK_SYMBOL = "^NSEI"
 _MIN_OVERLAPPING_DAYS = 5  # below this, a correlation figure is statistical noise, not a signal
+# Fixed stress-test assumption for the correlation blend (module docstring has the full
+# rationale) -- NOT derived from _compute_position_sizing's own weight, which is trivially always
+# 1.0 for a single-symbol allocation and cannot represent "this candidate's share of the book."
+DEFAULT_CANDIDATE_PORTFOLIO_WEIGHT = 0.20
 logger = structlog.get_logger(__name__)
 
 
@@ -98,6 +108,29 @@ def _compute_correlation(state: TradingOSGraphState) -> CorrelationCheckResult |
     if benchmark_returns is None:
         return None
 
+    if state.existing_portfolio_equity_curve:
+        existing_returns = _returns_from_equity_curve(state.existing_portfolio_equity_curve)
+        # A DataFrame + dropna() 3-way inner join (rather than chained .align() calls) guarantees
+        # all three columns share an identical index before simulate_combined_portfolio_returns'
+        # arithmetic runs on them -- avoids silently misaligned NaNs from a pairwise align.
+        frame = pd.DataFrame(
+            {
+                "candidate": candidate_returns,
+                "existing": existing_returns,
+                "benchmark": benchmark_returns,
+            }
+        ).dropna()
+        if len(frame) >= _MIN_OVERLAPPING_DAYS:
+            return check_correlation_constraint(
+                existing_portfolio_returns=frame["existing"],
+                candidate_returns=frame["candidate"],
+                benchmark_returns=frame["benchmark"],
+                candidate_weight=DEFAULT_CANDIDATE_PORTFOLIO_WEIGHT,
+            )
+        # Too few real overlapping days across all three series (a young Paper account, or a
+        # backtest window that doesn't reach into real recent history) -- fall through to the
+        # isolated-only check below rather than fabricating a blend from too few points.
+
     aligned_candidate, aligned_benchmark = candidate_returns.align(benchmark_returns, join="inner")
     if len(aligned_candidate) < _MIN_OVERLAPPING_DAYS:
         return None
@@ -105,9 +138,8 @@ def _compute_correlation(state: TradingOSGraphState) -> CorrelationCheckResult |
     # candidate_weight=1.0 evaluates the candidate strategy's own correlation to the benchmark in
     # isolation -- algebraically, this zeroes out whatever `existing_portfolio_returns` is passed
     # (see simulate_combined_portfolio_returns), so `aligned_candidate` is passed there too rather
-    # than a fabricated "existing portfolio" series. A real source for that series now exists
-    # (AccountEquitySnapshot / account_equity_snapshots, DB-035, REL-034) but querying it and
-    # blending it in here is still real, open work -- see module docstring's 2026-08-14 update.
+    # than a fabricated "existing portfolio" series. This is the fallback path: no real existing-
+    # portfolio history was available above, not the general case anymore (see module docstring).
     return check_correlation_constraint(
         existing_portfolio_returns=aligned_candidate,
         candidate_returns=aligned_candidate,

@@ -247,6 +247,12 @@ class TradingOSGraphState(StrictModel):
     # the long-documented gap risk_manager.py's own module docstring names: position sizing
     # "still needs real account capital, which isn't threaded into TradingOSGraphState anywhere."
     account_capital: float | None = None
+    # The seeded Paper Trading Account's real daily equity history (AccountEquitySnapshot /
+    # account_equity_snapshots, DB-035, REL-034), injected alongside account_capital by
+    # src/api/routers/agents.py -- used only by risk_manager.py's correlation blend to derive the
+    # existing book's own real returns. Empty (not fabricated) whenever no seeded Paper account
+    # exists yet, or it has no snapshot rows (a brand-new account, or before REL-034 shipped).
+    existing_portfolio_equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
 
     # Retry/escalation counters enforcing the business rules from Phase_9/Phase_4:
     code_validation_retry_count: int = 0  # max 3, Code_Validation_Loop

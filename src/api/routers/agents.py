@@ -50,6 +50,7 @@ from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT
 from src.agents.nodes.suggestion_reviewer import review_suggestion
 from src.agents.prompt_registry import PromptNotFoundError
 from src.agents.state import (
+    EquityCurvePoint,
     EvaluationVerdict,
     MarketContext,
     PythonCode,
@@ -68,6 +69,7 @@ from src.engine.paper_trading.account_equity import compute_account_equity
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
+from src.models.account import AccountEquitySnapshot
 from src.models.agent import AgentControlState, AgentLog, AgentRun
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
@@ -564,13 +566,42 @@ def _fetch_account_capital() -> float | None:
         return None
 
 
+def _fetch_existing_portfolio_equity_curve() -> list[EquityCurvePoint]:
+    """The seeded Paper Trading Account's real daily equity history (AccountEquitySnapshot /
+    account_equity_snapshots, DB-035, REL-034), for `risk_manager_node`'s correlation blend --
+    empty (not fabricated) whenever no Paper account has been seeded yet or it has no snapshot
+    rows. A pure DB read, unlike `_fetch_account_capital()` above -- no broker call needed."""
+    try:
+        with get_session() as session:
+            account = get_paper_account(session)
+            rows = (
+                session.execute(
+                    select(AccountEquitySnapshot)
+                    .where(AccountEquitySnapshot.account_id == account.id)
+                    .order_by(AccountEquitySnapshot.snapshot_date)
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                EquityCurvePoint(date=row.snapshot_date.isoformat(), equity=float(row.equity))
+                for row in rows
+            ]
+    except RuntimeError:
+        return []
+
+
 def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
     """Runs in a FastAPI BackgroundTasks worker thread (dispatched after the trigger endpoint
     already returned). Synchronous end-to-end because every graph node (src/agents/nodes/*.py)
     and `graph.stream()` itself are synchronous."""
     redis_client = get_redis_client()
     graph = build_graph()
-    state = TradingOSGraphState(thread_id=thread_id, account_capital=_fetch_account_capital())
+    state = TradingOSGraphState(
+        thread_id=thread_id,
+        account_capital=_fetch_account_capital(),
+        existing_portfolio_equity_curve=_fetch_existing_portfolio_equity_curve(),
+    )
     checkpoint_wall = datetime.now(UTC)
     tracking = _StrategyTracking()
 
@@ -1010,6 +1041,7 @@ def run_suggestion_regeneration(*, suggestion_id: uuid.UUID) -> None:
         research_directive=reconstructed_directive,
         market_context=reconstructed_context,
         account_capital=_fetch_account_capital(),
+        existing_portfolio_equity_curve=_fetch_existing_portfolio_equity_curve(),
         # BUG-012 (see above): seeds python_code_generator_node's own `version_no + 1` derivation
         # with the real latest version already on this strategy, not a fabricated code body --
         # `code=""` is never read for this, only `.version_no` is.
