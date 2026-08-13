@@ -182,7 +182,7 @@ function NavLink({
       href={href}
       onClick={onClick}
       className={cn(
-        "relative px-3 py-2.5 text-xs font-medium transition-colors",
+        "relative shrink-0 whitespace-nowrap px-2.5 py-2.5 text-xs font-medium transition-colors lg:px-3",
         active ? "text-text" : "text-text-faint hover:text-text-dim",
       )}
     >
@@ -197,6 +197,13 @@ function NavLink({
   );
 }
 
+/** A hairline vertical rule between icon-cluster groups -- groups related controls (scope
+ * switcher / search+alerts / clock+profile) visually without a heavier boxed-section look.
+ * Hidden below `sm` alongside the controls it separates so it never strands itself. */
+function Divider() {
+  return <span aria-hidden="true" className="hidden h-4 w-px shrink-0 bg-card-edge sm:block" />;
+}
+
 export function TopNav() {
   const { user } = useAuth();
   const links = visibleLinks(user?.role);
@@ -204,41 +211,54 @@ export function TopNav() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-card-edge bg-panel">
-      <div className="mx-auto grid w-full max-w-[1440px] grid-cols-[auto_1fr_auto] items-center gap-4 px-6 py-3 sm:px-8 md:grid-cols-[1fr_auto_1fr]">
-        <div className="flex min-w-0 flex-col gap-1 justify-self-start">
-          <div className="flex items-center gap-2">
+      {/* Row 1: identity + page context (left), global controls (right) -- everything here is
+       * either constant (brand) or state, never the long, ever-growing nav link list, so this
+       * row's own width budget stays predictable regardless of how many routes exist. */}
+      <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-3 px-4 py-2.5 sm:gap-4 sm:px-6 lg:px-8">
+        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+          <button
+            onClick={() => setMobileOpen((v) => !v)}
+            className="rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text-dim md:hidden"
+            aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={mobileOpen}
+          >
+            {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          </button>
+          <div className="flex shrink-0 items-center gap-2">
             <BrandMark />
             <h1 className="font-heading text-sm font-bold tracking-[0.04em] text-brand-gradient">
               TRADINGOS
             </h1>
-            <button
-              onClick={() => setMobileOpen((v) => !v)}
-              className="ml-1 rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text-dim md:hidden"
-              aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
-              aria-expanded={mobileOpen}
-            >
-              {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-            </button>
           </div>
+          <span aria-hidden="true" className="hidden h-4 w-px shrink-0 bg-card-edge md:block" />
           <ConnectionStatus />
         </div>
 
-        <nav className="hidden items-center gap-1 justify-self-center md:flex">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          <AccountScopeSwitcher className="hidden sm:inline-flex" />
+          <Divider />
+          <CommandPaletteTrigger />
+          <NotificationCenter />
+          <Divider />
+          <Clock />
+          <ProfileMenu />
+        </div>
+      </div>
+
+      {/* Row 2: the nav strip proper -- its own full-width row so it never competes with row 1's
+       * controls for space. Renders in full at >= 768px (md) -- covering tablet, Cypress's
+       * 1000x660 default, and desktop -- so every existing e2e assertion that looks for a nav
+       * link directly (no menu-opening step first, see rbac_gating.cy.ts/audit_view.cy.ts) keeps
+       * working. `overflow-x-auto` is a safety net for an unusually narrow md viewport or a future
+       * 11th link, not the expected case -- real Cypress commands auto-scroll a target into view
+       * regardless, so it doesn't put those assertions at risk. */}
+      <nav className="no-scrollbar hidden items-center gap-0.5 overflow-x-auto border-t border-card-edge/60 px-2 md:flex lg:px-4">
+        <div className="mx-auto flex w-full max-w-[1440px] items-center gap-0.5">
           {links.map((link) => (
             <NavLink key={link.href} href={link.href} label={link.label} />
           ))}
-        </nav>
-
-        <div className="flex items-center gap-2 justify-self-end">
-          <AccountScopeSwitcher className="hidden sm:inline-flex" />
-          <CommandPaletteTrigger />
-          <NotificationCenter />
-          <div className="flex items-center gap-4 pl-1">
-            <ProfileMenu />
-            <Clock />
-          </div>
         </div>
-      </div>
+      </nav>
 
       <AnimatePresence>
         {mobileOpen && (

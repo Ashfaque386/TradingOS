@@ -234,6 +234,18 @@ body {
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* TopNav's nav strip (components/layout/top-nav.tsx): overflow-x-auto is a rare-viewport safety
+ * net, not the expected interaction -- a visible scrollbar there would look like a rendering
+ * error on a thin single-purpose row. Cross-browser: Firefox/IE via the property, WebKit via the
+ * pseudo-element (::-webkit-scrollbar can't be conditioned by the property alone). */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Glassmorphism panel, per §1.1. */
 .glass-panel {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
