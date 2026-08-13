@@ -240,8 +240,8 @@ export function TopNav() {
           <CommandPaletteTrigger />
           <NotificationCenter />
           <Divider />
-          <Clock />
           <ProfileMenu />
+          <Clock />
         </div>
       </div>
 
@@ -252,8 +252,8 @@ export function TopNav() {
        * working. `overflow-x-auto` is a safety net for an unusually narrow md viewport or a future
        * 11th link, not the expected case -- real Cypress commands auto-scroll a target into view
        * regardless, so it doesn't put those assertions at risk. */}
-      <nav className="no-scrollbar hidden items-center gap-0.5 overflow-x-auto border-t border-card-edge/60 px-2 md:flex lg:px-4">
-        <div className="mx-auto flex w-full max-w-[1440px] items-center gap-0.5">
+      <nav className="no-scrollbar hidden items-center justify-center gap-0.5 overflow-x-auto border-t border-card-edge/60 px-2 md:flex lg:px-4">
+        <div className="mx-auto flex max-w-[1440px] items-center gap-0.5">
           {links.map((link) => (
             <NavLink key={link.href} href={link.href} label={link.label} />
           ))}
