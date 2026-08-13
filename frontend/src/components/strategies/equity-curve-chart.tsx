@@ -3,7 +3,26 @@
 import ReactECharts from "echarts-for-react";
 import { useThemeStore } from "@/lib/theme-store";
 import { getChartColors } from "@/lib/chart-theme";
-import type { EquityCurvePoint, TradeSummary } from "@/lib/api";
+import type { EquityCurvePoint, OhlcvBar, TradeSummary } from "@/lib/api";
+
+/** REL-044/046: moved here (was a module-local, unexported helper inside
+ * app/(app)/backtests/page.tsx) so both that page and review-panel.tsx can share one
+ * implementation of "index a real benchmark series to 100 at the strategy's own start date"
+ * instead of duplicating it. */
+export function buildBenchmarkOverlay(
+  points: { date: string }[],
+  benchmarkBars: OhlcvBar[],
+): (number | null)[] | undefined {
+  if (points.length === 0 || benchmarkBars.length === 0) return undefined;
+  const byDate = new Map(benchmarkBars.map((b) => [b.date, b.close]));
+  const firstMatch = points.find((p) => byDate.has(p.date));
+  if (!firstMatch) return undefined;
+  const base = byDate.get(firstMatch.date)!;
+  return points.map((p) => {
+    const close = byDate.get(p.date);
+    return close !== undefined ? (close / base) * 100 : null;
+  });
+}
 
 /** Equity curve vs Nifty 50. REL-017 E17.3: `benchmark` is real ^NSEI OHLCV (ingested by
  * REL-016's E16.2, src/data/ingest/pipeline.py --source yfinance --symbols ^NSEI), filtered by

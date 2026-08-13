@@ -104,6 +104,27 @@ class StrategySummary(BaseModel):
     # of the user discovering "this one has none" only after selecting it and seeing an empty
     # detail view.
     backtest_count: int = 0
+    # REL-044: real, previously-unserialized columns. max_drawdown_limit has always existed
+    # (Strategy's own per-strategy risk parameter, set at creation); the rest are the Strategy
+    # Generator Agent's StrategyLogic fields (src/agents/state.py) beyond hypothesis -- computed
+    # by the LLM on every run since Phase 2 but only ever partially copied onto this row until
+    # this release (src/api/routers/agents.py::_persist_strategy_progress). `None` for a row
+    # created before this migration, honestly, not backfilled. research_context/market_context
+    # are the CEO/Market Analyst Agents' own real ResearchDirective/MarketContext that led to
+    # this strategy being proposed -- same honest-null convention.
+    max_drawdown_limit: float | None = None
+    entry_conditions: str | None = None
+    exit_conditions: str | None = None
+    stop_loss: str | None = None
+    take_profit: str | None = None
+    position_sizing: str | None = None
+    confidence_score: float | None = None
+    research_context: dict[str, object] | None = None
+    market_context: dict[str, object] | None = None
+    # REL-044: the current version's own validation_status, so the Kanban card can show a real
+    # status indicator without a second round trip -- StrategySummary previously only carried
+    # current_version_id (a bare UUID), never what that version's own state actually is.
+    current_version_validation_status: str | None = None
 
 
 class StrategyVersionSummary(BaseModel):
@@ -111,6 +132,13 @@ class StrategyVersionSummary(BaseModel):
     version_no: int
     validation_status: str
     validator_feedback: str | None
+    # REL-044: real columns on StrategyVersion (option_legs/option_expiry real since REL-035,
+    # option_rationale new this release) -- persisted but never serialized by this endpoint
+    # until now. All None for an Equity strategy, or an F&O one whose options grounding
+    # degraded (see src/agents/nodes/options_strategy_agent.py's own module docstring).
+    option_legs: list[dict[str, float | str | int]] | None = None
+    option_expiry: date | None = None
+    option_rationale: str | None = None
 
 
 class BacktestSummary(BaseModel):
@@ -158,7 +186,12 @@ class StrategyDetail(StrategySummary):
     backtests: list[BacktestSummary]
 
 
-def _to_summary(strategy: Strategy, *, backtest_count: int = 0) -> StrategySummary:
+def _to_summary(
+    strategy: Strategy,
+    *,
+    backtest_count: int = 0,
+    current_version_validation_status: str | None = None,
+) -> StrategySummary:
     return StrategySummary(
         id=strategy.id,
         name=strategy.name,
@@ -171,6 +204,16 @@ def _to_summary(strategy: Strategy, *, backtest_count: int = 0) -> StrategySumma
         created_at=strategy.created_at,
         updated_at=strategy.updated_at,
         backtest_count=backtest_count,
+        max_drawdown_limit=strategy.max_drawdown_limit,
+        entry_conditions=strategy.entry_conditions,
+        exit_conditions=strategy.exit_conditions,
+        stop_loss=strategy.stop_loss,
+        take_profit=strategy.take_profit,
+        position_sizing=strategy.position_sizing,
+        confidence_score=strategy.confidence_score,
+        research_context=strategy.research_context,
+        market_context=strategy.market_context,
+        current_version_validation_status=current_version_validation_status,
     )
 
 
@@ -217,7 +260,24 @@ def list_strategies() -> list[StrategySummary]:
                 .group_by(StrategyVersion.strategy_id)
             ).all()  # type: ignore[arg-type]
         )
-        return [_to_summary(s, backtest_count=counts.get(s.id, 0)) for s in strategies]
+        # REL-044: current version's own validation_status, joined via Strategy.current_version_id
+        # rather than StrategyVersion.strategy_id -- a strategy can have several versions (each
+        # retry/regeneration creates one), only the current one's status belongs on the Kanban card.
+        version_statuses: dict[uuid.UUID, str] = dict(
+            session.execute(
+                select(Strategy.id, StrategyVersion.validation_status).join(
+                    StrategyVersion, StrategyVersion.id == Strategy.current_version_id
+                )
+            ).all()  # type: ignore[arg-type]
+        )
+        return [
+            _to_summary(
+                s,
+                backtest_count=counts.get(s.id, 0),
+                current_version_validation_status=version_statuses.get(s.id),
+            )
+            for s in strategies
+        ]
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetail)
@@ -247,14 +307,24 @@ def get_strategy(strategy_id: uuid.UUID) -> StrategyDetail:
             else []
         )
 
+        current_version = next((v for v in versions if v.id == strategy.current_version_id), None)
         return StrategyDetail(
-            **_to_summary(strategy, backtest_count=len(backtests)).model_dump(),
+            **_to_summary(
+                strategy,
+                backtest_count=len(backtests),
+                current_version_validation_status=(
+                    current_version.validation_status if current_version else None
+                ),
+            ).model_dump(),
             versions=[
                 StrategyVersionSummary(
                     id=v.id,
                     version_no=v.version_no,
                     validation_status=v.validation_status,
                     validator_feedback=v.validator_feedback,
+                    option_legs=v.option_legs,
+                    option_expiry=v.option_expiry,
+                    option_rationale=v.option_rationale,
                 )
                 for v in versions
             ],

@@ -9,10 +9,18 @@ import { useBacktestJob } from "@/hooks/useBacktestJob";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Gated } from "@/components/ui/gated";
+import { VerdictPanel } from "@/components/backtests/verdict-panel";
+import { FullMetricGrid } from "@/components/backtests/metric-grid";
 import { CodeDiff } from "./code-diff";
-import { EquityCurveChart } from "./equity-curve-chart";
+import { EquityCurveChart, buildBenchmarkOverlay } from "./equity-curve-chart";
+import { DrawdownChart } from "./drawdown-chart";
 import { GoLiveGatePanel } from "./go-live-gate-panel";
+import { OptionLegsPanel } from "./option-legs-panel";
+import { ResearchContextPanel } from "./research-context-panel";
+import { StrategyLogicPanel } from "./strategy-logic-panel";
 import { VALIDATION_COLOR } from "./strategy-card";
+
+const BENCHMARK_SYMBOL = "^NSEI";
 
 export function ReviewPanel({ strategyId }: { strategyId: string }) {
   const [jobId, setJobId] = useState<string | null>(null);
@@ -60,11 +68,23 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
     queryFn: () => api.equityCurve(effectiveBacktestId!),
     enabled: !!effectiveBacktestId && !!selectedBacktest?.has_equity_curve,
   });
+  const tradesQuery = useQuery({
+    queryKey: ["backtest-trades", effectiveBacktestId],
+    queryFn: () => api.backtestTrades(effectiveBacktestId!),
+    enabled: !!effectiveBacktestId,
+  });
+  const benchmarkQuery = useQuery({
+    queryKey: ["ohlcv", BENCHMARK_SYMBOL],
+    queryFn: () => api.ohlcv(BENCHMARK_SYMBOL),
+  });
 
   if (!detailQuery.data) {
     return <div className="h-64 animate-pulse rounded-2xl bg-bg" />;
   }
   const strategy = detailQuery.data;
+  const currentVersion = strategy.versions.find((v) => v.id === strategy.current_version_id) ?? null;
+  const equityCurvePoints = equityCurveQuery.data ?? [];
+  const benchmarkOverlay = buildBenchmarkOverlay(equityCurvePoints, benchmarkQuery.data ?? []);
 
   return (
     <div className="flex flex-col gap-4">
@@ -75,12 +95,25 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
         <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-text-faint">
           <span className="rounded-full bg-bg px-2 py-0.5">{strategy.asset_class}</span>
           <span className="rounded-full bg-bg px-2 py-0.5">{strategy.style}</span>
+          {strategy.max_drawdown_limit !== null && (
+            <span className="rounded-full bg-bg px-2 py-0.5">
+              Max DD limit {strategy.max_drawdown_limit.toFixed(1)}%
+            </span>
+          )}
           {strategy.universe?.map((sym) => (
             <span key={sym} className="rounded-full bg-brand-via/10 px-2 py-0.5 text-brand-via">
               {sym}
             </span>
           ))}
         </div>
+      </Card>
+
+      <Card eyebrow="AI Pipeline" title="Strategy Logic">
+        <StrategyLogicPanel strategy={strategy} />
+      </Card>
+
+      <Card eyebrow="AI Pipeline" title="Why This Strategy Was Proposed">
+        <ResearchContextPanel strategy={strategy} />
       </Card>
 
       <Card eyebrow="Code Review" title="Version Diff">
@@ -95,6 +128,22 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
                 </span>
               ))}
             </div>
+            {strategy.versions.some((v) => v.validator_feedback) && (
+              <div className="mb-3 flex flex-col gap-1.5">
+                {strategy.versions
+                  .filter((v) => v.validator_feedback)
+                  .map((v) => (
+                    <div key={v.id} className="rounded-lg bg-bg p-2.5">
+                      <div className="text-[9px] font-medium uppercase tracking-wider text-text-faint">
+                        v{v.version_no} · Validator Feedback
+                      </div>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-text-dim">
+                        {v.validator_feedback}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+            )}
             <div className="mb-3 flex items-center gap-2 text-[11px] text-text-faint">
               <select
                 className="rounded-md border border-card-edge bg-bg px-2 py-1 text-text-dim"
@@ -134,6 +183,12 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
           </>
         )}
       </Card>
+
+      {strategy.asset_class === "F&O" && currentVersion && (
+        <Card eyebrow="AI Pipeline" title="Option Legs">
+          <OptionLegsPanel version={currentVersion} />
+        </Card>
+      )}
 
       <Card
         eyebrow="Sandbox"
@@ -183,44 +238,24 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
             </div>
 
             {selectedBacktest && (
-              <>
-                <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <Metric label="Sharpe" value={selectedBacktest.sharpe_ratio?.toFixed(2) ?? "—"} />
-                  <Metric
-                    label="Max DD"
-                    value={
-                      selectedBacktest.max_drawdown !== null
-                        ? `${(selectedBacktest.max_drawdown * 100).toFixed(1)}%`
-                        : "—"
-                    }
+              <div className="flex flex-col gap-4">
+                <VerdictPanel backtest={selectedBacktest} />
+                <FullMetricGrid backtest={selectedBacktest} />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <EquityCurveChart
+                    points={equityCurvePoints}
+                    benchmark={benchmarkOverlay}
+                    trades={tradesQuery.data}
                   />
-                  <Metric
-                    label="Win Rate"
-                    value={
-                      selectedBacktest.win_rate !== null
-                        ? `${(selectedBacktest.win_rate * 100).toFixed(0)}%`
-                        : "—"
-                    }
-                  />
-                  <Metric label="Trades" value={selectedBacktest.total_trades?.toString() ?? "—"} />
+                  <DrawdownChart points={equityCurvePoints} />
                 </div>
-                <EquityCurveChart points={equityCurveQuery.data ?? []} />
-              </>
+              </div>
             )}
           </>
         )}
       </Card>
 
       <GoLiveGatePanel strategyId={strategyId} />
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-bg p-2 text-center">
-      <div className="font-mono-tabular text-sm font-semibold text-text">{value}</div>
-      <div className="text-[9px] uppercase tracking-wider text-text-faint">{label}</div>
     </div>
   );
 }

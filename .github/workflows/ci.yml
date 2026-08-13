@@ -190,6 +190,9 @@ jobs:
       - name: Seed the real admin user Cypress logs in as
         run: docker compose exec -T app python scripts/seed_admin_user.py
 
+      - name: Seed the real Strategies-page fixture strategies (REL-044/045/046)
+        run: docker compose exec -T app python scripts/seed_strategies_cypress_fixtures.py
+
       - name: Wait for the frontend to serve a real 200
         run: |
           until curl -sf http://localhost:3000/login > /dev/null; do sleep 2; done

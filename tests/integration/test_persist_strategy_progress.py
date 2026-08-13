@@ -13,14 +13,21 @@ the real paper account still wins.
 """
 
 import uuid
+from datetime import date
 from decimal import Decimal
 
-from src.agents.state import StrategyLogic
+from src.agents.state import (
+    MarketContext,
+    PythonCode,
+    ResearchDirective,
+    StrategyLogic,
+    StrategyOptionLeg,
+)
 from src.api.routers.agents import _persist_strategy_progress, _StrategyTracking
 from src.core.db import get_session
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.models.account import Account
-from src.models.strategy import Strategy
+from src.models.strategy import Strategy, StrategyVersion
 from src.models.user import User
 
 _STRATEGY_LOGIC = StrategyLogic(
@@ -105,3 +112,166 @@ def test_strategy_generator_persistence_picks_the_real_paper_account_not_an_arbi
             assert strategy_row.account_id == real_paper_account_id
     finally:
         _cleanup(stray_user_id, stray_account_id, strategy_id)
+
+
+def test_ceo_and_market_analyst_context_is_captured_onto_the_strategy_row_rel_044():
+    """REL-044: ceo_agent/market_analyst both fire before strategy_generator creates the
+    Strategy row -- this drives the real 3-node sequence (in the same order the real graph
+    fires them) through _persist_strategy_progress and confirms their real output lands on the
+    new research_context/market_context columns, and that StrategyLogic's own
+    entry/exit/stop/take-profit/position-sizing/confidence fields -- computed by the LLM on
+    every run but previously discarded -- are now persisted too."""
+    directive = ResearchDirective(
+        market_regime="Risk-On",
+        priority_sectors=["IT", "Banking"],
+        strategy_themes=["Momentum breakout"],
+        risk_tolerance="Medium",
+        participating_agents=["MarketAnalystAgent", "StrategyGeneratorAgent"],
+        expected_outcomes="Identify 2-3 high-conviction momentum setups",
+    )
+    context = MarketContext(
+        market_regime="Risk-On",
+        sector_rankings=["IT", "Banking", "Pharma"],
+        volatility_assessment="India VIX at 13.2, below the 1-year average",
+        macro_outlook="RBI on hold, no major event risk this week",
+        confidence_score=0.72,
+        insights=["FII flows turned net positive for the third consecutive session"],
+    )
+
+    strategy_id = None
+    try:
+        with get_session() as session:
+            tracking = _StrategyTracking()
+            run_id = uuid.uuid4()
+
+            _persist_strategy_progress(
+                session,
+                node_name="ceo_agent",
+                output={"research_directive": directive},
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            _persist_strategy_progress(
+                session,
+                node_name="market_analyst",
+                output={"market_context": context},
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            assert tracking.strategy_id is None  # neither node creates a Strategy row itself
+
+            _persist_strategy_progress(
+                session,
+                node_name="strategy_generator",
+                output={"strategy_logic": _STRATEGY_LOGIC},
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            session.commit()
+
+            assert tracking.strategy_id is not None
+            strategy_id = tracking.strategy_id
+
+            strategy_row = session.get(Strategy, strategy_id)
+            assert strategy_row is not None
+            assert strategy_row.entry_conditions == _STRATEGY_LOGIC.entry_conditions
+            assert strategy_row.exit_conditions == _STRATEGY_LOGIC.exit_conditions
+            assert strategy_row.stop_loss == _STRATEGY_LOGIC.stop_loss
+            assert strategy_row.take_profit == _STRATEGY_LOGIC.take_profit
+            assert strategy_row.position_sizing == _STRATEGY_LOGIC.position_sizing
+            assert strategy_row.confidence_score is not None
+            assert float(strategy_row.confidence_score) == _STRATEGY_LOGIC.confidence_score
+            assert strategy_row.research_context is not None
+            assert strategy_row.research_context["market_regime"] == "Risk-On"
+            assert strategy_row.research_context["priority_sectors"] == ["IT", "Banking"]
+            assert strategy_row.market_context is not None
+            assert strategy_row.market_context["macro_outlook"] == context.macro_outlook
+            assert strategy_row.market_context["confidence_score"] == 0.72
+    finally:
+        if strategy_id is not None:
+            with get_session() as session:
+                session.query(Strategy).filter(Strategy.id == strategy_id).delete()
+                session.commit()
+
+
+def test_options_strategy_agent_rationale_is_persisted_onto_the_strategy_version_rel_044():
+    """REL-044: the Options Strategy Agent's real rationale for its declared legs -- computed on
+    every F&O run (OptionsStrategyProposal.rationale) but discarded before REL-044 even inside
+    the node itself -- is now staged and persisted onto StrategyVersion.option_rationale."""
+    fo_logic = StrategyLogic(
+        hypothesis="Bull call spread ahead of earnings",
+        asset_class="F&O",
+        style="Swing",
+        universe=["RELIANCE"],
+        entry_conditions="IV rank below 30 and price above 20-day high",
+        exit_conditions="3 days before expiry or 50% of max profit reached",
+        stop_loss="close below entry-day low",
+        take_profit="50% of max theoretical profit",
+        position_sizing="1 lot per Rs 5,00,000 capital",
+        confidence_score=0.65,
+        option_legs=[
+            StrategyOptionLeg(
+                symbol="RELIANCE24AUG3000CE",
+                option_type="CE",
+                strike=3000.0,
+                side="buy",
+                quantity=1,
+            )
+        ],
+    )
+    strategy_id = None
+    try:
+        with get_session() as session:
+            tracking = _StrategyTracking()
+            run_id = uuid.uuid4()
+
+            _persist_strategy_progress(
+                session,
+                node_name="strategy_generator",
+                output={"strategy_logic": fo_logic},
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            strategy_id = tracking.strategy_id
+            assert strategy_id is not None
+
+            _persist_strategy_progress(
+                session,
+                node_name="options_strategy_agent",
+                output={
+                    "strategy_logic": fo_logic,
+                    "option_expiry": date(2026, 8, 28),
+                    "option_rationale": "Bullish structure with defined risk ahead of earnings.",
+                },
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            assert tracking.pending_option_rationale == (
+                "Bullish structure with defined risk ahead of earnings."
+            )
+
+            _persist_strategy_progress(
+                session,
+                node_name="python_code_generator",
+                output={"python_code": PythonCode(code="def run_backtest(): ...", version_no=1)},
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            session.commit()
+
+            strategy_row = session.get(Strategy, strategy_id)
+            assert strategy_row is not None and strategy_row.current_version_id is not None
+            version_row = session.get(StrategyVersion, strategy_row.current_version_id)
+            assert version_row is not None
+            assert (
+                version_row.option_rationale
+                == "Bullish structure with defined risk ahead of earnings."
+            )
+    finally:
+        if strategy_id is not None:
+            with get_session() as session:
+                session.query(StrategyVersion).filter(
+                    StrategyVersion.strategy_id == strategy_id
+                ).delete()
+                session.query(Strategy).filter(Strategy.id == strategy_id).delete()
+                session.commit()

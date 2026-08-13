@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
+import { EquityCurveChart, buildBenchmarkOverlay } from "@/components/strategies/equity-curve-chart";
 import { DrawdownChart } from "@/components/strategies/drawdown-chart";
 import { StrategyPicker } from "@/components/backtests/strategy-picker";
 import { RunBacktestButton } from "@/components/backtests/run-backtest-button";
@@ -19,7 +19,6 @@ import { WalkForwardTable } from "@/components/backtests/walk-forward-table";
 import { MonteCarloHistogram } from "@/components/backtests/monte-carlo-histogram";
 import { CompareWorkspace } from "@/components/backtests/compare-workspace";
 import { ExportButton } from "@/components/backtests/export-button";
-import type { OhlcvBar } from "@/lib/api";
 
 const BENCHMARK_SYMBOL = "^NSEI";
 const MAX_COMPARE = 6;
@@ -257,21 +256,6 @@ function BacktestsPageInner() {
       )}
     </main>
   );
-}
-
-function buildBenchmarkOverlay(
-  points: { date: string }[],
-  benchmarkBars: OhlcvBar[],
-): (number | null)[] | undefined {
-  if (points.length === 0 || benchmarkBars.length === 0) return undefined;
-  const byDate = new Map(benchmarkBars.map((b) => [b.date, b.close]));
-  const firstMatch = points.find((p) => byDate.has(p.date));
-  if (!firstMatch) return undefined;
-  const base = byDate.get(firstMatch.date)!;
-  return points.map((p) => {
-    const close = byDate.get(p.date);
-    return close !== undefined ? (close / base) * 100 : null;
-  });
 }
 
 function fmtDate(iso: string): string {

@@ -38,6 +38,26 @@ class Strategy(Base, UUIDPKMixin, TimestampMixin):
     # never captured, have no universe rather than a fabricated one.
     universe: Mapped[list[str] | None] = mapped_column(ARRAY(String(30)))
     updated_at: Mapped[datetime | None]
+    # REL-044: the rest of StrategyLogic (src/agents/state.py) -- the Strategy Generator Agent
+    # computes these on every run, but until this migration only hypothesis/asset_class/style/
+    # universe were ever copied onto this row; entry/exit/stop/take-profit/position-sizing/
+    # confidence were silently discarded (see src/api/routers/agents.py::_persist_strategy_
+    # progress). Nullable, not backfilled -- a row created before this migration has no real
+    # logic text to recover, same convention as `universe` above.
+    entry_conditions: Mapped[str | None] = mapped_column(Text)
+    exit_conditions: Mapped[str | None] = mapped_column(Text)
+    stop_loss: Mapped[str | None] = mapped_column(Text)
+    take_profit: Mapped[str | None] = mapped_column(Text)
+    position_sizing: Mapped[str | None] = mapped_column(Text)
+    confidence_score: Mapped[float | None] = mapped_column(Numeric(6, 3))
+    # REL-044: the CEO Agent's ResearchDirective and Market Analyst's MarketContext (both
+    # src/agents/state.py) that led to this strategy being proposed -- real, LLM-authored "why"
+    # context that previously existed only transiently in AgentRun.output_state, never on the
+    # Strategy row itself and never returned by any endpoint. Full model_dump(mode="json") of
+    # each Pydantic object, not a hand-picked subset -- matches this codebase's own JSONB-
+    # sub-object precedent (BacktestResult.option_legs/trades/walk_forward_results below).
+    research_context: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    market_context: Mapped[dict[str, object] | None] = mapped_column(JSONB)
 
 
 class StrategyVersion(Base, UUIDPKMixin, TimestampMixin):
@@ -61,6 +81,12 @@ class StrategyVersion(Base, UUIDPKMixin, TimestampMixin):
     # migration has no real legs to backfill.
     option_legs: Mapped[list[dict[str, float | str | int]] | None] = mapped_column(JSONB)
     option_expiry: Mapped[date | None]
+    # REL-044: the Options Strategy Agent's real, LLM-authored rationale for these legs
+    # (OptionsStrategyProposal.rationale, src/agents/nodes/options_strategy_agent.py) --
+    # computed on every F&O run but previously discarded before it even reached
+    # TradingOSGraphState (the node's own return dict omitted it). NULL for equity strategies
+    # and for F&O rows created before this migration.
+    option_rationale: Mapped[str | None] = mapped_column(Text)
 
 
 class BacktestResult(Base, UUIDPKMixin, TimestampMixin):

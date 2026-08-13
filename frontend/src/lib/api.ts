@@ -227,6 +227,23 @@ export interface StrategySummary {
   // REL-040: real count of this strategy's own backtest_results rows, so the picker can show
   // which strategies actually have history worth opening.
   backtest_count: number;
+  // REL-044: real, previously-unserialized columns. max_drawdown_limit has always existed on
+  // Strategy; the rest are the Strategy Generator Agent's StrategyLogic fields beyond
+  // hypothesis, computed by the LLM on every run but only ever partially persisted until this
+  // release -- null for a strategy generated before this migration, honestly, not backfilled.
+  // research_context/market_context are the CEO/Market Analyst Agents' own real
+  // ResearchDirective/MarketContext that led to this strategy being proposed.
+  max_drawdown_limit: number | null;
+  entry_conditions: string | null;
+  exit_conditions: string | null;
+  stop_loss: string | null;
+  take_profit: string | null;
+  position_sizing: string | null;
+  confidence_score: number | null;
+  research_context: Record<string, unknown> | null;
+  market_context: Record<string, unknown> | null;
+  // REL-044: the current version's own validation_status, for the Kanban card's status dot.
+  current_version_validation_status: string | null;
 }
 
 export interface StrategyVersionSummary {
@@ -234,6 +251,12 @@ export interface StrategyVersionSummary {
   version_no: number;
   validation_status: string;
   validator_feedback: string | null;
+  // REL-044: real columns on StrategyVersion (option_legs/option_expiry real since REL-035,
+  // option_rationale new this release) -- null for an Equity strategy, or an F&O one whose
+  // options grounding degraded.
+  option_legs: { symbol: string; option_type: string; strike: number; side: string; quantity: number }[] | null;
+  option_expiry: string | null;
+  option_rationale: string | null;
 }
 
 export interface BacktestSummary {

@@ -300,6 +300,15 @@ class _StrategyTracking:
     # since StrategyVersion doesn't exist as a row until the latter creates it.
     pending_option_legs: list[StrategyOptionLeg] | None = None
     pending_option_expiry: date | None = None
+    # REL-044: the CEO Agent's ResearchDirective and Market Analyst's MarketContext -- staged the
+    # same way as the option fields above, since both nodes fire before `strategy_generator`
+    # creates the Strategy row they ultimately get copied onto.
+    pending_research_context: dict[str, Any] | None = None
+    pending_market_context: dict[str, Any] | None = None
+    # REL-044: the Options Strategy Agent's real rationale for its declared legs -- staged
+    # between the `options_strategy_agent` node firing and `python_code_generator` creating the
+    # StrategyVersion row it gets copied onto, mirroring pending_option_legs/expiry above.
+    pending_option_rationale: str | None = None
 
 
 def _persist_strategy_progress(
@@ -316,6 +325,18 @@ def _persist_strategy_progress(
     (Phase_7_Frontend_Architecture.md §2.3) had nothing to show. Mirrors the AgentRun/AgentLog
     persistence just above: hook real DB writes onto the graph's real per-node output, no
     fabricated intermediate state."""
+    # REL-044: ceo_agent/market_analyst both fire before strategy_generator creates the Strategy
+    # row their output ultimately gets copied onto, so these two branches must sit ahead of the
+    # `tracking.strategy_id is None` gate below (which would otherwise always be true here) --
+    # same staging pattern as pending_option_legs/expiry, just one node earlier in the graph.
+    if node_name == "ceo_agent" and "research_directive" in output:
+        tracking.pending_research_context = _jsonable(output["research_directive"])
+        return
+
+    if node_name == "market_analyst" and "market_context" in output:
+        tracking.pending_market_context = _jsonable(output["market_context"])
+        return
+
     if node_name == "strategy_generator" and "strategy_logic" in output:
         if not tracking.account_lookup_done:
             try:
@@ -336,6 +357,16 @@ def _persist_strategy_progress(
             status="Ideation",
             max_drawdown_limit=_DEFAULT_MAX_DRAWDOWN_LIMIT,
             universe=logic.universe or None,
+            # REL-044: the rest of StrategyLogic -- previously computed by the LLM on every run
+            # and then discarded, since Strategy had no columns for them until this release.
+            entry_conditions=logic.entry_conditions,
+            exit_conditions=logic.exit_conditions,
+            stop_loss=logic.stop_loss,
+            take_profit=logic.take_profit,
+            position_sizing=logic.position_sizing,
+            confidence_score=logic.confidence_score,
+            research_context=tracking.pending_research_context,
+            market_context=tracking.pending_market_context,
         )
         session.add(strategy)
         session.flush()
@@ -348,6 +379,7 @@ def _persist_strategy_progress(
     if node_name == "options_strategy_agent" and "strategy_logic" in output:
         tracking.pending_option_legs = output["strategy_logic"].option_legs
         tracking.pending_option_expiry = output.get("option_expiry")
+        tracking.pending_option_rationale = output.get("option_rationale")
         return
 
     if node_name == "python_code_generator" and "python_code" in output:
@@ -363,6 +395,7 @@ def _persist_strategy_progress(
                 else None
             ),
             option_expiry=tracking.pending_option_expiry,
+            option_rationale=tracking.pending_option_rationale,
         )
         session.add(version)
         session.flush()

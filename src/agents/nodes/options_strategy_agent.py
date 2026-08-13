@@ -232,4 +232,13 @@ def options_strategy_node(state: TradingOSGraphState) -> dict[str, object]:
     # (via chain.expiry) and then discarded -- src/api/routers/agents.py::_persist_strategy_
     # progress now persists it alongside the legs onto StrategyVersion, since a leg itself has
     # no expiry field (one expiry applies to the whole proposal, not per-leg).
-    return {"strategy_logic": updated_strategy, "option_expiry": chain.expiry}
+    # REL-044: `proposal.rationale` -- the LLM's own real explanation for these specific legs,
+    # explicitly requested by PMPT-042/043's task prompt -- was computed above but discarded
+    # right here before this function even returned, the same class of drop REL-035 found and
+    # fixed for `symbol`. Now threaded through to `_persist_strategy_progress` alongside the
+    # legs/expiry.
+    return {
+        "strategy_logic": updated_strategy,
+        "option_expiry": chain.expiry,
+        "option_rationale": proposal.rationale,
+    }

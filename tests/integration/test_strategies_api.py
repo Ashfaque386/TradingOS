@@ -360,6 +360,78 @@ def test_backtest_rejects_a_strategy_with_no_universe_recorded():
         cleanup_user(admin_id)
 
 
+def test_strategy_logic_and_research_context_and_option_fields_serialize_rel_044():
+    """REL-044: real Strategy/StrategyVersion columns (entry/exit/stop/take-profit/position-
+    sizing/confidence, research_context/market_context, option_legs/option_expiry/
+    option_rationale, current_version_validation_status) round-trip through GET /strategies and
+    GET /strategies/{id} -- a direct-insert test (no real LangGraph run needed) matching this
+    file's own established convention, since _persist_strategy_progress's own persistence logic
+    is already covered separately by tests/integration/test_persist_strategy_progress.py."""
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+
+    try:
+        with get_session() as session:
+            strategy = session.get(Strategy, strategy_id)
+            assert strategy is not None
+            strategy.entry_conditions = "close crosses above 20-day SMA"
+            strategy.exit_conditions = "close crosses below 20-day SMA"
+            strategy.stop_loss = "2% below entry"
+            strategy.take_profit = "5% above entry"
+            strategy.position_sizing = "1% account risk per trade"
+            strategy.confidence_score = 0.68
+            strategy.research_context = {
+                "market_regime": "Risk-On",
+                "priority_sectors": ["IT", "Auto"],
+                "strategy_themes": ["Momentum breakout"],
+                "risk_tolerance": "Medium",
+                "expected_outcomes": "2-3 high-conviction setups",
+            }
+            strategy.market_context = {
+                "sector_rankings": ["IT", "Auto", "FMCG"],
+                "volatility_assessment": "India VIX subdued",
+                "macro_outlook": "No major event risk this week",
+                "confidence_score": 0.7,
+                "insights": ["FII flows turned net positive"],
+            }
+            version = session.get(StrategyVersion, version_id)
+            assert version is not None
+            version.option_legs = None
+            version.option_expiry = None
+            version.option_rationale = None
+            session.commit()
+
+        list_response = client.get("/api/v1/strategies")
+        assert list_response.status_code == 200
+        row = next(s for s in list_response.json() if s["id"] == str(strategy_id))
+        assert row["confidence_score"] == 0.68
+        assert row["entry_conditions"] == "close crosses above 20-day SMA"
+        assert row["research_context"]["market_regime"] == "Risk-On"
+        assert row["market_context"]["macro_outlook"] == "No major event risk this week"
+        assert row["current_version_validation_status"] == "Passed"  # set by _create_fixture_rows
+
+        detail_response = client.get(f"/api/v1/strategies/{strategy_id}")
+        assert detail_response.status_code == 200
+        detail = detail_response.json()
+        assert detail["stop_loss"] == "2% below entry"
+        assert detail["current_version_validation_status"] == "Passed"
+        version_summary = next(v for v in detail["versions"] if v["id"] == str(version_id))
+        assert version_summary["option_legs"] is None
+        assert version_summary["option_rationale"] is None
+
+        # Pre-migration-shaped row: every new field genuinely null, not fabricated.
+        no_logic_ids = _create_fixture_rows()
+        try:
+            no_logic_detail = client.get(f"/api/v1/strategies/{no_logic_ids[2]}").json()
+            assert no_logic_detail["entry_conditions"] is None
+            assert no_logic_detail["research_context"] is None
+            assert no_logic_detail["confidence_score"] is None
+        finally:
+            _cleanup_fixture_rows(*no_logic_ids)
+    finally:
+        _cleanup_fixture_rows(*ids)
+
+
 def test_backtest_trigger_requires_authentication():
     """REL-011 E10.11.0: POST /{strategy_id}/backtest was found with NO auth dependency at all
     -- any caller, including unauthenticated ones, could launch a real vectorbt backtest run.
