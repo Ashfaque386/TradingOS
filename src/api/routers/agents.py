@@ -31,6 +31,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -43,11 +44,19 @@ from src.agents.control import (
     UnknownAgentError,
     set_agent_enabled,
 )
-from src.agents.graph import build_graph
+from src.agents.graph import build_graph, build_suggestion_regeneration_graph
 from src.agents.llm_router import fetch_langsmith_trace_url, pop_last_langsmith_run_id
 from src.agents.nodes.backtesting import DEFAULT_BACKTEST_LOOKBACK_DAYS, DEFAULT_INITIAL_CAPITAL
+from src.agents.nodes.suggestion_reviewer import review_suggestion
 from src.agents.prompt_registry import PromptNotFoundError
-from src.agents.state import StrategyOptionLeg, TradingOSGraphState
+from src.agents.state import (
+    EvaluationVerdict,
+    MarketContext,
+    PythonCode,
+    ResearchDirective,
+    StrategyOptionLeg,
+    TradingOSGraphState,
+)
 from src.api.deps import require_role
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.audit import write_audit_entry
@@ -60,9 +69,11 @@ from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.agent import AgentControlState, AgentLog, AgentRun
-from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
 from src.observability.metrics import AGENT_RUN_DURATION_SECONDS
+
+logger = structlog.get_logger(__name__)
 
 # No Risk Manager Agent exists yet to set a real per-strategy drawdown limit (Phase 4 scope,
 # per Phase_14_Master_Development_Roadmap.md) -- mirrors kill_switch.py's
@@ -227,9 +238,19 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _summarize_node_output(node_name: str, output: dict[str, Any]) -> str:
+def _summarize_node_output(node_name: str, output: dict[str, Any] | None) -> str:
     """A short, honest summary of what a node actually returned -- built from the real
-    Pydantic fields in `output`, never a canned string."""
+    Pydantic fields in `output`, never a canned string.
+
+    BUG-011 (see `_persist_strategy_progress`'s own `options_strategy_agent` branch for the full
+    explanation): LangGraph's `updates` stream mode represents a node's empty-dict return (the
+    real, intentional no-op `options_strategy_node` returns for an Equity strategy) as `output =
+    None`, not `{}`. This is called before `_persist_strategy_progress`/`_persist_suggestion_
+    regeneration` even run, so it was the actual FIRST crash point for every real Equity
+    strategy's graph run, not the persistence layer -- `output.get(...)` on `None` raised
+    `AttributeError` here before this guard existed."""
+    if not output:
+        return f"{node_name} completed with no new state fields"
     directive = output.get("research_directive")
     if directive is not None:
         return (
@@ -376,7 +397,18 @@ def _persist_strategy_progress(
     if tracking.strategy_id is None:
         return  # strategy_generator hasn't run yet this thread (or its account lookup failed)
 
-    if node_name == "options_strategy_agent" and "strategy_logic" in output:
+    # BUG-011: `options_strategy_node` returns `{}` for an Equity strategy_logic (nothing for it
+    # to ground) -- src/agents/nodes/options_strategy_agent.py's own module docstring confirms
+    # this is intentional, "a no-op passthrough for 'Equity' strategies." LangGraph's `updates`
+    # stream mode represents that empty-dict return as `output = None` for this node's step, not
+    # `{}` -- confirmed empirically (a real graph.stream() debug trace), not assumed. Without the
+    # `output` truthiness guard below, `"strategy_logic" in output` raised `TypeError: argument of
+    # type 'NoneType' is not iterable` for every real Equity strategy's graph run, crashing the
+    # whole run right after strategy_generator and leaving it silently stuck at status="Coding"
+    # forever -- every strategy that has ever reached a real BacktestResult in this codebase's
+    # history was F&O, not by chance. Found while live-testing REL-048's suggestion-regeneration
+    # pipeline against a real strategy the LLM happened to regenerate as Equity.
+    if node_name == "options_strategy_agent" and output and "strategy_logic" in output:
         tracking.pending_option_legs = output["strategy_logic"].option_legs
         tracking.pending_option_expiry = output.get("option_expiry")
         tracking.pending_option_rationale = output.get("option_rationale")
@@ -545,6 +577,12 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
     try:
         for step in graph.stream(state):
             for node_name, output in step.items():
+                # BUG-011: LangGraph's `updates` stream mode represents a node's real, intentional
+                # empty-dict return (options_strategy_node's own no-op for an Equity strategy) as
+                # `output = None`, not `{}` -- normalized once here so every downstream use
+                # (_summarize_node_output, jsonable_output, _persist_strategy_progress) sees a
+                # real, iterable dict instead of crashing on the first `.get`/`.items()`/`in`.
+                output = output or {}
                 now_wall = datetime.now(UTC)
                 AGENT_RUN_DURATION_SECONDS.labels(agent_name=node_name).observe(
                     (now_wall - checkpoint_wall).total_seconds()
@@ -674,6 +712,435 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
                 }
             ),
         )
+    finally:
+        redis_client.close()
+
+
+@dataclass
+class _SuggestionRegenTracking:
+    """REL-048: the suggestion-regeneration analogue of `_StrategyTracking` above, deliberately
+    smaller -- `strategy_id` is known up front (the suggestion already names an existing
+    Strategy), so there is no "has strategy_generator fired yet" gate to thread, and no
+    account/research-context staging (both are seeded into `TradingOSGraphState` once, before
+    the graph even starts, from the target strategy's own already-persisted REL-044 columns)."""
+
+    strategy_id: uuid.UUID
+    backtest_result_id: uuid.UUID | None = None
+    new_version_id: uuid.UUID | None = None
+    pending_option_legs: list[StrategyOptionLeg] | None = None
+    pending_option_expiry: date | None = None
+    pending_option_rationale: str | None = None
+
+
+def _persist_suggestion_regeneration(
+    session: Session,
+    *,
+    node_name: str,
+    output: dict[str, Any],
+    tracking: _SuggestionRegenTracking,
+) -> None:
+    """REL-048. Deliberately NOT `_persist_strategy_progress` above -- that function's own
+    `strategy_generator` branch unconditionally creates a brand-new `Strategy` row every time it
+    fires, which is correct for the main graph (each real run proposes a genuinely new idea) but
+    wrong here: a suggestion regenerates an EXISTING strategy, so this updates that strategy's own
+    logic columns in place instead. Every other branch mirrors `_persist_strategy_progress`
+    exactly, scoped to the one known `tracking.strategy_id`."""
+    if node_name == "strategy_generator" and "strategy_logic" in output:
+        logic = output["strategy_logic"]
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is not None:
+            strategy_row.hypothesis = logic.hypothesis
+            strategy_row.asset_class = logic.asset_class
+            strategy_row.style = logic.style
+            strategy_row.universe = logic.universe or None
+            strategy_row.entry_conditions = logic.entry_conditions
+            strategy_row.exit_conditions = logic.exit_conditions
+            strategy_row.stop_loss = logic.stop_loss
+            strategy_row.take_profit = logic.take_profit
+            strategy_row.position_sizing = logic.position_sizing
+            strategy_row.confidence_score = logic.confidence_score
+        return
+
+    # BUG-011: see the identical guard + full explanation in `_persist_strategy_progress` above.
+    if node_name == "options_strategy_agent" and output and "strategy_logic" in output:
+        tracking.pending_option_legs = output["strategy_logic"].option_legs
+        tracking.pending_option_expiry = output.get("option_expiry")
+        tracking.pending_option_rationale = output.get("option_rationale")
+        return
+
+    if node_name == "python_code_generator" and "python_code" in output:
+        code = output["python_code"]
+        version = StrategyVersion(
+            strategy_id=tracking.strategy_id,
+            version_no=code.version_no,
+            python_code=code.code,
+            validation_status="Pending",
+            option_legs=(
+                [leg.model_dump() for leg in tracking.pending_option_legs]
+                if tracking.pending_option_legs
+                else None
+            ),
+            option_expiry=tracking.pending_option_expiry,
+            option_rationale=tracking.pending_option_rationale,
+        )
+        session.add(version)
+        session.flush()
+        tracking.new_version_id = version.id
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is not None:
+            strategy_row.current_version_id = version.id
+            strategy_row.status = "Coding"
+        return
+
+    if node_name == "python_validator" and "validation_result" in output:
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if strategy_row is None or strategy_row.current_version_id is None:
+            return
+        if output["validation_result"].status != "Pass":
+            return  # a retry produces a new StrategyVersion via the branch above
+        version_row = session.get(StrategyVersion, strategy_row.current_version_id)
+        if version_row is None:
+            return
+        run_strategy_factory_pipeline(
+            version_row.python_code, strategy_version_id=str(version_row.id)
+        )
+        strategy_row.status = "Backtesting"
+        return
+
+    if node_name == "backtesting" and "backtest_metrics" in output:
+        strategy_row = session.get(Strategy, tracking.strategy_id)
+        if (
+            strategy_row is None
+            or strategy_row.current_version_id is None
+            or not strategy_row.universe
+        ):
+            return
+        lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+        date_to = lake.latest_date(strategy_row.universe[0])
+        if date_to is None:
+            return
+        metrics = output["backtest_metrics"]
+        result = BacktestResult(
+            strategy_version_id=strategy_row.current_version_id,
+            date_from=date_to - timedelta(days=DEFAULT_BACKTEST_LOOKBACK_DAYS),
+            date_to=date_to,
+            initial_capital=DEFAULT_INITIAL_CAPITAL,
+            sharpe_ratio=metrics.sharpe_ratio,
+            sortino_ratio=metrics.sortino_ratio,
+            calmar_ratio=metrics.calmar_ratio,
+            max_drawdown=metrics.max_drawdown,
+            cagr=metrics.cagr,
+            win_rate=metrics.win_rate,
+            profit_factor=metrics.profit_factor,
+            expectancy=metrics.expectancy,
+            total_trades=metrics.total_trades,
+        )
+        session.add(result)
+        session.flush()
+        tracking.backtest_result_id = result.id
+        return
+
+    if tracking.backtest_result_id is None:
+        return
+
+    if node_name == "evaluator" and "evaluation_verdict" in output:
+        result_row = session.get(BacktestResult, tracking.backtest_result_id)
+        verdict = output["evaluation_verdict"]
+        if result_row is not None:
+            result_row.evaluation_verdict = verdict.verdict
+            result_row.evaluation_failure_reasons = verdict.failure_reasons or None
+        # No status change here -- python_validator's own branch above already moved the
+        # strategy to "Backtesting" the moment a real BacktestResult exists to review; a human
+        # decides PaperTrading/Live promotion via the existing /promote endpoint regardless of
+        # PASS/FAIL, matching every other regeneration this codebase produces.
+        return
+
+
+def run_suggestion_regeneration(*, suggestion_id: uuid.UUID) -> None:
+    """REL-048: background job for `POST /strategies/{id}/suggestions/{suggestion_id}/review`
+    (`src/api/routers/strategies.py`). Runs the lightweight Suggestion Reviewer Agent first
+    (`src/agents/nodes/suggestion_reviewer.py`); only if it judges the suggestion sound does this
+    re-enter the real agent pipeline via `build_suggestion_regeneration_graph()`
+    (`src/agents/graph.py`), seeded with a synthetic FAIL `EvaluationVerdict` carrying the
+    suggestion text as `feedback_for_strategy_generator` -- the exact mechanism the Evaluator's
+    own real FAIL-retry loop already proves works, see `strategy_generator_node`'s own docstring.
+    `status` ends `Applied` only if the pipeline actually produced a new `StrategyVersion`
+    (`tracking.new_version_id is not None`) -- a `sound=True` verdict followed by a pipeline that
+    never got there (Compliance blocked it, code validation exhausted its retries, or a node
+    halted/crashed) still leaves the suggestion `Rejected`, since "Applied" would otherwise claim
+    a version that doesn't exist."""
+    redis_client = get_redis_client()
+    with get_session() as session:
+        suggestion = session.get(StrategySuggestion, suggestion_id)
+        if suggestion is None:
+            redis_client.close()
+            return
+        strategy = session.get(Strategy, suggestion.strategy_id)
+        if strategy is None:
+            suggestion.status = "Rejected"
+            suggestion.ai_reasoning = (
+                "The strategy this suggestion was submitted against no longer exists."
+            )
+            suggestion.reviewed_at = datetime.now(UTC)
+            session.commit()
+            redis_client.close()
+            return
+
+        suggestion.status = "Reviewing"
+        strategy_logic_summary: dict[str, object] = {
+            "hypothesis": strategy.hypothesis,
+            "asset_class": strategy.asset_class,
+            "style": strategy.style,
+            "entry_conditions": strategy.entry_conditions,
+            "exit_conditions": strategy.exit_conditions,
+            "stop_loss": strategy.stop_loss,
+            "take_profit": strategy.take_profit,
+            "position_sizing": strategy.position_sizing,
+            "confidence_score": (
+                float(strategy.confidence_score) if strategy.confidence_score is not None else None
+            ),
+        }
+        latest_result = session.execute(
+            select(BacktestResult)
+            .join(StrategyVersion, StrategyVersion.id == BacktestResult.strategy_version_id)
+            .where(StrategyVersion.strategy_id == strategy.id)
+            .order_by(BacktestResult.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        backtest_verdict_summary: dict[str, object] | None = (
+            {
+                "evaluation_verdict": latest_result.evaluation_verdict,
+                "sharpe_ratio": (
+                    float(latest_result.sharpe_ratio)
+                    if latest_result.sharpe_ratio is not None
+                    else None
+                ),
+                "max_drawdown": (
+                    float(latest_result.max_drawdown)
+                    if latest_result.max_drawdown is not None
+                    else None
+                ),
+                "deployment_recommendation": latest_result.deployment_recommendation,
+            }
+            if latest_result is not None
+            else None
+        )
+        research_context = strategy.research_context
+        market_context = strategy.market_context
+        suggestion_text = suggestion.suggestion_text
+        strategy_id = strategy.id
+        # BUG-012: python_code_generator_node computes the next version_no purely from
+        # `state.python_code.version_no + 1` (defaulting to 1 when state.python_code is None) --
+        # correct for the main graph, where a fresh thread genuinely starts at v1, but wrong here,
+        # where the target strategy already has real versions in the DB. Left unseeded, this
+        # collides with the real `UniqueConstraint("strategy_id", "version_no")` on every
+        # strategy whose latest version isn't v0. Found the same live-testing pass as BUG-011.
+        latest_version_no = (
+            session.execute(
+                select(StrategyVersion.version_no)
+                .where(StrategyVersion.strategy_id == strategy_id)
+                .order_by(StrategyVersion.version_no.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            or 0
+        )
+        session.commit()
+
+    try:
+        verdict = review_suggestion(
+            strategy_logic_summary, backtest_verdict_summary, suggestion_text
+        )
+    except Exception as exc:  # noqa: BLE001 -- a review failure must still resolve the suggestion
+        logger.warning(
+            "suggestion_review_llm_failed", error=str(exc), suggestion_id=str(suggestion_id)
+        )
+        with get_session() as session:
+            suggestion = session.get(StrategySuggestion, suggestion_id)
+            if suggestion is not None:
+                suggestion.status = "Rejected"
+                suggestion.ai_verdict = "Review failed"
+                suggestion.ai_reasoning = f"The review step itself failed: {exc}"
+                suggestion.reviewed_at = datetime.now(UTC)
+                session.commit()
+        redis_client.close()
+        return
+
+    with get_session() as session:
+        suggestion = session.get(StrategySuggestion, suggestion_id)
+        if suggestion is None:
+            redis_client.close()
+            return
+        suggestion.ai_verdict = "Sound" if verdict.sound else "Not sound"
+        suggestion.ai_reasoning = verdict.reasoning
+        if not verdict.sound:
+            suggestion.status = "Rejected"
+            suggestion.reviewed_at = datetime.now(UTC)
+            session.commit()
+            redis_client.close()
+            return
+        session.commit()
+
+    # Sound -- re-enter the real pipeline to produce a genuine new candidate version.
+    thread_id = str(uuid.uuid4())
+    started_at = datetime.now(UTC)
+    with get_session() as session:
+        root = AgentRun(
+            graph_thread_id=thread_id,
+            agent_name="SuggestionRegeneration",
+            status="Running",
+            started_at=started_at,
+        )
+        session.add(root)
+        session.commit()
+        root_run_id = root.id
+
+    reconstructed_directive: ResearchDirective | None = None
+    reconstructed_context: MarketContext | None = None
+    try:
+        if research_context:
+            reconstructed_directive = ResearchDirective.model_validate(research_context)
+        if market_context:
+            reconstructed_context = MarketContext.model_validate(market_context)
+    except Exception as exc:  # noqa: BLE001 -- proceed without context rather than fail the run
+        logger.warning("suggestion_regen_context_reconstruction_failed", error=str(exc))
+
+    graph = build_suggestion_regeneration_graph()
+    state = TradingOSGraphState(
+        thread_id=thread_id,
+        research_directive=reconstructed_directive,
+        market_context=reconstructed_context,
+        account_capital=_fetch_account_capital(),
+        # BUG-012 (see above): seeds python_code_generator_node's own `version_no + 1` derivation
+        # with the real latest version already on this strategy, not a fabricated code body --
+        # `code=""` is never read for this, only `.version_no` is.
+        python_code=PythonCode(code="", version_no=latest_version_no),
+        evaluation_verdict=EvaluationVerdict(
+            verdict="FAIL",
+            failure_reasons=["User-submitted suggestion"],
+            feedback_for_strategy_generator=suggestion_text,
+        ),
+    )
+    checkpoint_wall = datetime.now(UTC)
+    tracking = _SuggestionRegenTracking(strategy_id=strategy_id)
+
+    try:
+        for step in graph.stream(state):
+            for node_name, output in step.items():
+                # BUG-011: see the identical guard + full explanation in `_execute_graph_run` above.
+                output = output or {}
+                now_wall = datetime.now(UTC)
+                AGENT_RUN_DURATION_SECONDS.labels(agent_name=node_name).observe(
+                    (now_wall - checkpoint_wall).total_seconds()
+                )
+                summary = _summarize_node_output(node_name, output)
+                jsonable_output = {k: _jsonable(v) for k, v in output.items()}
+                langsmith_run_id = pop_last_langsmith_run_id()
+                langsmith_trace_url = (
+                    fetch_langsmith_trace_url(langsmith_run_id) if langsmith_run_id else None
+                )
+                with get_session() as session:
+                    child = AgentRun(
+                        graph_thread_id=thread_id,
+                        agent_name=node_name,
+                        parent_run_id=root_run_id,
+                        output_state=jsonable_output,
+                        status="Completed",
+                        started_at=checkpoint_wall,
+                        ended_at=now_wall,
+                        langsmith_trace_url=langsmith_trace_url,
+                    )
+                    session.add(child)
+                    session.flush()
+                    session.add(
+                        AgentLog(
+                            agent_run_id=child.id,
+                            log_level="INFO",
+                            message=summary,
+                            created_at=now_wall,
+                        )
+                    )
+                    _persist_suggestion_regeneration(
+                        session, node_name=node_name, output=output, tracking=tracking
+                    )
+                    session.commit()
+                publish_agent_log(
+                    redis_client,
+                    json.dumps(
+                        {
+                            "agent_id": node_name,
+                            "node": node_name,
+                            "message": summary,
+                            "ts": now_wall.isoformat(),
+                        }
+                    ),
+                )
+                checkpoint_wall = now_wall
+
+        with get_session() as session:
+            root_run = session.get(AgentRun, root_run_id)
+            if root_run is not None:
+                root_run.status = "Completed"
+                root_run.ended_at = datetime.now(UTC)
+            suggestion = session.get(StrategySuggestion, suggestion_id)
+            if suggestion is not None:
+                if tracking.new_version_id is not None:
+                    suggestion.status = "Applied"
+                    suggestion.resulting_version_id = tracking.new_version_id
+                else:
+                    suggestion.status = "Rejected"
+                    suggestion.ai_reasoning = (
+                        f"{suggestion.ai_reasoning} (The regeneration pipeline judged the "
+                        "suggestion sound but did not produce a passing version -- see this "
+                        "run's own Agent Console history for why.)"
+                    )
+                suggestion.reviewed_at = datetime.now(UTC)
+            session.commit()
+    except AgentHaltedError as exc:
+        halted_ts = datetime.now(UTC)
+        with get_session() as session:
+            root_run = session.get(AgentRun, root_run_id)
+            if root_run is not None:
+                root_run.status = "Halted"
+                root_run.ended_at = halted_ts
+                session.add(
+                    AgentLog(
+                        agent_run_id=root_run_id,
+                        log_level="WARNING",
+                        message=str(exc),
+                        created_at=halted_ts,
+                    )
+                )
+            suggestion = session.get(StrategySuggestion, suggestion_id)
+            if suggestion is not None:
+                suggestion.status = "Rejected"
+                suggestion.ai_reasoning = (
+                    f"{suggestion.ai_reasoning} (Regeneration run halted: {exc})"
+                )
+                suggestion.reviewed_at = halted_ts
+            session.commit()
+    except Exception as exc:  # noqa: BLE001 -- must always resolve the suggestion, even on failure
+        error_ts = datetime.now(UTC)
+        with get_session() as session:
+            root_run = session.get(AgentRun, root_run_id)
+            if root_run is not None:
+                root_run.status = "Failed"
+                root_run.ended_at = error_ts
+                session.add(
+                    AgentLog(
+                        agent_run_id=root_run_id,
+                        log_level="ERROR",
+                        message=str(exc),
+                        created_at=error_ts,
+                    )
+                )
+            suggestion = session.get(StrategySuggestion, suggestion_id)
+            if suggestion is not None:
+                suggestion.status = "Rejected"
+                suggestion.ai_reasoning = (
+                    f"{suggestion.ai_reasoning} (Regeneration run failed: {exc})"
+                )
+                suggestion.reviewed_at = error_ts
+            session.commit()
     finally:
         redis_client.close()
 

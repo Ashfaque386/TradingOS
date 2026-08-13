@@ -18,7 +18,7 @@ from src.api.main import app
 from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.account import Account
-from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
@@ -606,4 +606,144 @@ def test_cross_strategy_backtest_views_rel_040():
             session.commit()
         _cleanup_fixture_rows(*ids_a)
         _cleanup_fixture_rows(*ids_b)
+        cleanup_user(admin_id)
+
+
+# --- Suggestions (REL-048/049) -----------------------------------------------------------------
+
+
+def test_submit_and_list_suggestions_round_trip():
+    """Submitting a suggestion is open to any authenticated user, including the most restricted
+    real role -- ROLE_READ_ONLY_AUDITOR here proves that deliberately, not just a convenient
+    choice of role to test with."""
+    ids = _create_fixture_rows()
+    strategy_id = ids[2]
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    suggestion_id = None
+    try:
+        submit_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/suggestions",
+            json={"text": "Widen the stop-loss slightly to reduce whipsaw exits."},
+            headers=auth_header(token),
+        )
+        assert submit_response.status_code == 201
+        body = submit_response.json()
+        assert body["status"] == "Pending"
+        assert body["strategy_id"] == str(strategy_id)
+        assert body["submitted_by_user_id"] == str(user_id)
+        assert body["ai_verdict"] is None
+        suggestion_id = uuid.UUID(body["id"])
+
+        empty_submit = client.post(
+            f"/api/v1/strategies/{strategy_id}/suggestions",
+            json={"text": "   "},
+            headers=auth_header(token),
+        )
+        assert empty_submit.status_code == 422
+
+        list_response = client.get(f"/api/v1/strategies/{strategy_id}/suggestions")
+        assert list_response.status_code == 200
+        listed = list_response.json()
+        assert any(s["id"] == str(suggestion_id) for s in listed)
+    finally:
+        if suggestion_id is not None:
+            with get_session() as session:
+                session.query(StrategySuggestion).filter(
+                    StrategySuggestion.id == suggestion_id
+                ).delete()
+                session.commit()
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(user_id)
+
+
+def test_suggestion_review_requires_authentication():
+    response = client.post(f"/api/v1/strategies/{uuid.uuid4()}/suggestions/{uuid.uuid4()}/review")
+    assert response.status_code == 401
+
+
+def test_suggestion_review_requires_the_gated_role():
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    try:
+        response = client.post(
+            f"/api/v1/strategies/{uuid.uuid4()}/suggestions/{uuid.uuid4()}/review",
+            headers=auth_header(token),
+        )
+        assert response.status_code == 403
+    finally:
+        cleanup_user(user_id)
+
+
+def test_suggestion_review_end_to_end_real_llm():
+    """REL-048's real deliverable: submit a suggestion against a real strategy, trigger a real
+    AI review (real LLM call, no mocking, matching this file's own established convention), and
+    poll to completion. Asserted honestly per the plan's own convention -- the terminal state is
+    whichever the real LLM actually returns (Applied with a real resulting_version_id, or
+    Rejected with real reasoning), not forced to always expect one outcome. Slow: a full
+    regeneration re-enters the real agent pipeline (multiple real LLM calls, a real sandboxed
+    backtest) -- same order of magnitude as this file's own real backtest tests."""
+    ids = _create_fixture_rows()
+    strategy_id = ids[2]
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    suggestion_id = None
+    try:
+        submit_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/suggestions",
+            json={"text": "Tighten the stop-loss to reduce max drawdown."},
+            headers=auth_header(admin_token),
+        )
+        assert submit_response.status_code == 201
+        suggestion_id = uuid.UUID(submit_response.json()["id"])
+
+        trigger_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/suggestions/{suggestion_id}/review",
+            headers=auth_header(admin_token),
+        )
+        assert trigger_response.status_code == 202
+        job_id = trigger_response.json()["job_id"]
+
+        deadline = time.monotonic() + 300
+        job_status = None
+        while time.monotonic() < deadline:
+            job_response = client.get(f"/api/v1/strategies/suggestions/jobs/{job_id}/status")
+            job_status = job_response.json()
+            if job_status["status"] != "Running":
+                break
+            time.sleep(5)
+
+        assert job_status is not None and job_status["status"] == "Completed", job_status
+        suggestion = job_status["suggestion"]
+        assert suggestion["ai_verdict"] is not None
+        assert suggestion["ai_reasoning"] is not None
+        assert suggestion["status"] in ("Applied", "Rejected")
+        if suggestion["status"] == "Applied":
+            assert suggestion["resulting_version_id"] is not None
+    finally:
+        # A real regeneration can retry python_code_generator several times before validation
+        # passes (or exhausts its retries) -- each attempt is its own real StrategyVersion row,
+        # not just the one `resulting_version_id` names, so every version this strategy now has
+        # (beyond the one _create_fixture_rows itself seeded) must be swept up before
+        # _cleanup_fixture_rows' own Strategy delete, or its FK constraint 409s on cleanup.
+        with get_session() as session:
+            if suggestion_id is not None:
+                session.query(StrategySuggestion).filter(
+                    StrategySuggestion.id == suggestion_id
+                ).delete()
+            version_ids = [
+                row[0]
+                for row in session.query(StrategyVersion.id)
+                .filter(StrategyVersion.strategy_id == strategy_id, StrategyVersion.id != ids[3])
+                .all()
+            ]
+            if version_ids:
+                session.query(BacktestResult).filter(
+                    BacktestResult.strategy_version_id.in_(version_ids)
+                ).delete(synchronize_session=False)
+                session.query(StrategyVersion).filter(StrategyVersion.id.in_(version_ids)).delete(
+                    synchronize_session=False
+                )
+                strategy_row = session.get(Strategy, strategy_id)
+                if strategy_row is not None and strategy_row.current_version_id in version_ids:
+                    strategy_row.current_version_id = ids[3]
+            session.commit()
+        _cleanup_fixture_rows(*ids)
         cleanup_user(admin_id)

@@ -39,6 +39,12 @@ export const PERMISSIONS = {
   // (REL-019 E19.2, ADR 11). Same role set as manageHitl since disabling a pipeline agent is an
   // equivalent-weight operational action to approving/rejecting a run.
   manageAgentControl: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
+  // src/api/routers/strategies.py:_can_review_suggestion -- POST
+  // /strategies/{id}/suggestions/{suggestion_id}/review (REL-048). Same role set as
+  // triggerBacktest since a review re-enters the real agent pipeline (real LLM calls, a real
+  // sandboxed backtest) -- an equivalent-weight operational action. Submitting a suggestion
+  // itself needs no permission key here: it's open to any authenticated user server-side.
+  reviewStrategySuggestion: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

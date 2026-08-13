@@ -76,3 +76,9 @@ portfolio_manager_agent:
 portfolio_manager_agent_task:
   prompt_id: PMPT-045
   active_version: 1
+suggestion_reviewer_agent:
+  prompt_id: PMPT-046
+  active_version: 1
+suggestion_reviewer_agent_task:
+  prompt_id: PMPT-047
+  active_version: 1

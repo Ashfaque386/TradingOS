@@ -22,7 +22,7 @@ from decimal import Decimal
 
 from src.core.db import get_session
 from src.models.account import Account
-from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
 
 STRATEGY_NAME = "cypress-rel044-fno-fixture-strategy"
@@ -60,6 +60,13 @@ def _fno_fixture_trades() -> list[dict[str, float | str]]:
 def _delete_existing(name: str) -> None:
     with get_session() as session:
         for strategy in session.query(Strategy).filter(Strategy.name == name).all():
+            # REL-048: StrategySuggestion FKs onto both strategies.id and (nullable)
+            # strategy_versions.id -- must go before BacktestResult/StrategyVersion/Strategy
+            # below, same FK-order lesson this script's own _seed_fno_fixture already learned for
+            # Account/User.
+            session.query(StrategySuggestion).filter(
+                StrategySuggestion.strategy_id == strategy.id
+            ).delete(synchronize_session=False)
             session.query(BacktestResult).filter(
                 BacktestResult.strategy_version_id.in_(
                     session.query(StrategyVersion.id).filter(

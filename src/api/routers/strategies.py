@@ -52,7 +52,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from src.api.deps import require_role
+from src.api.deps import get_current_user, require_role
+from src.api.routers.agents import run_suggestion_regeneration
 from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
@@ -67,7 +68,7 @@ from src.engine.sandbox.backtest_runner import (
     run_real_backtest,
     write_equity_curve_parquet,
 )
-from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
@@ -78,6 +79,14 @@ _can_promote = require_role(ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, a
 # set as src/api/routers/agents.py's Orchestrator HITL endpoints (_can_manage_hitl), since
 # triggering a real backtest is an equivalent-weight operational action.
 _can_trigger_backtest = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
+# REL-048: reviewing a suggestion re-enters the real agent pipeline (real LLM calls, a real
+# sandboxed backtest) -- the same weight/role set as _can_trigger_backtest. Submitting a
+# suggestion itself is cheap (one DB row) and open to any authenticated user, matching this
+# feature's own "anyone can propose, SA/PM/RM decide whether it's worth an AI-triggered rerun"
+# shape.
+_can_review_suggestion = require_role(
     ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
 )
 
@@ -837,3 +846,148 @@ def promote_strategy(
         )
         session.commit()
         return _to_summary(strategy)
+
+
+# --- Suggestions (REL-048/049) -----------------------------------------------------------------
+
+
+class SubmitSuggestionRequest(BaseModel):
+    text: str
+
+
+class StrategySuggestionSummary(BaseModel):
+    id: uuid.UUID
+    strategy_id: uuid.UUID
+    submitted_by_user_id: uuid.UUID
+    suggestion_text: str
+    status: Literal["Pending", "Reviewing", "Rejected", "Applied"]
+    ai_verdict: str | None
+    ai_reasoning: str | None
+    resulting_version_id: uuid.UUID | None
+    created_at: datetime
+    reviewed_at: datetime | None
+
+
+def _to_suggestion_summary(suggestion: StrategySuggestion) -> StrategySuggestionSummary:
+    return StrategySuggestionSummary(
+        id=suggestion.id,
+        strategy_id=suggestion.strategy_id,
+        submitted_by_user_id=suggestion.submitted_by_user_id,
+        suggestion_text=suggestion.suggestion_text,
+        status=suggestion.status,
+        ai_verdict=suggestion.ai_verdict,
+        ai_reasoning=suggestion.ai_reasoning,
+        resulting_version_id=suggestion.resulting_version_id,
+        created_at=suggestion.created_at,
+        reviewed_at=suggestion.reviewed_at,
+    )
+
+
+@router.post(
+    "/{strategy_id}/suggestions", response_model=StrategySuggestionSummary, status_code=201
+)
+def submit_suggestion(
+    strategy_id: uuid.UUID,
+    body: SubmitSuggestionRequest,
+    user: User = Depends(get_current_user),
+) -> StrategySuggestionSummary:
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Suggestion text cannot be empty")
+    with get_session() as session:
+        strategy = session.get(Strategy, strategy_id)
+        if strategy is None:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        suggestion = StrategySuggestion(
+            strategy_id=strategy_id, submitted_by_user_id=user.id, suggestion_text=text
+        )
+        session.add(suggestion)
+        session.commit()
+        session.refresh(suggestion)
+        return _to_suggestion_summary(suggestion)
+
+
+@router.get("/{strategy_id}/suggestions", response_model=list[StrategySuggestionSummary])
+def list_suggestions(strategy_id: uuid.UUID) -> list[StrategySuggestionSummary]:
+    with get_session() as session:
+        rows = session.scalars(
+            select(StrategySuggestion)
+            .where(StrategySuggestion.strategy_id == strategy_id)
+            .order_by(StrategySuggestion.created_at.desc())
+        )
+        return [_to_suggestion_summary(s) for s in rows]
+
+
+class SuggestionReviewTriggerResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+@dataclass
+class _SuggestionJob:
+    status: Literal["Running", "Completed"]
+    suggestion_id: uuid.UUID
+
+
+_suggestion_jobs: dict[str, _SuggestionJob] = {}
+_suggestion_jobs_lock = threading.Lock()
+
+
+def _run_suggestion_review_job(*, job_id: str, suggestion_id: uuid.UUID) -> None:
+    run_suggestion_regeneration(suggestion_id=suggestion_id)
+    with _suggestion_jobs_lock:
+        _suggestion_jobs[job_id] = _SuggestionJob(status="Completed", suggestion_id=suggestion_id)
+
+
+@router.post(
+    "/{strategy_id}/suggestions/{suggestion_id}/review",
+    response_model=SuggestionReviewTriggerResponse,
+    status_code=202,
+)
+def trigger_suggestion_review(
+    strategy_id: uuid.UUID,
+    suggestion_id: uuid.UUID,
+    _user: User = Depends(_can_review_suggestion),
+) -> SuggestionReviewTriggerResponse:
+    with get_session() as session:
+        suggestion = session.get(StrategySuggestion, suggestion_id)
+        if suggestion is None or suggestion.strategy_id != strategy_id:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        if suggestion.status != "Pending":
+            raise HTTPException(
+                status_code=409, detail=f"Suggestion is already {suggestion.status}"
+            )
+
+    job_id = str(uuid.uuid4())
+    with _suggestion_jobs_lock:
+        _suggestion_jobs[job_id] = _SuggestionJob(status="Running", suggestion_id=suggestion_id)
+
+    threading.Thread(
+        target=_run_suggestion_review_job,
+        kwargs={"job_id": job_id, "suggestion_id": suggestion_id},
+        daemon=True,
+    ).start()
+    return SuggestionReviewTriggerResponse(job_id=job_id, status="Running")
+
+
+class SuggestionReviewJobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    suggestion: StrategySuggestionSummary | None = None
+
+
+@router.get("/suggestions/jobs/{job_id}/status", response_model=SuggestionReviewJobStatusResponse)
+def get_suggestion_review_job_status(job_id: str) -> SuggestionReviewJobStatusResponse:
+    with _suggestion_jobs_lock:
+        job = _suggestion_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail="Unknown suggestion review job (or the app restarted)"
+        )
+    with get_session() as session:
+        suggestion = session.get(StrategySuggestion, job.suggestion_id)
+        return SuggestionReviewJobStatusResponse(
+            job_id=job_id,
+            status=job.status,
+            suggestion=_to_suggestion_summary(suggestion) if suggestion is not None else None,
+        )

@@ -1,7 +1,16 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -144,3 +153,35 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     risk_assessment_notes: Mapped[str | None] = mapped_column(Text)
     deployment_recommendation: Mapped[str | None] = mapped_column(String(20))
     deployment_rationale: Mapped[str | None] = mapped_column(Text)
+
+
+class StrategySuggestion(Base, UUIDPKMixin, TimestampMixin):
+    """REL-048. A human-submitted free-text suggestion against a real Strategy, reviewed by a
+    lightweight LLM step (src/agents/nodes/suggestion_reviewer.py) and, if judged sound,
+    implemented by re-entering the real agent pipeline (build_suggestion_regeneration_graph(),
+    src/agents/graph.py) rather than a surgical field edit -- the resulting StrategyVersion/
+    BacktestResult come out shaped identically to any other run. `resulting_version_id` is only
+    ever set once `status` reaches `Applied`."""
+
+    __tablename__ = "strategy_suggestions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('Pending', 'Reviewing', 'Rejected', 'Applied')",
+            name="ck_suggestion_status",
+        ),
+    )
+
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=False, index=True
+    )
+    submitted_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    suggestion_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="Pending")
+    ai_verdict: Mapped[str | None] = mapped_column(Text)
+    ai_reasoning: Mapped[str | None] = mapped_column(Text)
+    resulting_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("strategy_versions.id")
+    )
+    reviewed_at: Mapped[datetime | None]

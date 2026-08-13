@@ -18,6 +18,7 @@ import { GoLiveGatePanel } from "./go-live-gate-panel";
 import { OptionLegsPanel } from "./option-legs-panel";
 import { ResearchContextPanel } from "./research-context-panel";
 import { StrategyLogicPanel } from "./strategy-logic-panel";
+import { SuggestionPanel } from "./suggestion-panel";
 import { VALIDATION_COLOR } from "./strategy-card";
 
 const BENCHMARK_SYMBOL = "^NSEI";
@@ -106,6 +107,10 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
             </span>
           ))}
         </div>
+      </Card>
+
+      <Card eyebrow="Collaborate" title="Suggest a Change">
+        <SuggestionPanel strategyId={strategyId} versions={strategy.versions} />
       </Card>
 
       <Card eyebrow="AI Pipeline" title="Strategy Logic">

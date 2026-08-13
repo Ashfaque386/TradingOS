@@ -173,3 +173,59 @@ def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
     graph.add_edge("deployment", END)
 
     return graph.compile()
+
+
+def build_suggestion_regeneration_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
+    """REL-048: a second, smaller compiled graph for the "AI-reviewed suggestion" feature
+    (`src/api/routers/strategies.py`'s suggestion-review background job) -- entry point
+    `strategy_generator`, sharing the exact same node functions and `route_after_compliance`/
+    `route_after_validation` conditional routers as `build_graph()` above, but terminating flatly
+    at `evaluator` instead of continuing into `optimization`/`risk_manager`/`deployment` or the
+    auto-retry/escalation loop (`memory_ingest`/`route_after_memory_ingest`). A suggestion-driven
+    regeneration produces exactly one new candidate `StrategyVersion` + `BacktestResult` for a
+    human to review like any other run -- it never auto-promotes or auto-retries on its own
+    rejection, unlike the main graph's Evaluator FAIL loop this reuses the prompt-injection path
+    of. The caller seeds `TradingOSGraphState.evaluation_verdict` with a synthetic FAIL verdict
+    carrying the human's suggestion text as `feedback_for_strategy_generator` -- `strategy_
+    generator_node` has no way to tell that verdict apart from a real Evaluator rejection, by
+    design (see that node's own module docstring)."""
+    graph = StateGraph(TradingOSGraphState)
+
+    graph.add_node(
+        "strategy_generator", _halt_on_entry("strategy_generator", strategy_generator_node)
+    )  # type: ignore[call-overload]
+    graph.add_node(
+        "options_strategy_agent",
+        _halt_on_entry("options_strategy_agent", options_strategy_node),
+    )  # type: ignore[call-overload]
+    graph.add_node(
+        "python_code_generator",
+        _halt_on_entry("python_code_generator", python_code_generator_node),
+    )  # type: ignore[call-overload]
+    graph.add_node("compliance", _halt_on_entry("compliance", compliance_node))  # type: ignore[call-overload]
+    graph.add_node("python_validator", _halt_on_entry("python_validator", python_validator_node))  # type: ignore[call-overload]
+    graph.add_node("backtesting", _halt_on_entry("backtesting", backtesting_node))  # type: ignore[call-overload]
+    graph.add_node("evaluator", _halt_on_entry("evaluator", evaluator_node))  # type: ignore[call-overload]
+
+    graph.set_entry_point("strategy_generator")
+    graph.add_edge("strategy_generator", "options_strategy_agent")
+    graph.add_edge("options_strategy_agent", "python_code_generator")
+    graph.add_edge("python_code_generator", "compliance")
+    graph.add_conditional_edges(
+        "compliance",
+        route_after_compliance,
+        {"python_validator": "python_validator", "END": END},
+    )
+    graph.add_conditional_edges(
+        "python_validator",
+        route_after_validation,
+        {
+            "backtesting": "backtesting",
+            "python_code_generator": "python_code_generator",
+            "END": END,
+        },
+    )
+    graph.add_edge("backtesting", "evaluator")
+    graph.add_edge("evaluator", END)
+
+    return graph.compile()

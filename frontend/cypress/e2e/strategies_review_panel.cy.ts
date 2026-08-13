@@ -100,4 +100,92 @@ describe("Strategies page (REL-044/045/046)", () => {
     cy.contains(FIXTURE_NAME).click();
     cy.contains("button", "Run Backtest").should("be.visible");
   });
+
+  // REL-047: the Asset/Style/Stage filter bar added to fix an always-growing, unfilterable
+  // Kanban board -- the two REL-044 fixtures are real, distinct rows to filter by (the F&O
+  // fixture is "Backtesting" stage/F&O asset class, the pre-migration one is "Ideation"/Equity),
+  // so this is a real narrowing check against real DOM content, not a mocked filter function.
+  it("Asset Class filter narrows the board to only matching strategies", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/strategies");
+    cy.contains(FIXTURE_NAME).should("exist");
+    cy.contains(PREMIGRATION_FIXTURE_NAME).should("exist");
+
+    cy.get('[aria-label="Asset"]').contains("button", "F&O").click();
+    cy.contains(FIXTURE_NAME).should("exist");
+    cy.contains(PREMIGRATION_FIXTURE_NAME).should("not.exist");
+
+    cy.get('[aria-label="Asset"]').contains("button", "All").click();
+    cy.contains(PREMIGRATION_FIXTURE_NAME).should("exist");
+  });
+
+  it("Stage filter collapses the board down to only the selected column", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/strategies");
+    cy.contains(FIXTURE_NAME).should("exist"); // Backtesting
+    cy.contains(PREMIGRATION_FIXTURE_NAME).should("exist"); // Ideation
+
+    cy.get('[aria-label="Stage"]').contains("button", "All").click(); // turns every stage off
+    cy.get('[aria-label="Stage"]').contains("button", "Backtesting").click(); // turn just this on
+    cy.contains(FIXTURE_NAME).should("exist");
+    cy.contains(PREMIGRATION_FIXTURE_NAME).should("not.exist");
+    // KanbanBoard renders exactly one grid-column-count class derived from the number of visible
+    // columns -- collapsing to a single stage should leave exactly one real column in the grid,
+    // not just fewer strategy cards inside all 5.
+    cy.get(".xl\\:grid-cols-1").should("exist");
+  });
+
+  it("Search filters the board by strategy name", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/strategies");
+    cy.get('input[aria-label="Search strategies"]').type("cypress-rel044-fno");
+    cy.contains(FIXTURE_NAME).should("exist");
+    cy.contains(PREMIGRATION_FIXTURE_NAME).should("not.exist");
+  });
+
+  // REL-048/049: submit a real suggestion against the real fixture strategy and list it as
+  // Pending -- no mocking, matching this file's own "no mocking, real running stack" convention.
+  it("submits a suggestion and lists it as Pending", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/strategies");
+    cy.contains(FIXTURE_NAME).click();
+
+    const suggestionText = `cypress suggestion ${Date.now()}: tighten the stop-loss`;
+    cy.contains("Suggest a Change").parents(".rounded-card").within(() => {
+      cy.get("textarea").type(suggestionText);
+      cy.contains("button", "Submit Suggestion").click();
+    });
+
+    cy.contains(suggestionText).should("be.visible");
+    cy.contains(suggestionText)
+      .parents(".rounded-xl")
+      .contains("Pending")
+      .should("be.visible");
+  });
+
+  // REL-048/049: a real end-to-end AI review -- submits, triggers the real review (real LLM
+  // calls, a real regeneration through the agent pipeline), and waits for a real terminal state.
+  // Slow: matches this project's own real backtest/graph-run Cypress timing (multiple minutes).
+  it("AI review resolves a suggestion to a real terminal state", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/strategies");
+    cy.contains(FIXTURE_NAME).click();
+
+    const suggestionText = `cypress ai-review ${Date.now()}: tighten the stop-loss to reduce max drawdown`;
+    cy.contains("Suggest a Change").parents(".rounded-card").within(() => {
+      cy.get("textarea").type(suggestionText);
+      cy.contains("button", "Submit Suggestion").click();
+    });
+
+    cy.contains(suggestionText)
+      .parents(".rounded-xl")
+      .as("suggestionRow");
+    cy.get("@suggestionRow").contains("button", "Ask AI to Review").click();
+
+    // A real regeneration re-enters the full agent pipeline (multiple real LLM calls, a real
+    // sandboxed backtest) -- generous timeout matching this project's own real-run tests.
+    cy.get("@suggestionRow", { timeout: 240_000 }).within(() => {
+      cy.contains(/Applied|Rejected/, { timeout: 240_000 }).should("be.visible");
+    });
+  });
 });

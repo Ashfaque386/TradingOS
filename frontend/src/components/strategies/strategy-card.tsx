@@ -1,5 +1,6 @@
 "use client";
 
+import { BarChart3 } from "lucide-react";
 import { motion, type PanInfo } from "framer-motion";
 import { useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,11 @@ const VALIDATION_DOT_COLOR: Record<string, string> = {
   Passed: "bg-up",
   Failed: "bg-down",
   Pending: "bg-warn",
+};
+
+const ASSET_CLASS_TAG: Record<string, string> = {
+  "F&O": "border-brand-via/30 bg-brand-via/[0.08] text-brand-via",
+  Equity: "border-card-edge bg-bg text-text-dim",
 };
 
 export function StrategyCard({
@@ -56,15 +62,15 @@ export function StrategyCard({
         if (!dragging.current) onSelect();
       }}
       className={cn(
-        "select-none rounded-xl border p-3 transition-colors",
+        "select-none rounded-xl border p-3 transition-all",
         draggable && "cursor-grab active:cursor-grabbing",
         selected
-          ? "border-brand-via/40 bg-brand-via/[0.06]"
-          : "border-card-edge bg-panel hover:border-text-faint",
+          ? "border-brand-via/40 bg-brand-via/[0.06] shadow-card"
+          : "border-card-edge bg-panel hover:border-text-faint hover:shadow-card",
       )}
     >
       <div className="flex items-start justify-between gap-1.5">
-        <p className="line-clamp-2 text-xs font-medium text-text">{strategy.name}</p>
+        <p className="line-clamp-2 text-xs font-medium leading-snug text-text">{strategy.name}</p>
         {strategy.current_version_validation_status && (
           <span
             className={cn(
@@ -76,21 +82,32 @@ export function StrategyCard({
         )}
       </div>
       {strategy.hypothesis && (
-        <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-text-faint">
+        <p className="mt-1.5 line-clamp-2 text-[10px] leading-relaxed text-text-faint">
           {strategy.hypothesis}
         </p>
       )}
-      <div className="mt-2 flex items-center justify-between text-[10px] text-text-faint">
-        <span>
-          {strategy.asset_class} · {strategy.style}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1">
+        <span
+          className={cn(
+            "rounded-full border px-1.5 py-0.5 text-[9px] font-medium",
+            ASSET_CLASS_TAG[strategy.asset_class] ?? "border-card-edge bg-bg text-text-dim",
+          )}
+        >
+          {strategy.asset_class}
+        </span>
+        <span className="rounded-full border border-card-edge bg-bg px-1.5 py-0.5 text-[9px] text-text-faint">
+          {strategy.style}
         </span>
         {strategy.universe && strategy.universe.length > 0 && (
-          <span className="font-mono-tabular text-text-dim">{strategy.universe[0]}</span>
+          <span className="font-mono-tabular ml-auto text-[9px] text-text-dim">
+            {strategy.universe[0]}
+          </span>
         )}
       </div>
       {strategy.backtest_count > 0 && (
         <div className="mt-1.5 flex items-center gap-1 text-[9px] text-text-faint">
-          <span className="rounded-full bg-bg px-1.5 py-0.5 font-mono-tabular">
+          <BarChart3 className="h-2.5 w-2.5" />
+          <span className="font-mono-tabular">
             {strategy.backtest_count} {strategy.backtest_count === 1 ? "backtest" : "backtests"}
           </span>
         </div>

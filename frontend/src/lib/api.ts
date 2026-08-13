@@ -259,6 +259,33 @@ export interface StrategyVersionSummary {
   option_rationale: string | null;
 }
 
+// REL-048: a human-submitted suggestion against a real strategy, reviewed by a lightweight LLM
+// step and -- if judged sound -- implemented by re-entering the real agent pipeline, producing a
+// genuine new StrategyVersion + BacktestResult (`resulting_version_id`) rather than a field edit.
+export interface StrategySuggestion {
+  id: string;
+  strategy_id: string;
+  submitted_by_user_id: string;
+  suggestion_text: string;
+  status: "Pending" | "Reviewing" | "Rejected" | "Applied";
+  ai_verdict: string | null;
+  ai_reasoning: string | null;
+  resulting_version_id: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface SuggestionReviewTriggerResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface SuggestionReviewJobStatus {
+  job_id: string;
+  status: "Running" | "Completed";
+  suggestion: StrategySuggestion | null;
+}
+
 export interface BacktestSummary {
   id: string;
   strategy_version_id: string;
@@ -872,6 +899,20 @@ export const api = {
     `/api/v1/strategies/backtests/${backtestId}/export${toQuery({ format })}`,
   promoteStrategy: (id: string, toStatus: StrategyStatus) =>
     post<StrategySummary>(`/api/v1/strategies/${id}/promote`, { to_status: toStatus }),
+
+  // REL-048/049: suggest a change to a strategy; any authenticated user can submit, SA/PM/RM can
+  // trigger the AI review that -- if the suggestion is judged sound -- re-enters the real agent
+  // pipeline and produces a genuine new StrategyVersion + BacktestResult.
+  listSuggestions: (strategyId: string) =>
+    get<StrategySuggestion[]>(`/api/v1/strategies/${strategyId}/suggestions`),
+  submitSuggestion: (strategyId: string, text: string) =>
+    post<StrategySuggestion>(`/api/v1/strategies/${strategyId}/suggestions`, { text }),
+  reviewSuggestion: (strategyId: string, suggestionId: string) =>
+    post<SuggestionReviewTriggerResponse>(
+      `/api/v1/strategies/${strategyId}/suggestions/${suggestionId}/review`,
+    ),
+  suggestionReviewJobStatus: (jobId: string) =>
+    get<SuggestionReviewJobStatus>(`/api/v1/strategies/suggestions/jobs/${jobId}/status`),
 
   integrationsStatus: () => get<IntegrationsStatus>("/api/v1/settings/integrations"),
   notificationChannels: () =>
