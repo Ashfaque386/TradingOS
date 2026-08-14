@@ -175,6 +175,37 @@ def execution_latency() -> ExecutionLatencySummary:
     )
 
 
+class OrderDetailResponse(OrderResponse):
+    """API-056, adapted from the SRS's own "Order detail incl. broker ack and fills" wording --
+    `broker_order_id`/`acknowledged_at` already on `OrderResponse` cover the broker ack; `fills`
+    adds the real `Trade` rows this order produced (a Live order can fill in more than one Trade
+    on a partial execution), read fresh from DB-009 rather than duplicating fill logic here."""
+
+    broker_order_id: str | None
+    fills: list[TradeResponse]
+
+
+@router.get("/orders/{order_id}", response_model=OrderDetailResponse)
+def get_order(order_id: uuid.UUID) -> OrderDetailResponse:
+    """Registered after the /orders/execution-latency literal-path route above (and before
+    POST /orders further below) -- FastAPI matches routes in registration order, so this dynamic
+    {order_id} path must never come before a literal /orders/... path or it would shadow it (a
+    request for /orders/execution-latency would otherwise bind order_id="execution-latency" and
+    422 on UUID parsing instead of reaching the real endpoint)."""
+    with get_session() as session:
+        order = session.get(Order, order_id)
+        if order is None:
+            raise HTTPException(status_code=404, detail="Unknown order_id")
+        fills = session.scalars(
+            select(Trade).where(Trade.order_id == order_id).order_by(Trade.executed_at)
+        )
+        return OrderDetailResponse(
+            **_order_to_response(order).model_dump(),
+            broker_order_id=order.broker_order_id,
+            fills=[_trade_to_response(t) for t in fills],
+        )
+
+
 def _get_or_create_live_account(session: Session, user_id: uuid.UUID) -> Account:
     """No Live Account DB row has ever existed in this system -- Live dashboard/portfolio reads
     have always gone straight to the broker API, never a DB row (unlike the seeded Paper

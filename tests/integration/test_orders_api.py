@@ -188,6 +188,56 @@ def test_execution_latency_endpoint_returns_a_real_summary_shape():
         assert body["avg_ms"] == (body["total_seconds"] / body["sample_count"] * 1000)
 
 
+# REL-058: GET /orders/{order_id} (API-056).
+
+
+def test_get_order_returns_the_real_order_and_its_real_fills():
+    strategy_id = _seed_strategy()
+    symbol = f"TESTSYM{uuid.uuid4().hex[:6].upper()}"
+    order_id = _seed_order(strategy_id=strategy_id, symbol=symbol)
+    trade_id = _seed_trade(strategy_id=strategy_id, order_id=order_id, symbol=symbol)
+    try:
+        response = client.get(f"/api/v1/orders/{order_id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == str(order_id)
+        assert body["symbol"] == symbol
+        assert body["status"] == "FILLED"
+        assert len(body["fills"]) == 1
+        assert body["fills"][0]["id"] == str(trade_id)
+        assert body["fills"][0]["price"] == 100.0
+    finally:
+        _cleanup_orders(order_id)
+        _cleanup_strategy(strategy_id)
+
+
+def test_get_order_with_no_fills_returns_an_empty_fills_list():
+    strategy_id = _seed_strategy()
+    order_id = _seed_order(strategy_id=strategy_id, symbol="TESTSYMNOFILL", status="PENDING")
+    try:
+        response = client.get(f"/api/v1/orders/{order_id}")
+        assert response.status_code == 200
+        assert response.json()["fills"] == []
+    finally:
+        _cleanup_orders(order_id)
+        _cleanup_strategy(strategy_id)
+
+
+def test_get_order_unknown_id_is_a_404():
+    response = client.get(f"/api/v1/orders/{uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+def test_get_order_does_not_shadow_the_execution_latency_literal_path():
+    """Regression guard: GET /orders/{order_id} is registered ahead of a dynamic-path pitfall --
+    it must never intercept the literal /orders/execution-latency route above it in this file.
+    A real HTTP request through the app's real routing (not a direct function call) is the only
+    way this would actually be caught."""
+    response = client.get("/api/v1/orders/execution-latency")
+    assert response.status_code == 200
+    assert "sample_count" in response.json()
+
+
 # REL-055: POST /orders, DELETE /orders/{order_id}, POST /positions/{symbol}/close.
 
 

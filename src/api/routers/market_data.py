@@ -32,6 +32,7 @@ from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
+from src.data.datalake.freshness import check_freshness
 from src.data.datalake.query import DataLake, IntradayDataLake
 from src.data.ingest.pipeline import ADAPTERS
 from src.data.ingest.pipeline import run as run_ingestion
@@ -81,6 +82,51 @@ def list_symbols() -> list[str]:
     fabricated universe (same source `DataLake.list_symbols()` already used by the Scheduler's
     Data Freshness gate)."""
     return _daily_lake().list_symbols()
+
+
+class SymbolFreshness(BaseModel):
+    symbol: str
+    is_fresh: bool
+    expected_date: date
+    latest_available: date | None
+
+
+class DatalakeStatusResponse(BaseModel):
+    status: Literal["Fresh", "Stale"]
+    as_of: date
+    total_symbols: int
+    stale_symbols: list[SymbolFreshness]
+
+
+@router.get("/datalake/status", response_model=DatalakeStatusResponse)
+def get_datalake_status(as_of: date | None = None) -> DatalakeStatusResponse:
+    """API-037 (SRS Business Rule 4). Reuses `check_freshness()`
+    (src/data/datalake/freshness.py) -- the exact same real, NSE-holiday-calendar-aware check
+    `src/engine/backtest/data_feed.py` and the Scheduler's own pre-research-cycle gate
+    (src/agents/scheduler.py) already enforce before a backtest or research cycle can run -- run
+    across every symbol currently in the daily EOD lake, so this can never drift from what those
+    real gates actually see. An empty lake (nothing ingested yet) reports Stale, not Fresh --
+    there being no data to check is not the same as the data being current."""
+    reference = as_of or date.today()
+    lake = _daily_lake()
+    symbols = lake.list_symbols()
+    stale = [
+        SymbolFreshness(
+            symbol=result.symbol,
+            is_fresh=result.is_fresh,
+            expected_date=result.expected_date,
+            latest_available=result.latest_available,
+        )
+        for symbol in symbols
+        for result in [check_freshness(lake, symbol, reference)]
+        if not result.is_fresh
+    ]
+    return DatalakeStatusResponse(
+        status="Fresh" if symbols and not stale else "Stale",
+        as_of=reference,
+        total_symbols=len(symbols),
+        stale_symbols=stale,
+    )
 
 
 @router.get("/ohlcv/{symbol}", response_model=list[OhlcvBar])

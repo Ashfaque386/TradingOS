@@ -14,8 +14,10 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.brokers.factory import NoBrokerConfigured, build_broker
+from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
+from src.data.datalake.query import DataLake
 from src.models.corporate_action import CorporateAction
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
@@ -139,6 +141,41 @@ def test_option_chain_against_a_real_broker():
         )
     body = response.json()
     assert body["underlying"] == "NIFTY"
+
+
+# REL-058: GET /datalake/status (API-037, SRS Business Rule 4).
+
+
+def _daily_lake() -> DataLake:
+    return DataLake(get_settings().data_lake_root / "ohlcv_daily")
+
+
+def test_datalake_status_is_not_stale_for_a_real_symbol_as_of_its_own_latest_partition():
+    latest = _daily_lake().latest_date(_REAL_SYMBOL)
+    assert latest is not None  # this real symbol has real ingested data (see module docstring)
+
+    response = client.get("/api/v1/market/datalake/status", params={"as_of": latest.isoformat()})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_symbols"] > 0
+    stale_symbols = {s["symbol"] for s in body["stale_symbols"]}
+    assert _REAL_SYMBOL not in stale_symbols
+
+
+def test_datalake_status_reports_stale_for_a_real_symbol_far_in_the_future():
+    response = client.get("/api/v1/market/datalake/status", params={"as_of": "2030-01-01"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "Stale"
+    stale_entry = next(s for s in body["stale_symbols"] if s["symbol"] == _REAL_SYMBOL)
+    assert stale_entry["is_fresh"] is False
+    assert stale_entry["latest_available"] == _daily_lake().latest_date(_REAL_SYMBOL).isoformat()
+
+
+def test_datalake_status_defaults_as_of_to_today():
+    response = client.get("/api/v1/market/datalake/status")
+    assert response.status_code == 200
+    assert response.json()["as_of"] == date.today().isoformat()
 
 
 # REL-055: POST /ingest/trigger + GET /ingest/jobs/{job_id}/status.
