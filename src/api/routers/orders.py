@@ -26,9 +26,10 @@ same `execute_paper_trade()` API-111 already calls, not a second implementation 
 human's direct request, not through the AI pipeline or the paper-trading simulator.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -52,6 +53,7 @@ from src.engine.paper_trading.execution_service import NoLiquidityError, execute
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.paper_trading.position_accounting import replay_ledger
 from src.engine.risk import kill_switch_service
+from src.memory.redis_client import get_redis_client, publish_order_event
 from src.models.account import Account
 from src.models.paper_trading import PaperTrade
 from src.models.strategy import Strategy
@@ -66,6 +68,23 @@ router = APIRouter(prefix="/api/v1", tags=["orders"])
 _can_place_order = require_role(
     ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
 )
+
+
+def _publish_order_event(event: dict[str, Any]) -> None:
+    """REL-061 (API-093): a real, best-effort publish to the live order-status stream (relayed
+    verbatim by `GET /stream/orders`, src/api/routers/streams.py) -- a fresh Redis connection per
+    call, matching this codebase's own established per-use-connection convention rather than a
+    long-lived global client. A Redis hiccup must never block a real order placement/cancellation
+    (the actual broker call and DB write already succeeded by the time this fires), so publish
+    failures are swallowed, not raised."""
+    try:
+        client = get_redis_client()
+        try:
+            publish_order_event(client, json.dumps(event))
+        finally:
+            client.close()
+    except Exception:  # noqa: BLE001 -- a display-feed publish failure must never fail the order
+        pass
 
 
 class OrderResponse(BaseModel):
@@ -325,6 +344,17 @@ async def place_order(
                 },
             )
             session.commit()
+            _publish_order_event(
+                {
+                    "account_scope": "Paper",
+                    "paper_trade_id": str(trade.id),
+                    "symbol": trade.symbol,
+                    "side": trade.side,
+                    "quantity": trade.filled_quantity,
+                    "status": "FILLED",
+                    "ts": trade.executed_at.isoformat(),
+                }
+            )
             return PlaceOrderResponse(
                 account_scope="Paper",
                 symbol=trade.symbol,
@@ -381,6 +411,18 @@ async def place_order(
         )
         session.commit()
         session.refresh(order)
+        _publish_order_event(
+            {
+                "account_scope": "Live",
+                "order_id": str(order.id),
+                "broker_order_id": order.broker_order_id,
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": order.quantity,
+                "status": order.status,
+                "ts": order.requested_at.isoformat(),
+            }
+        )
         return PlaceOrderResponse(
             account_scope="Live",
             symbol=order.symbol,
@@ -425,6 +467,18 @@ async def cancel_order(
         )
         session.commit()
         session.refresh(order)
+        _publish_order_event(
+            {
+                "account_scope": "Live",
+                "order_id": str(order.id),
+                "broker_order_id": order.broker_order_id,
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": order.quantity,
+                "status": order.status,
+                "ts": datetime.now(UTC).isoformat(),
+            }
+        )
         return _order_to_response(order)
 
 

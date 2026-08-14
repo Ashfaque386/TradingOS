@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.engine.risk.ws_latency_guard_service import get_latency_guard
-from src.memory.redis_client import get_redis_client, publish_agent_log, publish_tick
+from src.memory.redis_client import (
+    get_redis_client,
+    publish_agent_log,
+    publish_order_event,
+    publish_tick,
+)
 
 
 def test_market_stream_relays_a_real_published_tick():
@@ -61,6 +66,31 @@ def test_agent_logs_stream_relays_a_real_published_log():
             "ts": "2026-01-15T10:00:00+00:00",
         }
         publish_agent_log(redis_client, json.dumps(payload))
+
+        received = websocket.receive_text()
+
+    assert json.loads(received) == payload
+
+
+def test_order_events_stream_relays_a_real_published_event():
+    """REL-061 (API-093). Same verbatim-relay shape as /agents/logs above -- the real publisher
+    is src/api/routers/orders.py's place_order()/cancel_order(), verified separately in
+    tests/integration/test_orders_api.py; this only proves the relay side."""
+    client = TestClient(app)
+    with client.websocket_connect("/api/v1/stream/orders") as websocket:
+        redis_client = get_redis_client()
+        time.sleep(0.2)
+        payload = {
+            "account_scope": "Live",
+            "order_id": "11111111-1111-1111-1111-111111111111",
+            "broker_order_id": "BROKER-ORDER-9",
+            "symbol": "RELIANCE",
+            "side": "BUY",
+            "quantity": 10,
+            "status": "OPEN",
+            "ts": "2026-01-15T10:00:00+00:00",
+        }
+        publish_order_event(redis_client, json.dumps(payload))
 
         received = websocket.receive_text()
 

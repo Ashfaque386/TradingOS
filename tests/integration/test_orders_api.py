@@ -3,6 +3,7 @@ real FastAPI app + real Postgres. Mirrors tests/integration/test_paper_trading_a
 seed/cleanup pattern, over the real ORDERS/TRADES tables instead of the paper ledger.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -19,6 +20,7 @@ from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_READ_ONLY_AUDITOR
 from src.engine.live.execution_pipeline import RiskRejected
 from src.engine.paper_trading.execution_service import NoLiquidityError
+from src.memory.redis_client import ORDER_EVENT_CHANNEL, get_redis_client
 from src.models.account import Account
 from src.models.paper_trading import PaperTrade
 from src.models.strategy import Strategy
@@ -320,6 +322,51 @@ def test_place_order_live_places_a_real_broker_order_when_confirmed():
         _cleanup_strategy(strategy_id)
 
 
+def test_place_order_live_publishes_a_real_order_event():
+    """REL-061 (API-093): a real message lands on the real order-status stream's own Redis
+    channel -- the exact same channel GET /stream/orders relays verbatim, so this proves the
+    publish side of that wiring for real, not just that a function was called."""
+    strategy_id = _seed_strategy()
+    user_id, token = create_authenticated_user(ROLE_PORTFOLIO_MANAGER)
+    order_id = None
+    redis_client = get_redis_client()
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe(ORDER_EVENT_CHANNEL)
+    pubsub.get_message(timeout=1.0)  # the subscribe confirmation itself, not a real event
+    try:
+        fake_broker = AsyncMock()
+        fake_broker.place_order.return_value = BrokerOrderResponse(
+            broker_order_id="BROKER-ORDER-STREAM",
+            status="OPEN",
+            symbol="TESTSYM",
+            side="BUY",
+            order_type="MARKET",
+            quantity=10,
+        )
+        with patch("src.api.routers.orders.build_broker", return_value=fake_broker):
+            response = client.post(
+                "/api/v1/orders", json=_place_order_body(strategy_id), headers=auth_header(token)
+            )
+        assert response.status_code == 201
+        order_id = uuid.UUID(response.json()["order_id"])
+
+        message = pubsub.get_message(timeout=2.0)
+        assert message is not None, "no real message arrived on the order-events channel"
+        event = json.loads(message["data"])
+        assert event["account_scope"] == "Live"
+        assert event["order_id"] == str(order_id)
+        assert event["broker_order_id"] == "BROKER-ORDER-STREAM"
+        assert event["status"] == "OPEN"
+    finally:
+        pubsub.unsubscribe(ORDER_EVENT_CHANNEL)
+        pubsub.close()
+        redis_client.close()
+        if order_id is not None:
+            _cleanup_orders(order_id)
+        cleanup_user(user_id)
+        _cleanup_strategy(strategy_id)
+
+
 def test_place_order_live_kill_switch_tripped_blocks_before_any_broker_call():
     strategy_id = _seed_strategy()
     user_id, token = create_authenticated_user(ROLE_PORTFOLIO_MANAGER)
@@ -448,6 +495,47 @@ def test_cancel_order_calls_real_broker_cancel():
         assert response.json()["status"] == "CANCELLED"
         fake_broker.cancel_order.assert_called_once_with("BROKER-ORDER-2")
     finally:
+        _cleanup_orders(order_id)
+        cleanup_user(user_id)
+        _cleanup_strategy(strategy_id)
+
+
+def test_cancel_order_publishes_a_real_order_event():
+    strategy_id = _seed_strategy()
+    user_id, token = create_authenticated_user(ROLE_PORTFOLIO_MANAGER)
+    order_id = _seed_order(strategy_id=strategy_id, symbol="TESTSYM")
+    with get_session() as session:
+        order = session.get(Order, order_id)
+        order.broker_order_id = "BROKER-ORDER-CANCEL-STREAM"
+        session.commit()
+    redis_client = get_redis_client()
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe(ORDER_EVENT_CHANNEL)
+    pubsub.get_message(timeout=1.0)
+    try:
+        fake_broker = AsyncMock()
+        fake_broker.cancel_order.return_value = BrokerOrderResponse(
+            broker_order_id="BROKER-ORDER-CANCEL-STREAM",
+            status="CANCELLED",
+            symbol="TESTSYM",
+            side="BUY",
+            order_type="MARKET",
+            quantity=10,
+        )
+        with patch("src.api.routers.orders.build_broker", return_value=fake_broker):
+            response = client.delete(f"/api/v1/orders/{order_id}", headers=auth_header(token))
+        assert response.status_code == 200
+
+        message = pubsub.get_message(timeout=2.0)
+        assert message is not None, "no real message arrived on the order-events channel"
+        event = json.loads(message["data"])
+        assert event["order_id"] == str(order_id)
+        assert event["status"] == "CANCELLED"
+        assert event["broker_order_id"] == "BROKER-ORDER-CANCEL-STREAM"
+    finally:
+        pubsub.unsubscribe(ORDER_EVENT_CHANNEL)
+        pubsub.close()
+        redis_client.close()
         _cleanup_orders(order_id)
         cleanup_user(user_id)
         _cleanup_strategy(strategy_id)

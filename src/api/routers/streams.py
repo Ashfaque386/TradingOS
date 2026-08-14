@@ -9,6 +9,9 @@
     pub/sub channel for portfolio state -- unlike ticks/agent-logs, nothing publishes it, so
     this endpoint polls the same broker.get_positions()/get_margin() calls
     src/api/routers/portfolio.py uses, rather than relaying an existing feed).
+  API-093 WS `/stream/orders` -- live order status updates (placed/filled/cancelled),
+    published by src/api/routers/orders.py's place_order()/cancel_order() (REL-061) at the one
+    and only place Order/PaperTrade rows are ever created or transitioned in this codebase.
 
 Both endpoints are thin relays: subscribe to the relevant Redis pub/sub channel(s) and forward
 each message to the connected WebSocket client as JSON, reshaping tick payloads to the exact
@@ -34,7 +37,7 @@ from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.db import get_session
 from src.engine.live.tick_listener import get_async_redis_client
 from src.engine.risk.ws_latency_guard_service import get_latency_guard
-from src.memory.redis_client import AGENT_LOG_CHANNEL, TICK_CHANNEL_PREFIX
+from src.memory.redis_client import AGENT_LOG_CHANNEL, ORDER_EVENT_CHANNEL, TICK_CHANNEL_PREFIX
 from src.observability.metrics import WS_STREAM_LATENCY_SECONDS
 
 _PORTFOLIO_POLL_INTERVAL_SECONDS = 3.0
@@ -98,6 +101,26 @@ async def stream_agent_logs(websocket: WebSocket) -> None:
         pass
     finally:
         await pubsub.unsubscribe(AGENT_LOG_CHANNEL)
+        await pubsub.aclose()  # type: ignore[no-untyped-call]
+        await client.aclose()
+
+
+@router.websocket("/orders")
+async def stream_order_events(websocket: WebSocket) -> None:
+    """API-093 (REL-061). Same thin verbatim-relay shape as /agents/logs above."""
+    await websocket.accept()
+    client = get_async_redis_client()
+    pubsub = client.pubsub()
+    await pubsub.subscribe(ORDER_EVENT_CHANNEL)
+    try:
+        async for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+            await websocket.send_text(message["data"])
+    except Exception:
+        pass
+    finally:
+        await pubsub.unsubscribe(ORDER_EVENT_CHANNEL)
         await pubsub.aclose()  # type: ignore[no-untyped-call]
         await client.aclose()
 
