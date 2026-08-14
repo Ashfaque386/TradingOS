@@ -1330,9 +1330,12 @@ class RetryResponse(BaseModel):
 
 @router.post("/runs/{run_id}/retry", response_model=RetryResponse, status_code=202)
 def retry_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> RetryResponse:
-    """API-021. Valid only for a run that genuinely ended `"Failed"` -- dispatches a fresh
-    end-to-end graph run via the same detached-thread machinery as `/research/trigger`, with
-    `retried_from_run_id` linking it back to the run a human asked to retry."""
+    """API-024 (previously mislabeled "API-021" here, which is actually
+    `/orchestrator/runs/{run_id}/resume`, still No -- see approve_run()'s note on why no
+    pause/resume state machine exists). Valid only for a run that genuinely ended `"Failed"` --
+    dispatches a fresh end-to-end graph run via the same detached-thread machinery as
+    `/research/trigger`, with `retried_from_run_id` linking it back to the run a human asked to
+    retry."""
     with get_session() as session:
         failed = session.get(AgentRun, run_id)
         if failed is None:

@@ -1,4 +1,4 @@
-"""Broker configuration & read endpoints (REL-010 E10.8b, API-051..060).
+"""Broker configuration & read endpoints (REL-010 E10.8b).
 
 Permanently excludes any order-mutation route -- Business Rule 3 ("the system NEVER places a
 real trade/order programmatically without explicit human action") is enforced here by the
@@ -9,6 +9,14 @@ src/api/routers/portfolio.py's E10.5 test applies to itself.
 `/status` and `/order-book` are plain reads (ungated, matching every other broker read in this
 codebase -- see market_data.py's module docstring). Writing/deleting a broker's stored Vault
 credential is real credential management and stays SystemAdministrator-only.
+
+UPDATE 2026-08-14 (REL-059): this module used to advertise itself as "API-051..060", a loose
+range -- API-054..060 (order placement/cancel/detail, positions, portfolio margin/PnL) belong to
+other routers (src/api/routers/orders.py, portfolio.py), not this file. This file's own real IDs
+are API-051 (`GET /broker/status`), API-052 (`POST /broker/credentials/{broker}`), and API-053
+(`GET /broker/order-book`) -- see each route's own docstring below. `DELETE
+/broker/credentials/{broker}` has no dedicated ERDTM row at all; API-052's own note calls it out
+as "a DELETE counterpart also added, beyond this spec row."
 """
 
 import httpx
@@ -48,8 +56,10 @@ def broker_status() -> BrokerStatusResponse:
 
 @router.get("/order-book", response_model=list[OrderResponse])
 async def broker_order_book() -> list[OrderResponse]:
-    """API-052. Real live order book (read-only -- BrokerAdapter has no method to place, modify,
-    or cancel an order anywhere in this codebase)."""
+    """API-053 (previously mislabeled "API-052" here, which is actually
+    `POST /broker/credentials/{broker}` -- see set_broker_credentials() below). Real live order
+    book (read-only -- BrokerAdapter has no method to place, modify, or cancel an order anywhere
+    in this codebase)."""
     try:
         broker = build_broker()
     except NoBrokerConfigured as exc:
@@ -72,9 +82,10 @@ def set_broker_credentials(
     body: BrokerCredentialsRequest,
     _user: User = Depends(_can_manage_broker_credentials),
 ) -> None:
-    """API-053. Writes to the real dev Vault via `write_broker_credentials` (already used by
-    src/brokers/factory.py's Vault-first credential resolution) -- a 503 here means Vault is
-    genuinely unreachable, not a fabricated success."""
+    """API-052 (previously mislabeled "API-053" here, which is actually `GET /broker/order-book`
+    -- see broker_order_book() above). Writes to the real dev Vault via
+    `write_broker_credentials` (already used by src/brokers/factory.py's Vault-first credential
+    resolution) -- a 503 here means Vault is genuinely unreachable, not a fabricated success."""
     if not vault.write_broker_credentials(broker, body.credentials):
         raise HTTPException(status_code=503, detail="Vault unreachable -- credentials not stored")
 
@@ -83,5 +94,7 @@ def set_broker_credentials(
 def remove_broker_credentials(
     broker: str, _user: User = Depends(_can_manage_broker_credentials)
 ) -> None:
-    """API-054."""
+    """Not tracked under its own API Traceability row -- API-052's own note calls this DELETE
+    counterpart out as "added, beyond this spec row." Previously mislabeled "API-054" here, which
+    is actually `POST /orders` (place an order; see src/api/routers/orders.py)."""
     vault.delete_broker_credentials(broker)
