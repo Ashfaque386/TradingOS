@@ -150,9 +150,11 @@ def get_daily_ohlcv(
 
 @router.get("/ohlcv-intraday/{symbol}", response_model=list[IntradayBar])
 def get_intraday_ohlcv(symbol: str, day: date | None = None) -> list[IntradayBar]:
-    """API-034. Reads the real E10.7 minute-bar lake -- returns an empty list, not an error, if
-    nothing has been ingested for this symbol/day yet (the intraday ingestion scheduler job runs
-    only during real NSE market hours)."""
+    """Not tracked under its own API Traceability row (confirmed 2026-08-14: no row anywhere in
+    the sheet mentions intraday OHLCV) -- previously mislabeled "API-034" here, which is actually
+    `/market/quote/{symbol}` (see get_quote() below). Reads the real E10.7 minute-bar lake --
+    returns an empty list, not an error, if nothing has been ingested for this symbol/day yet
+    (the intraday ingestion scheduler job runs only during real NSE market hours)."""
     lake = IntradayDataLake(get_settings().data_lake_root / "ohlcv_intraday")
     df = lake.read_symbol(symbol, day=day)
     return [
@@ -195,7 +197,9 @@ def get_corporate_actions(symbol: str) -> list[CorporateActionResponse]:
 
 @router.get("/quote/{symbol}", response_model=Quote)
 async def get_quote(symbol: str) -> Quote:
-    """API-036. Real live broker quote (BrokerAdapter.get_quote), same broker-factory pattern as
+    """API-034 (previously mislabeled "API-036" here, which is actually
+    `/market/ingest/trigger`; see trigger_ingest() below). Real live broker quote
+    (BrokerAdapter.get_quote), same broker-factory pattern as
     src/api/routers/portfolio.py's `_get_broker()`."""
     try:
         broker = build_broker()
@@ -211,9 +215,11 @@ async def get_quote(symbol: str) -> Quote:
 
 @router.get("/option-chain/{underlying}", response_model=OptionChain)
 async def get_option_chain(underlying: str, expiry: date) -> OptionChain:
-    """API-037. Real live option chain via the E10.4 broker adapters (Kite's real /instruments +
-    /quote, or Upstox's real instruments/quote endpoints), with locally-computed IV where the
-    broker doesn't already return one."""
+    """Not tracked under its own API Traceability row (confirmed 2026-08-14: no row anywhere in
+    the sheet mentions option chains) -- previously mislabeled "API-037" here, which is actually
+    `/market/datalake/status` (see get_datalake_status() above). Real live option chain via the
+    E10.4 broker adapters (Kite's real /instruments + /quote, or Upstox's real instruments/quote
+    endpoints), with locally-computed IV where the broker doesn't already return one."""
     try:
         broker = build_broker()
     except NoBrokerConfigured as exc:
