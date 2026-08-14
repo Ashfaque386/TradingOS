@@ -11,6 +11,7 @@ from src.agents.prompt_registry import PromptNotFoundError, get_active_prompt, g
         ("strategy_generator_agent", "PMPT-003"),
         ("python_code_generator_agent", "PMPT-004"),
         ("python_validator_agent", "PMPT-005"),
+        ("ceo_agent_chat", "PMPT-026"),
         ("ceo_agent_task", "PMPT-027"),
         ("market_analyst_agent_task", "PMPT-028"),
         ("strategy_generator_agent_task", "PMPT-029"),
@@ -68,6 +69,22 @@ def test_task_prompts_are_real_format_templates_not_static_text():
         # `{}` for an empty dict legitimately contain braces themselves, so checking the
         # *rendered* text for a leftover "{" would be a false signal either way).
         template.format(**kwargs)
+
+
+def test_ceo_agent_chat_prompt_is_real_and_distinct_from_the_batch_ceo_prompt():
+    """PMPT-026: src/api/routers/chat.py deliberately keeps the chat prompt on its own slug,
+    separate from ceo_agent (PMPT-001), specifically so hot-swapping one in the Prompt
+    Management UI can never accidentally break the other -- this test confirms that separation
+    is real, not just documented, and that the chat prompt actually reads as a chat prompt
+    (conversational, no fixed-schema-directive framing)."""
+    chat_prompt = get_active_prompt("ceo_agent_chat")
+    batch_prompt = get_active_prompt("ceo_agent")
+
+    assert chat_prompt != batch_prompt
+    assert len(chat_prompt) > 100
+    assert "chat" in chat_prompt.lower()
+    assert "PMPT-001" in chat_prompt  # names its batch-mode counterpart explicitly
+    assert "ground your answers in that real data" in chat_prompt.lower()
 
 
 def test_all_five_e23_agents_have_distinct_nonempty_prompts():
