@@ -177,7 +177,11 @@ class AgentRunDurationSummary(BaseModel):
 
 @observability_router.get("/agent-run-durations", response_model=list[AgentRunDurationSummary])
 def agent_run_durations(_user: User = Depends(_can_read_audit)) -> list[AgentRunDurationSummary]:
-    """REL-010 E10.8e (API-073). Thin wrapper over the real, already-scraped
+    """REL-010 E10.8e. Not tracked under its own API Traceability row (confirmed 2026-08-14,
+    REL-059: no row in the ERDTM's "API Traceability" sheet mentions agent-run durations or a
+    histogram wrapper) -- previously mislabeled "API-073" here, which is actually
+    `/traces/langsmith/{run_id}` (LangSmith trace URL/detail for an LLM call chain, still No in
+    the ERDTM). Thin wrapper over the real, already-scraped
     `tradingos_agent_run_duration_seconds` Histogram (src/observability/metrics.py) for a
     non-Prometheus consumer -- reads the metric's own real `_count`/`_sum` samples, not a
     separate DB query, so this can never drift from what Grafana itself is showing."""
