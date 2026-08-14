@@ -12,12 +12,25 @@ strategies, `state.strategy_logic.option_legs` (Strategy Generator Agent prompt 
 gives `evaluate_compliance()` real declared legs, so a genuinely naked leg produces a real
 `verdict="Block"` here -- this node's actual veto power, not just advisory narration.
 
-Honest gap still open (re-confirmed for REL-016, not re-guessed): no real order quantity exists
-yet at this stage (Position Sizing isn't threaded into TradingOSGraphState), so
-`position_limit_checked`/`circuit_filter_checked` stay honestly False here regardless of asset
-class -- the real teeth for those two is the live execution-pipeline pre-trade check
+UPDATE 2026-08-14: the position-limit half of this node's other original gap is now closed too.
+`compliance_node` runs before `backtesting`/`risk_manager` in the graph (see graph.py's
+`build_graph()`), so `state.risk_assessment.position_sizing_shares` genuinely does not exist yet
+at this point and can't be reused -- rather than reorder the graph or leave this permanently
+unchecked, `_estimate_conservative_quantity` below sources a real, non-fabricated CONSERVATIVE
+upper-bound quantity from `state.account_capital` and the candidate symbol's latest real close
+price (same DataLake source risk_manager.py already uses for `^NSEI`): "if the full account's
+capital were allocated to this one symbol, how many shares?" This is deliberately a different,
+more conservative figure than Risk Manager's own later inverse-volatility-weighted sizing, not a
+duplicate of it -- it exists only to give the hardcoded position-limit check a real number to
+compare against at this earlier pipeline stage. `position_limit_checked` is now real whenever
+`state.account_capital` and real price data both exist; still honestly False when either is
+missing (a young Paper account, or a symbol with no ingested OHLCV history).
+
+`circuit_filter_checked` stays honestly False here, permanently, not as an open gap: it needs a
+real `limit_price`, a concept that genuinely does not exist until an actual order is being placed
+-- the real teeth for that check is the live execution-pipeline pre-trade check
 (src/engine/live/execution_pipeline.py's `compliance_pre_trade_check`), where a real TradeSignal
-carries real quantity/price -- see that module for the check that actually has data to block on.
+carries a real limit_price -- see that module for the check that actually has data to block on.
 """
 
 import json
@@ -28,12 +41,33 @@ from src.agents.llm_router import complete
 from src.agents.nodes.common import extract_json
 from src.agents.prompt_registry import get_active_prompt
 from src.agents.state import ComplianceVerdict, TradingOSGraphState
+from src.core.config import get_settings
+from src.data.datalake.query import DataLake
 from src.engine.risk.compliance_checker import evaluate_compliance
 from src.engine.risk.naked_options_scanner import OptionLeg
 
 PROMPT_SLUG = "compliance_agent"
 TASK_PROMPT_SLUG = "compliance_agent_task"
 logger = structlog.get_logger(__name__)
+
+
+def _latest_close_price(symbol: str) -> float | None:
+    data_lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+    df = data_lake.read_symbol(symbol, None, None)
+    if df.is_empty():
+        return None
+    return float(df.sort("date")["close"][-1])
+
+
+def _estimate_conservative_quantity(state: TradingOSGraphState, symbol: str) -> int | None:
+    """A conservative "entire account capital into this one symbol" upper-bound quantity --
+    None (not fabricated) whenever no real account_capital or no real price data exists."""
+    if state.account_capital is None:
+        return None
+    price = _latest_close_price(symbol)
+    if price is None or price <= 0:
+        return None
+    return int(state.account_capital // price)
 
 
 def _generate_narrative(
@@ -61,11 +95,21 @@ def _generate_narrative(
         return str(parsed["narrative"])
     except Exception as exc:  # noqa: BLE001 - narrative is advisory; never block the loop on it
         logger.warning("compliance_narrative_fallback", error=str(exc))
+        position_limit_note = (
+            "Position-limit check ran against a conservative estimated quantity."
+            if checker_result.position_limit_checked  # type: ignore[attr-defined]
+            else "Position-limit check was not run (no account capital or price data available)."
+        )
+        naked_options_note = (
+            "Naked-options check ran against real declared option legs."
+            if checker_result.naked_options_checked  # type: ignore[attr-defined]
+            else "Naked-options check was not run (no structured option-leg data available from "
+            "this strategy's plain-text logic)."
+        )
         return (
-            f"Compliance verdict: {verdict}. {violations_summary} "
-            "Position-limit and circuit-filter checks were not run (no concrete order quantity "
-            "exists at this pre-deployment stage). Naked-options check was not run (no "
-            "structured option-leg data available from this strategy's plain-text logic)."
+            f"Compliance verdict: {verdict}. {violations_summary} {position_limit_note} "
+            "Circuit-filter check was not run (no limit price exists at this pre-deployment "
+            f"stage). {naked_options_note}"
         )
 
 
@@ -93,7 +137,8 @@ def compliance_node(state: TradingOSGraphState) -> dict[str, object]:
         if declared_legs
         else None
     )
-    result = evaluate_compliance(symbol=symbol, option_legs=option_legs)
+    quantity = _estimate_conservative_quantity(state, symbol)
+    result = evaluate_compliance(symbol=symbol, quantity=quantity, option_legs=option_legs)
 
     violations_summary = (
         "; ".join(f"{v.rule}: {v.detail}" for v in result.violations)

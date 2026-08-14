@@ -81,3 +81,37 @@ def test_compliance_node_blocks_a_real_naked_leg_declared_on_an_fo_strategy():
     assert verdict.verdict == "Block"
     assert verdict.naked_options_checked is True
     assert any("BR-02_NAKED_OPTIONS" in v for v in verdict.violations)
+
+
+def test_compliance_node_checks_position_limit_with_real_capital_and_price():
+    """REL-0XX: a real account_capital + a real latest close price must now produce a real,
+    non-fabricated conservative quantity estimate and a real position-limit check -- closing the
+    long-documented "no order quantity exists at this stage" gap."""
+    state = TradingOSGraphState(
+        thread_id="t1", strategy_logic=_STRATEGY, python_code=_CODE, account_capital=100_000.0
+    )
+    with (
+        patch("src.agents.nodes.compliance._latest_close_price", return_value=2_500.0),
+        patch("src.agents.nodes.compliance.complete", side_effect=RuntimeError("LLM down")),
+    ):
+        result = compliance_node(state)
+
+    verdict = result["compliance_verdict"]
+    assert verdict.position_limit_checked is True
+    assert "estimated quantity" in verdict.narrative
+
+
+def test_compliance_node_leaves_position_limit_unchecked_without_real_price_data():
+    """account_capital is real, but no real price data exists for the symbol (e.g. never
+    ingested) -- position_limit_checked must stay honestly False, not fabricate a quantity."""
+    state = TradingOSGraphState(
+        thread_id="t1", strategy_logic=_STRATEGY, python_code=_CODE, account_capital=100_000.0
+    )
+    with (
+        patch("src.agents.nodes.compliance._latest_close_price", return_value=None),
+        patch("src.agents.nodes.compliance.complete", side_effect=RuntimeError("LLM down")),
+    ):
+        result = compliance_node(state)
+
+    verdict = result["compliance_verdict"]
+    assert verdict.position_limit_checked is False
