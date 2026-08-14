@@ -33,11 +33,14 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.postgres import PostgresSaver
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.agents import prompt_registry
+from src.agents.checkpointer import runtime_checkpoint_dsn
 from src.agents.control import (
     KNOWN_AGENTS,
     AgentHaltedError,
@@ -591,101 +594,190 @@ def _fetch_existing_portfolio_equity_curve() -> list[EquityCurvePoint]:
         return []
 
 
-def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID) -> None:
-    """Runs in a FastAPI BackgroundTasks worker thread (dispatched after the trigger endpoint
-    already returned). Synchronous end-to-end because every graph node (src/agents/nodes/*.py)
-    and `graph.stream()` itself are synchronous."""
-    redis_client = get_redis_client()
-    graph = build_graph()
-    state = TradingOSGraphState(
-        thread_id=thread_id,
-        account_capital=_fetch_account_capital(),
-        existing_portfolio_equity_curve=_fetch_existing_portfolio_equity_curve(),
+def _tracking_to_snapshot(tracking: _StrategyTracking) -> dict[str, Any]:
+    """REL-060: `_StrategyTracking` lives outside `TradingOSGraphState` (LangGraph's own
+    checkpointer only persists that), so it would otherwise be lost when `_execute_graph_run`'s
+    background thread returns on a pause -- snapshotted onto the root `AgentRun` row instead."""
+    return {
+        "strategy_id": str(tracking.strategy_id) if tracking.strategy_id else None,
+        "account_id": str(tracking.account_id) if tracking.account_id else None,
+        "account_lookup_done": tracking.account_lookup_done,
+        "backtest_result_id": (
+            str(tracking.backtest_result_id) if tracking.backtest_result_id else None
+        ),
+        "pending_option_legs": (
+            [leg.model_dump(mode="json") for leg in tracking.pending_option_legs]
+            if tracking.pending_option_legs
+            else None
+        ),
+        "pending_option_expiry": (
+            tracking.pending_option_expiry.isoformat() if tracking.pending_option_expiry else None
+        ),
+        "pending_research_context": tracking.pending_research_context,
+        "pending_market_context": tracking.pending_market_context,
+        "pending_option_rationale": tracking.pending_option_rationale,
+    }
+
+
+def _tracking_from_snapshot(data: dict[str, Any]) -> _StrategyTracking:
+    return _StrategyTracking(
+        strategy_id=uuid.UUID(data["strategy_id"]) if data.get("strategy_id") else None,
+        account_id=uuid.UUID(data["account_id"]) if data.get("account_id") else None,
+        account_lookup_done=bool(data.get("account_lookup_done", False)),
+        backtest_result_id=(
+            uuid.UUID(data["backtest_result_id"]) if data.get("backtest_result_id") else None
+        ),
+        pending_option_legs=(
+            [StrategyOptionLeg(**leg) for leg in data["pending_option_legs"]]
+            if data.get("pending_option_legs")
+            else None
+        ),
+        pending_option_expiry=(
+            date.fromisoformat(data["pending_option_expiry"])
+            if data.get("pending_option_expiry")
+            else None
+        ),
+        pending_research_context=data.get("pending_research_context"),
+        pending_market_context=data.get("pending_market_context"),
+        pending_option_rationale=data.get("pending_option_rationale"),
     )
+
+
+def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID, resume: bool = False) -> None:
+    """Runs in a detached `threading.Thread` (dispatched after the trigger/resume endpoint
+    already returned). Synchronous end-to-end because every graph node (src/agents/nodes/*.py)
+    and `graph.stream()` itself are synchronous.
+
+    REL-060: always runs with a real Postgres-backed checkpointer (`config={"configurable":
+    {"thread_id": thread_id}}`) so a pause has somewhere real to resume from -- `resume=False`
+    (the normal `trigger_research` path) streams a fresh `TradingOSGraphState` as `graph.stream()`'s
+    input, starting the run at its entry point exactly as before REL-060; `resume=True` (only
+    ever called by `POST /agents/runs/{id}/resume`) streams `None` as the input, LangGraph's own
+    documented "continue from the last checkpoint" signal, and reconstructs `_StrategyTracking`
+    from the root run's own `tracking_snapshot` instead of starting a fresh one. Between each
+    yielded step, the root run's real `pause_requested` flag is checked (`POST .../pause` sets
+    it) -- a node can't be safely interrupted mid-execution (it could leave a half-written
+    Strategy/BacktestResult row), so this is the only point a pause actually takes effect. By the
+    time a step is yielded, the checkpointer has already durably saved it, confirmed by a real,
+    throwaway probe against this project's own dev Postgres before this was written: pausing
+    after one node and resuming with a fresh connection correctly ran only the remaining nodes."""
+    redis_client = get_redis_client()
     checkpoint_wall = datetime.now(UTC)
-    tracking = _StrategyTracking()
+
+    if resume:
+        with get_session() as session:
+            root = session.get(AgentRun, root_run_id)
+            tracking = (
+                _tracking_from_snapshot(root.tracking_snapshot)
+                if root is not None and root.tracking_snapshot
+                else _StrategyTracking()
+            )
+        stream_input: TradingOSGraphState | None = None
+    else:
+        stream_input = TradingOSGraphState(
+            thread_id=thread_id,
+            account_capital=_fetch_account_capital(),
+            existing_portfolio_equity_curve=_fetch_existing_portfolio_equity_curve(),
+        )
+        tracking = _StrategyTracking()
+
+    config = RunnableConfig(configurable={"thread_id": thread_id})
 
     try:
-        for step in graph.stream(state):
-            for node_name, output in step.items():
-                # BUG-011: LangGraph's `updates` stream mode represents a node's real, intentional
-                # empty-dict return (options_strategy_node's own no-op for an Equity strategy) as
-                # `output = None`, not `{}` -- normalized once here so every downstream use
-                # (_summarize_node_output, jsonable_output, _persist_strategy_progress) sees a
-                # real, iterable dict instead of crashing on the first `.get`/`.items()`/`in`.
-                output = output or {}
-                now_wall = datetime.now(UTC)
-                AGENT_RUN_DURATION_SECONDS.labels(agent_name=node_name).observe(
-                    (now_wall - checkpoint_wall).total_seconds()
-                )
-                summary = _summarize_node_output(node_name, output)
-
-                jsonable_output = {k: _jsonable(v) for k, v in output.items()}
-                # REL-009 E9.2 (NFR-05): the node just returned, so pop whatever run id complete()
-                # last set during its execution (None if the node made no LLM call, or tracing
-                # isn't configured) and resolve it to a real LangSmith URL before persisting.
-                langsmith_run_id = pop_last_langsmith_run_id()
-                langsmith_trace_url = (
-                    fetch_langsmith_trace_url(langsmith_run_id) if langsmith_run_id else None
-                )
-                with get_session() as session:
-                    child = AgentRun(
-                        graph_thread_id=thread_id,
-                        agent_name=node_name,
-                        parent_run_id=root_run_id,
-                        output_state=jsonable_output,
-                        status="Completed",
-                        started_at=checkpoint_wall,
-                        ended_at=now_wall,
-                        langsmith_trace_url=langsmith_trace_url,
+        with PostgresSaver.from_conn_string(runtime_checkpoint_dsn()) as checkpointer:
+            graph = build_graph(checkpointer=checkpointer)
+            for step in graph.stream(stream_input, config=config):
+                for node_name, output in step.items():
+                    # BUG-011: LangGraph's `updates` stream mode represents a node's real,
+                    # intentional empty-dict return (options_strategy_node's own no-op for an
+                    # Equity strategy) as `output = None`, not `{}` -- normalized once here so
+                    # every downstream use (_summarize_node_output, jsonable_output,
+                    # _persist_strategy_progress) sees a real, iterable dict instead of crashing
+                    # on the first `.get`/`.items()`/`in`.
+                    output = output or {}
+                    now_wall = datetime.now(UTC)
+                    AGENT_RUN_DURATION_SECONDS.labels(agent_name=node_name).observe(
+                        (now_wall - checkpoint_wall).total_seconds()
                     )
-                    session.add(child)
-                    session.flush()
-                    session.add(
-                        AgentLog(
-                            agent_run_id=child.id,
-                            log_level="INFO",
-                            message=summary,
-                            created_at=now_wall,
+                    summary = _summarize_node_output(node_name, output)
+
+                    jsonable_output = {k: _jsonable(v) for k, v in output.items()}
+                    # REL-009 E9.2 (NFR-05): the node just returned, so pop whatever run id
+                    # complete() last set during its execution (None if the node made no LLM
+                    # call, or tracing isn't configured) and resolve it to a real LangSmith URL
+                    # before persisting.
+                    langsmith_run_id = pop_last_langsmith_run_id()
+                    langsmith_trace_url = (
+                        fetch_langsmith_trace_url(langsmith_run_id) if langsmith_run_id else None
+                    )
+                    with get_session() as session:
+                        child = AgentRun(
+                            graph_thread_id=thread_id,
+                            agent_name=node_name,
+                            parent_run_id=root_run_id,
+                            output_state=jsonable_output,
+                            status="Completed",
+                            started_at=checkpoint_wall,
+                            ended_at=now_wall,
+                            langsmith_trace_url=langsmith_trace_url,
                         )
-                    )
-                    _persist_strategy_progress(
-                        session,
-                        node_name=node_name,
-                        output=output,
-                        tracking=tracking,
-                        agent_run_id=child.id,
-                    )
-                    write_audit_entry(
-                        session,
-                        actor_type="AI Agent",
-                        actor_id=node_name,
-                        action=f"GRAPH_NODE_{node_name.upper()}_COMPLETED",
-                        entity_type="AgentRun",
-                        entity_id=child.id,
-                        after_state=jsonable_output,
-                        prompt_snapshot=summary,
-                    )
-                    session.commit()
+                        session.add(child)
+                        session.flush()
+                        session.add(
+                            AgentLog(
+                                agent_run_id=child.id,
+                                log_level="INFO",
+                                message=summary,
+                                created_at=now_wall,
+                            )
+                        )
+                        _persist_strategy_progress(
+                            session,
+                            node_name=node_name,
+                            output=output,
+                            tracking=tracking,
+                            agent_run_id=child.id,
+                        )
+                        write_audit_entry(
+                            session,
+                            actor_type="AI Agent",
+                            actor_id=node_name,
+                            action=f"GRAPH_NODE_{node_name.upper()}_COMPLETED",
+                            entity_type="AgentRun",
+                            entity_id=child.id,
+                            after_state=jsonable_output,
+                            prompt_snapshot=summary,
+                        )
+                        session.commit()
 
-                publish_agent_log(
-                    redis_client,
-                    json.dumps(
-                        {
-                            "agent_id": node_name,
-                            "node": node_name,
-                            "message": summary,
-                            "ts": now_wall.isoformat(),
-                        }
-                    ),
-                )
-                checkpoint_wall = now_wall
+                    publish_agent_log(
+                        redis_client,
+                        json.dumps(
+                            {
+                                "agent_id": node_name,
+                                "node": node_name,
+                                "message": summary,
+                                "ts": now_wall.isoformat(),
+                            }
+                        ),
+                    )
+                    checkpoint_wall = now_wall
+
+                with get_session() as session:
+                    root = session.get(AgentRun, root_run_id)
+                    if root is not None and root.pause_requested:
+                        root.status = "Paused"
+                        root.pause_requested = False
+                        root.tracking_snapshot = _tracking_to_snapshot(tracking)
+                        session.commit()
+                        return
 
         with get_session() as session:
             root = session.get(AgentRun, root_run_id)
             if root is not None:
                 root.status = "Completed"
                 root.ended_at = datetime.now(UTC)
+                root.tracking_snapshot = None
                 session.commit()
     except AgentHaltedError as exc:
         # ADR 11: a disabled node's real logic never ran -- this is a deliberate, honest stop,
@@ -1214,6 +1306,81 @@ def trigger_research(_user: User = Depends(_can_manage_hitl)) -> TriggerResponse
     threading.Thread(
         target=_execute_graph_run,
         kwargs={"thread_id": thread_id, "root_run_id": run_id},
+        daemon=True,
+    ).start()
+    return TriggerResponse(run_id=run_id, thread_id=thread_id, status="Running")
+
+
+# --- Pause/Resume (REL-060, API-020/021) ---------------------------------------------------
+
+
+def _get_root_run(session: Session, run_id: uuid.UUID) -> AgentRun | None:
+    root = session.get(AgentRun, run_id)
+    if root is None or root.parent_run_id is not None:
+        return None  # a per-node child row is not a pausable/resumable run in its own right
+    return root
+
+
+@router.post("/runs/{run_id}/pause", response_model=TriggerResponse)
+def pause_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> TriggerResponse:
+    """API-020. Sets a real, DB-backed signal on the root run -- `_execute_graph_run`'s
+    background thread checks it between graph steps and stops there, the only point a node
+    can be safely interrupted (mid-execution risks a half-written Strategy/BacktestResult row).
+    The status flip to "Paused" happens asynchronously, once the thread actually reaches that
+    checkpoint -- this endpoint returns immediately with the run still "Running" and the
+    request recorded."""
+    with get_session() as session:
+        root = _get_root_run(session, run_id)
+        if root is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if root.status != "Running":
+            raise HTTPException(
+                status_code=400, detail=f"Run status is '{root.status}', not 'Running'"
+            )
+        root.pause_requested = True
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=str(_user.id),
+            action="GRAPH_RUN_PAUSE_REQUESTED",
+            entity_type="AgentRun",
+            entity_id=root.id,
+        )
+        session.commit()
+        return TriggerResponse(run_id=root.id, thread_id=root.graph_thread_id, status=root.status)
+
+
+@router.post("/runs/{run_id}/resume", response_model=TriggerResponse, status_code=202)
+def resume_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> TriggerResponse:
+    """API-021. Only valid from a real "Paused" run -- one that stopped between graph steps with
+    the real LangGraph checkpointer already holding its exact execution position (confirmed via
+    a real probe against this project's own dev Postgres before this was built: a fresh
+    connection resuming a paused run re-ran only the nodes that hadn't completed yet, never the
+    ones already done). Dispatches a new background thread,
+    `_execute_graph_run(..., resume=True)`."""
+    with get_session() as session:
+        root = _get_root_run(session, run_id)
+        if root is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if root.status != "Paused":
+            raise HTTPException(
+                status_code=400, detail=f"Run status is '{root.status}', not 'Paused'"
+            )
+        root.status = "Running"
+        thread_id = root.graph_thread_id
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=str(_user.id),
+            action="GRAPH_RUN_RESUMED",
+            entity_type="AgentRun",
+            entity_id=root.id,
+        )
+        session.commit()
+
+    threading.Thread(
+        target=_execute_graph_run,
+        kwargs={"thread_id": thread_id, "root_run_id": run_id, "resume": True},
         daemon=True,
     ).start()
     return TriggerResponse(run_id=run_id, thread_id=thread_id, status="Running")

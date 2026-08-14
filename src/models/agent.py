@@ -31,6 +31,15 @@ class AgentRun(Base, UUIDPKMixin):
     retried_from_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("agent_runs.id")
     )
+    # REL-060 (API-020/021): the real pause signal `POST /agents/runs/{id}/pause` sets on a root
+    # run's row, checked by the running background thread between graph steps -- only ever set on
+    # a root run (parent_run_id IS NULL), never a per-node child row.
+    pause_requested: Mapped[bool] = mapped_column(nullable=False, default=False)
+    # `_StrategyTracking`'s local bookkeeping (src/api/routers/agents.py), snapshotted onto the
+    # root run's row right before pausing -- it lives outside TradingOSGraphState (LangGraph's
+    # own checkpointer only persists that), so it would otherwise be lost when the background
+    # thread's function returns.
+    tracking_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class AgentControlState(Base, UUIDPKMixin):

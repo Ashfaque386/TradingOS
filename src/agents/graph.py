@@ -31,6 +31,7 @@ strategies. See that module's own docstring for the real gap this closes.
 from collections.abc import Callable
 from typing import Any
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -106,7 +107,15 @@ def route_after_memory_ingest(state: TradingOSGraphState) -> str:
     return "strategy_generator"
 
 
-def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
+def build_graph(
+    checkpointer: BaseCheckpointSaver | None = None,  # type: ignore[type-arg]
+) -> CompiledStateGraph:  # type: ignore[type-arg]
+    """REL-060: `checkpointer` defaults to `None` (the pre-REL-060 behavior every existing caller
+    and test still gets) -- passing a real one (`src/agents/checkpointer.py`) is what makes
+    `graph.stream()` resumable via `config={"configurable": {"thread_id": ...}}`; without it,
+    LangGraph keeps no execution-position state at all and a compiled graph can only ever be run
+    from its own entry point, never resumed mid-run (`POST /agents/runs/{id}/pause|resume`,
+    src/api/routers/agents.py, is the only real caller that passes one)."""
     graph = StateGraph(TradingOSGraphState)
 
     # mypy --strict can resolve add_node's generic NodeInputT overloads against a directly-named
@@ -172,7 +181,7 @@ def build_graph() -> CompiledStateGraph:  # type: ignore[type-arg]
     graph.add_edge("risk_manager", "deployment")
     graph.add_edge("deployment", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def build_suggestion_regeneration_graph() -> CompiledStateGraph:  # type: ignore[type-arg]

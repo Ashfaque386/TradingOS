@@ -82,6 +82,12 @@ p, RiskManager, /api/v1/agents/runs/{run_id}/approve, POST
 p, SystemAdministrator, /api/v1/agents/runs/{run_id}/reject, POST
 p, PortfolioManager, /api/v1/agents/runs/{run_id}/reject, POST
 p, RiskManager, /api/v1/agents/runs/{run_id}/reject, POST
+p, SystemAdministrator, /api/v1/agents/runs/{run_id}/pause, POST
+p, PortfolioManager, /api/v1/agents/runs/{run_id}/pause, POST
+p, RiskManager, /api/v1/agents/runs/{run_id}/pause, POST
+p, SystemAdministrator, /api/v1/agents/runs/{run_id}/resume, POST
+p, PortfolioManager, /api/v1/agents/runs/{run_id}/resume, POST
+p, RiskManager, /api/v1/agents/runs/{run_id}/resume, POST
 p, SystemAdministrator, /api/v1/audit/actors/{actor_id}/summary, GET
 p, ReadOnlyAuditor, /api/v1/audit/actors/{actor_id}/summary, GET
 p, SystemAdministrator, /api/v1/audit/export, GET

@@ -45,6 +45,11 @@ dependencies = [
     "pyyaml>=6.0",
     "langgraph>=0.2",
     "langchain-core>=0.3",
+    # REL-060 (API-020/021, pause/resume a running graph execution): a real LangGraph
+    # checkpointer, Postgres-backed so a paused run survives an app/container restart, matching
+    # this project's own real-persisted-state philosophy elsewhere (paper account, kill switch).
+    # Uses the same psycopg v3 driver already required above -- no new driver technology.
+    "langgraph-checkpoint-postgres>=2.0",
     # ruff/black are also runtime agent tools here (Python Validator's run_linter(), Python
     # Code Generator's format_python_code() per Phase_4_AI_Agent_Design.md), not just dev/CI
     # tooling, so they live in base deps rather than the `dev` extra.
