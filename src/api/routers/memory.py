@@ -13,19 +13,37 @@ API-087 (`GET /memory/query`, a close match to the spec'd POST) and API-089
 (`DELETE /memory/{vector_id}`) are confirmed still No -- ingestion/deletion only happen via
 direct Qdrant-client calls from agent nodes (src/memory/strategy_memory.py,
 src/memory/news_memory.py), never through a public REST route in this file.
+
+UPDATE 2026-08-14 (REL-062): API-088/090 built below, thin wrappers over the real, already-
+tested `ingest_strategy_outcome()` (src/memory/strategy_memory.py) and a genuine new
+delete-by-point-id call against the real Qdrant client -- the closest existing precedent
+(`src/memory/collections.py::delete_collection`) only ever drops a whole collection, not one
+point, so this is real new code against the Qdrant client, not just a route. Both are gated
+(SA/PM/RM, the same "operational, equivalent-weight action" role set as this session's other
+real write/trigger endpoints) -- unlike the read-only routes above, these can pollute or erase
+the real RAG memory the agent pipeline itself reads from.
 """
 
-from typing import Any
+import uuid
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
+from src.api.deps import require_role
 from src.core.config import get_settings
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.memory.collections import COLLECTIONS
 from src.memory.embeddings import embed_text
+from src.memory.strategy_memory import ingest_strategy_outcome
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/memory", tags=["memory"])
+
+_can_manage_memory = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
 
 
 def _qdrant_client() -> QdrantClient:
@@ -78,3 +96,62 @@ def list_collections() -> list[CollectionStatus]:
         else:
             statuses.append(CollectionStatus(name=name, exists=False, points_count=None))
     return statuses
+
+
+class IngestOutcomeRequest(BaseModel):
+    strategy_id: uuid.UUID
+    strategy_version_id: uuid.UUID
+    hypothesis: str
+    code: str
+    asset_class: str
+    sharpe_ratio: float
+    max_drawdown: float
+    status: Literal["active", "deprecated", "archived"]
+    failure_reason: str | None = None
+
+
+class IngestOutcomeResponse(BaseModel):
+    point_id: str
+
+
+@router.post("/ingest", response_model=IngestOutcomeResponse, status_code=201)
+def ingest_outcome(
+    body: IngestOutcomeRequest, _user: User = Depends(_can_manage_memory)
+) -> IngestOutcomeResponse:
+    """API-088. A thin wrapper over the real, already-tested `ingest_strategy_outcome()`
+    (src/memory/strategy_memory.py) -- deliberately scoped to strategy/backtest outcomes only,
+    matching the SRS's literal wording, not `ingest_code_template()`."""
+    point_id = ingest_strategy_outcome(
+        strategy_id=str(body.strategy_id),
+        strategy_version_id=str(body.strategy_version_id),
+        hypothesis=body.hypothesis,
+        code=body.code,
+        asset_class=body.asset_class,
+        sharpe_ratio=body.sharpe_ratio,
+        max_drawdown=body.max_drawdown,
+        status=body.status,
+        failure_reason=body.failure_reason,
+    )
+    return IngestOutcomeResponse(point_id=point_id)
+
+
+class DeleteVectorResponse(BaseModel):
+    deleted: bool
+    vector_id: str
+    collection: str
+
+
+@router.delete("/{vector_id}", response_model=DeleteVectorResponse)
+def delete_vector(
+    vector_id: str, collection: str, _user: User = Depends(_can_manage_memory)
+) -> DeleteVectorResponse:
+    """API-090. `collection` is required and validated against the real, bootstrapped
+    collections (src/memory/collections.py::COLLECTIONS), same convention as `query_memory`
+    above -- Qdrant point IDs are only unique within a collection, not globally."""
+    if collection not in COLLECTIONS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown collection '{collection}'. Valid collections: {COLLECTIONS}",
+        )
+    _qdrant_client().delete(collection_name=collection, points_selector=[vector_id])
+    return DeleteVectorResponse(deleted=True, vector_id=vector_id, collection=collection)

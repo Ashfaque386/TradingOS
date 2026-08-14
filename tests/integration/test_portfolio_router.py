@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi.testclient import TestClient
 
+from src.agents.control import KNOWN_AGENTS
 from src.api.main import app
+from src.brokers.base import Position
 
 client = TestClient(app)
 
@@ -152,3 +154,53 @@ def test_positions_by_broker_reports_both_real_brokers_independently(
     entries = {e["broker"]: e for e in response.json()}
     assert entries["Zerodha"]["positions"] == []
     assert entries["Upstox"]["positions"][0]["symbol"] == "RELIANCE"
+
+
+# --- Dashboard summary (API-006, REL-062) ---------------------------------------------------
+
+
+@patch("src.api.routers.portfolio.build_broker")
+def test_dashboard_summary_composes_real_pnl_and_agent_activity_counts(mock_build_broker):
+    fake_broker = AsyncMock()
+    fake_broker.get_positions.return_value = [
+        Position(
+            symbol="TCS",
+            net_quantity=10,
+            average_price=100.0,
+            last_price=110.0,
+            unrealized_pnl=100.0,
+            realized_pnl=0.0,
+        ),
+        Position(
+            symbol="INFY",
+            net_quantity=0,
+            average_price=0.0,
+            last_price=0.0,
+            unrealized_pnl=0.0,
+            realized_pnl=50.0,
+        ),
+    ]
+    mock_build_broker.return_value = fake_broker
+
+    response = client.get("/api/v1/dashboard/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["unrealized_pnl"] == 100.0
+    assert body["realized_pnl"] == 50.0
+    assert body["total_pnl"] == 150.0
+    # INFY has net_quantity=0 (a closed/flat position) -- not counted as "open".
+    assert body["open_positions_count"] == 1
+    assert body["total_agents"] == len(KNOWN_AGENTS)
+    assert 0 <= body["active_agents"] <= body["total_agents"]
+
+
+@patch("src.api.routers.portfolio.build_broker")
+def test_dashboard_summary_returns_502_not_an_unhandled_500_on_a_real_broker_call_failure(
+    mock_build_broker,
+):
+    fake_broker = AsyncMock()
+    fake_broker.get_positions.side_effect = _real_shaped_http_status_error()
+    mock_build_broker.return_value = fake_broker
+
+    response = client.get("/api/v1/dashboard/summary")
+    assert response.status_code == 502

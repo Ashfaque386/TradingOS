@@ -157,6 +157,24 @@ def get_integrations_status() -> IntegrationsStatusResponse:
     return IntegrationsStatusResponse(llm_providers=llm_providers, brokers=brokers)
 
 
+class VaultStatusResponse(BaseModel):
+    reachable: bool
+    kv_engine_mounted: bool | None
+    vault_addr: str | None
+
+
+@router.get("/vault/status", response_model=VaultStatusResponse)
+def get_vault_status() -> VaultStatusResponse:
+    """API-079 (REL-062). Real reachability, never a secret value -- open like every other plain
+    status read in this router (`GET /integrations` above included)."""
+    status = vault.vault_status()
+    return VaultStatusResponse(
+        reachable=status.reachable,
+        kv_engine_mounted=status.kv_engine_mounted,
+        vault_addr=status.vault_addr,
+    )
+
+
 class LlmProviderKeyRequest(BaseModel):
     api_key: str
 

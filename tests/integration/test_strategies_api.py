@@ -747,3 +747,109 @@ def test_suggestion_review_end_to_end_real_llm():
             session.commit()
         _cleanup_fixture_rows(*ids)
         cleanup_user(admin_id)
+
+
+# --- Manual registration / metadata update (API-041/042, REL-062) --------------------------
+
+
+def test_create_strategy_requires_the_gated_role():
+    response = client.post(
+        "/api/v1/strategies",
+        json={"name": "manual-strategy", "asset_class": "Equity", "style": "Swing"},
+    )
+    assert response.status_code == 401
+
+
+def test_create_strategy_registers_a_hypothesis_against_the_real_paper_account():
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+    marker = f"manual-strategy-{uuid.uuid4().hex[:8]}"
+    strategy_id = None
+    try:
+        response = client.post(
+            "/api/v1/strategies",
+            json={
+                "name": marker,
+                "hypothesis": "Manually registered hypothesis, no LangGraph run behind it.",
+                "asset_class": "Equity",
+                "style": "Swing",
+                "universe": ["TCS"],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 201
+        body = response.json()
+        strategy_id = uuid.UUID(body["id"])
+        assert body["name"] == marker
+        assert body["status"] == "Ideation"
+        assert body["max_drawdown_limit"] == 15.0
+
+        with get_session() as session:
+            row = session.get(Strategy, strategy_id)
+            assert row is not None
+            assert row.created_by_agent == "Human"
+            assert row.account_id is not None
+    finally:
+        if strategy_id is not None:
+            with get_session() as session:
+                session.query(Strategy).filter(Strategy.id == strategy_id).delete()
+                session.commit()
+        cleanup_user(admin_id)
+
+
+def test_create_strategy_rejects_an_unknown_asset_class():
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.post(
+            "/api/v1/strategies",
+            json={"name": "bad-strategy", "asset_class": "Crypto", "style": "Swing"},
+            headers=auth_header(admin_token),
+        )
+        assert response.status_code == 422
+    finally:
+        cleanup_user(admin_id)
+
+
+def test_update_strategy_requires_the_gated_role():
+    ids = _create_fixture_rows()
+    try:
+        response = client.patch(
+            f"/api/v1/strategies/{ids[2]}", json={"hypothesis": "unauthorized update"}
+        )
+        assert response.status_code == 401
+    finally:
+        _cleanup_fixture_rows(*ids)
+
+
+def test_update_strategy_patches_only_the_provided_fields():
+    ids = _create_fixture_rows()
+    _, _, strategy_id, _ = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.patch(
+            f"/api/v1/strategies/{strategy_id}",
+            json={"hypothesis": "revised hypothesis text"},
+            headers=auth_header(admin_token),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["hypothesis"] == "revised hypothesis text"
+        # Untouched fields (set via _create_fixture_rows) must survive a partial PATCH.
+        assert body["name"] == "strategies-api-test-strategy"
+        assert body["universe"] == ["TCS"]
+    finally:
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(admin_id)
+
+
+def test_update_strategy_404s_for_an_unknown_strategy():
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.patch(
+            f"/api/v1/strategies/{uuid.uuid4()}",
+            json={"hypothesis": "x"},
+            headers=auth_header(admin_token),
+        )
+        assert response.status_code == 404
+    finally:
+        cleanup_user(admin_id)

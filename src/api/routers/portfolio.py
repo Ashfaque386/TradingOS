@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.agents.control import KNOWN_AGENTS
 from src.agents.nodes.portfolio_manager_agent import generate_allocation_recommendation
 from src.api.deps import require_role
 from src.brokers.base import BrokerAdapter, Margin, Position
@@ -49,6 +50,7 @@ from src.brokers.factory import (
 from src.core.audit import write_audit_entry
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
+from src.models.agent import AgentControlState
 from src.models.portfolio_allocation_recommendation import PortfolioAllocationRecommendation
 from src.models.strategy import BacktestResult, Strategy
 from src.models.trading import RiskLimit
@@ -245,6 +247,51 @@ async def portfolio_pnl() -> PnLResponse:
         total_pnl=total,
         daily_loss_limit=daily_limit,
         pct_of_daily_limit_used=_pct_of_daily_limit(total, daily_limit),
+    )
+
+
+class DashboardSummaryResponse(BaseModel):
+    unrealized_pnl: float
+    realized_pnl: float
+    total_pnl: float
+    daily_loss_limit: float | None
+    pct_of_daily_limit_used: float | None
+    open_positions_count: int
+    total_agents: int
+    active_agents: int
+
+
+@router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
+async def dashboard_summary() -> DashboardSummaryResponse:
+    """API-006. Composes the same real PnL computation `/portfolio/pnl` (API-060) above already
+    does with a real agent-activity count from the KNOWN_AGENTS registry (src/agents/control.py)
+    joined against agent_control_state, the same batched-query pattern agents.py's `GET /control`
+    already uses. "active" means administratively enabled (fail-open default for any agent with
+    no row), not "currently running" -- nothing in this codebase tracks live per-agent running
+    state outside of one graph run at a time, so this doesn't overclaim real-time knowledge."""
+    broker = _get_broker()
+    positions = await _get_positions(broker)
+    unrealized = sum(p.unrealized_pnl for p in positions)
+    realized = sum(p.realized_pnl for p in positions)
+    total = unrealized + realized
+
+    with get_session() as session:
+        limit = _latest_risk_limit(session)
+        daily_limit = float(limit.max_daily_loss) if limit else None
+        control_rows = {row.agent_name: row for row in session.scalars(select(AgentControlState))}
+        active_agents = sum(
+            1 for a in KNOWN_AGENTS if a.name not in control_rows or control_rows[a.name].enabled
+        )
+
+    return DashboardSummaryResponse(
+        unrealized_pnl=unrealized,
+        realized_pnl=realized,
+        total_pnl=total,
+        daily_loss_limit=daily_limit,
+        pct_of_daily_limit_used=_pct_of_daily_limit(total, daily_limit),
+        open_positions_count=sum(1 for p in positions if p.net_quantity != 0),
+        total_agents=len(KNOWN_AGENTS),
+        active_agents=active_agents,
     )
 
 

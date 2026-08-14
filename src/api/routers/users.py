@@ -83,6 +83,55 @@ def create_user(body: CreateUserRequest) -> UserResponse:
         )
 
 
+class UpdateRoleRequest(BaseModel):
+    role: str
+
+
+@router.patch("/{user_id}/role", response_model=UserResponse)
+def update_user_role(user_id: uuid.UUID, body: UpdateRoleRequest) -> UserResponse:
+    """API-004."""
+    if body.role not in ALL_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"role must be one of {ALL_ROLES}",
+        )
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.role = body.role
+        session.commit()
+        session.refresh(user)
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role,
+            is_active=user.is_active,
+        )
+
+
+@router.delete("/{user_id}", response_model=UserResponse)
+def deactivate_user(user_id: uuid.UUID) -> UserResponse:
+    """API-005. A soft deactivation (User.is_active=False), matching the row's own literal
+    "Deactivate a user account" wording -- never a real row delete, which would orphan every
+    FK this user's id is referenced by (AgentRun audit trails, AuditLog entries, etc.)."""
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.is_active = False
+        session.commit()
+        session.refresh(user)
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role,
+            is_active=user.is_active,
+        )
+
+
 class RevokeSessionsResponse(BaseModel):
     revoked_count: int
 

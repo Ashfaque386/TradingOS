@@ -16,6 +16,18 @@ from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_u
 client = TestClient(app)
 
 
+def test_vault_status_reports_the_real_dev_vault_reachability():
+    """API-079 (REL-062): src/core/vault.py's own is_authenticated() round-trip, exposed on its
+    own endpoint -- against the real docker-compose Vault (see tests/integration/test_vault.py
+    for the underlying client tests), never a fabricated value."""
+    response = client.get("/api/v1/settings/vault/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reachable"] is True
+    assert body["kv_engine_mounted"] is True
+    assert body["vault_addr"] is not None
+
+
 def test_integrations_status_never_leaks_a_raw_secret():
     response = client.get("/api/v1/settings/integrations")
     assert response.status_code == 200

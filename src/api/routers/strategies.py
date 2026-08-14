@@ -62,6 +62,7 @@ from src.data.datalake.query import DataLake
 from src.engine.optimization.monte_carlo import run_monte_carlo_simulation
 from src.engine.optimization.monte_carlo_persistence import persist_monte_carlo_p95_max_drawdown
 from src.engine.optimization.walk_forward_adapter import run_walk_forward_from_real_backtest
+from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.sandbox.backtest_runner import (
     EquityPoint,
     RealBacktestOutcome,
@@ -92,6 +93,10 @@ _can_review_suggestion = require_role(
 
 DEFAULT_BACKTEST_LOOKBACK_DAYS = 365
 DEFAULT_INITIAL_CAPITAL = 100_000.0
+# Mirrors src/api/routers/agents.py's own _DEFAULT_MAX_DRAWDOWN_LIMIT (same 15% figure, same
+# kill_switch.py DEFAULT_KILL_SWITCH_THRESHOLD precedent) -- no Risk Manager Agent exists yet to
+# set a real per-strategy limit at manual-creation time either.
+_DEFAULT_MAX_DRAWDOWN_LIMIT = 15.00
 
 
 # --- List / detail ----------------------------------------------------------------------------
@@ -253,6 +258,73 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         deployment_recommendation=result.deployment_recommendation,
         deployment_rationale=result.deployment_rationale,
     )
+
+
+class CreateStrategyRequest(BaseModel):
+    name: str
+    hypothesis: str | None = None
+    asset_class: Literal["Equity", "F&O"]
+    style: Literal["Intraday", "Swing"]
+    universe: list[str] | None = None
+    max_drawdown_limit: float = float(_DEFAULT_MAX_DRAWDOWN_LIMIT)
+
+
+@router.post("", response_model=StrategySummary, status_code=201)
+def create_strategy(
+    body: CreateStrategyRequest, _user: User = Depends(_can_trigger_backtest)
+) -> StrategySummary:
+    """API-041. Registers a strategy hypothesis manually, starting in "Ideation" (Strategy's own
+    default) -- the same lifecycle every agent-generated strategy enters through
+    src/api/routers/agents.py::_persist_strategy_progress, just without a LangGraph run behind
+    it. `account_id` reuses the same lazy-seeded Paper account every other strategy/backtest
+    write in this codebase resolves against (get_paper_account) -- strategies aren't
+    broker-scoped, so there is no real "which account" question to ask the caller. Gated the
+    same as triggering a backtest (SA/PM/RM): registering a hypothesis that will go on to consume
+    real backtest/LLM budget is an equivalent-weight operational action, not a plain read."""
+    with get_session() as session:
+        account = get_paper_account(session)
+        strategy = Strategy(
+            account_id=account.id,
+            name=body.name,
+            hypothesis=body.hypothesis,
+            asset_class=body.asset_class,
+            style=body.style,
+            universe=body.universe,
+            max_drawdown_limit=body.max_drawdown_limit,
+            created_by_agent="Human",
+        )
+        session.add(strategy)
+        session.commit()
+        session.refresh(strategy)
+        return _to_summary(strategy)
+
+
+class UpdateStrategyRequest(BaseModel):
+    name: str | None = None
+    hypothesis: str | None = None
+    universe: list[str] | None = None
+    max_drawdown_limit: float | None = None
+
+
+@router.patch("/{strategy_id}", response_model=StrategySummary)
+def update_strategy(
+    strategy_id: uuid.UUID,
+    body: UpdateStrategyRequest,
+    _user: User = Depends(_can_trigger_backtest),
+) -> StrategySummary:
+    """API-042. Metadata-only update -- asset_class/style/status are deliberately not editable
+    here: asset_class/style are fixed at creation (changing them mid-lifecycle would invalidate
+    any existing StrategyVersion's code), and status only ever moves through `/promote`'s real
+    lifecycle gate below, never a free-form PATCH. Same role gate as `create_strategy` above."""
+    with get_session() as session:
+        strategy = session.get(Strategy, strategy_id)
+        if strategy is None:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(strategy, field, value)
+        session.commit()
+        session.refresh(strategy)
+        return _to_summary(strategy)
 
 
 @router.get("", response_model=list[StrategySummary])

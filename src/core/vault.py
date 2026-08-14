@@ -37,6 +37,7 @@ on a piece of optional local infrastructure.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import cast
 
 import hvac
@@ -122,6 +123,33 @@ def _read_secret(path: str, *, settings: Settings) -> dict[str, str] | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Vault read failed for path=%s: %s", path, exc)
         return None
+
+
+@dataclass(frozen=True)
+class VaultStatus:
+    reachable: bool
+    kv_engine_mounted: bool | None
+    vault_addr: str | None
+
+
+def vault_status(*, settings: Settings | None = None) -> VaultStatus:
+    """REL-062 (API-079). A real, non-secret reachability check -- `_client()` already does a
+    genuine `client.is_authenticated()` round-trip against the live Vault instance on every
+    secret read/write; this exposes that same check on its own, without needing to read or
+    write an actual secret path to prove it. `kv_engine_mounted` distinguishes "Vault is up but
+    `ensure_kv_engine()` hasn't run yet" from "Vault itself is down" -- both real, different
+    failure modes, per real Vault server-mode migration REL-015 documented."""
+    settings = settings or get_settings()
+    client = _client(settings)
+    if client is None:
+        return VaultStatus(reachable=False, kv_engine_mounted=None, vault_addr=settings.vault_addr)
+    try:
+        mounts = client.sys.list_mounted_secrets_engines()
+        kv_mounted = f"{_KV_MOUNT}/" in mounts.get("data", mounts)
+    except Exception as exc:  # noqa: BLE001 -- a real, expected transient Vault API hiccup
+        logger.info("Vault mount-list check failed at %s: %s", settings.vault_addr, exc)
+        kv_mounted = None
+    return VaultStatus(reachable=True, kv_engine_mounted=kv_mounted, vault_addr=settings.vault_addr)
 
 
 def _delete_secret(path: str, *, settings: Settings) -> bool:

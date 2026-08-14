@@ -74,6 +74,7 @@ from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import AccountEquitySnapshot
 from src.models.agent import AgentControlState, AgentLog, AgentRun
+from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
 from src.observability.metrics import AGENT_RUN_DURATION_SECONDS
@@ -1408,6 +1409,12 @@ class AgentRunSummary(BaseModel):
     # value) carried it, so a reloaded run detail view had no way to show "already
     # approved/rejected" state. Additive field, not a new mutation.
     human_decision: str | None = None
+    # REL-062 (API-073): AgentRun.langsmith_trace_url has been real and persisted since REL-009
+    # E9.2 (_execute_graph_run resolves it via fetch_langsmith_trace_url() on every node), but
+    # was never serialized by this response model -- confirmed by direct grep before writing
+    # this. None whenever tracing wasn't configured, or the node made no LLM call, honest either
+    # way, not a missing feature.
+    langsmith_trace_url: str | None = None
 
 
 class AgentRunDetail(AgentRunSummary):
@@ -1424,6 +1431,7 @@ def _to_summary(run: AgentRun) -> AgentRunSummary:
         started_at=run.started_at,
         ended_at=run.ended_at,
         human_decision=run.human_decision,
+        langsmith_trace_url=run.langsmith_trace_url,
     )
 
 
@@ -1703,3 +1711,82 @@ def set_active_version(
         active_version=entry["active_version"],
         available_versions=prompt_registry.list_versions(slug),
     )
+
+
+# --- Agent detail (API-026) -----------------------------------------------------------------
+#
+# REL-062: registered at the very end of this router, after every other route above, so this
+# single dynamic `/{agent_id}` segment can never shadow an existing literal route (`/graph`,
+# `/control`, `/runs`, `/prompts`, ...) registered earlier -- the same route-ordering discipline
+# this session already applied once before, in orders.py.
+
+
+class AgentSkillGrant(BaseModel):
+    skill_name: str
+    granted_at: datetime
+
+
+class AgentInstanceDetail(BaseModel):
+    name: str
+    display_name: str
+    kind: str
+    enforced: bool
+    enabled: bool
+    disabled_reason: str | None
+    skills: list[AgentSkillGrant]
+    last_run_status: str | None
+    last_run_at: datetime | None
+
+
+class AgentDetailResponse(BaseModel):
+    agent_id: str
+    instances: list[AgentInstanceDetail]
+
+
+@router.get("/{agent_id}", response_model=AgentDetailResponse)
+def get_agent_detail(agent_id: str) -> AgentDetailResponse:
+    """API-026. `agent_id` is the SRS's own identifier (e.g. "AGT-001"), not KNOWN_AGENTS'
+    internal `name` that `/control/{agent_name}` above keys on. One real quirk in the registry,
+    confirmed by direct read of control.py rather than assumed: AGT-009 is shared by two distinct
+    implementations -- `memory_ingest` (the graph-node incarnation) and `memory_agent` (the
+    scheduled one). `instances` is a list rather than a single object so this stays honest about
+    that instead of silently picking one. `last_run_status`/`last_run_at` come from the most
+    recent AgentRun row for that instance's `name` -- deliberately not called "current_task",
+    since most of these agents aren't graph nodes and nothing in this codebase tracks real-time
+    task state for them."""
+    matches = [a for a in KNOWN_AGENTS if a.agent_id == agent_id]
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"Unknown agent_id '{agent_id}'")
+    with get_session() as session:
+        control_rows = {row.agent_name: row for row in session.scalars(select(AgentControlState))}
+        instances = []
+        for agent in matches:
+            control_row = control_rows.get(agent.name)
+            grants = session.execute(
+                select(AgentSkillMap, Skill.name)
+                .join(Skill, AgentSkillMap.skill_id == Skill.id)
+                .where(AgentSkillMap.agent_name == agent.name)
+            ).all()
+            last_run = session.scalars(
+                select(AgentRun)
+                .where(AgentRun.agent_name == agent.name)
+                .order_by(AgentRun.started_at.desc())
+                .limit(1)
+            ).first()
+            instances.append(
+                AgentInstanceDetail(
+                    name=agent.name,
+                    display_name=agent.display_name,
+                    kind=agent.kind,
+                    enforced=agent.enforced,
+                    enabled=control_row is None or control_row.enabled,
+                    disabled_reason=control_row.reason if control_row is not None else None,
+                    skills=[
+                        AgentSkillGrant(skill_name=skill_name, granted_at=grant.granted_at)
+                        for grant, skill_name in grants
+                    ],
+                    last_run_status=last_run.status if last_run is not None else None,
+                    last_run_at=last_run.started_at if last_run is not None else None,
+                )
+            )
+        return AgentDetailResponse(agent_id=agent_id, instances=instances)

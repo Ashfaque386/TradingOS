@@ -13,11 +13,17 @@ handler body (require_role runs first), so they're safe to run without triggerin
 run or an unintended prompt swap.
 """
 
+import uuid
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
+from src.agents.control import KNOWN_AGENTS
 from src.agents.prompt_registry import get_active_prompt
 from src.api.main import app
+from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_RISK_MANAGER
+from src.models.agent import AgentRun
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
@@ -137,3 +143,109 @@ def test_research_trigger_requires_the_gated_role():
         assert response.status_code == 403
     finally:
         cleanup_user(user_id)
+
+
+# --- Agent detail (API-026, REL-062) --------------------------------------------------------
+
+
+def test_agent_detail_404s_for_an_unknown_agent_id():
+    response = client.get("/api/v1/agents/not-a-real-agent-id")
+    assert response.status_code == 404
+
+
+def test_agent_detail_returns_one_instance_for_a_unique_agent_id():
+    response = client.get("/api/v1/agents/AGT-001")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_id"] == "AGT-001"
+    assert len(body["instances"]) == 1
+    assert body["instances"][0]["name"] == "ceo_agent"
+    assert body["instances"][0]["enabled"] is True  # fail-open default: no control row seeded
+
+
+def test_agent_detail_surfaces_both_instances_for_the_real_agt_009_duplicate():
+    # A real data quirk in KNOWN_AGENTS (src/agents/control.py), not a test artifact: AGT-009 is
+    # shared by memory_ingest (graph-node incarnation) and memory_agent (scheduled incarnation).
+    matches = [a for a in KNOWN_AGENTS if a.agent_id == "AGT-009"]
+    assert len(matches) == 2
+
+    response = client.get("/api/v1/agents/AGT-009")
+    assert response.status_code == 200
+    names = {inst["name"] for inst in response.json()["instances"]}
+    assert names == {"memory_ingest", "memory_agent"}
+
+
+def test_agent_detail_reports_the_most_recent_run_for_that_agent_name():
+    run_id = uuid.uuid4()
+    with get_session() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                graph_thread_id=str(uuid.uuid4()),
+                agent_name="ceo_agent",
+                status="Completed",
+                started_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    try:
+        response = client.get("/api/v1/agents/AGT-001")
+        assert response.status_code == 200
+        instance = response.json()["instances"][0]
+        assert instance["last_run_status"] == "Completed"
+        assert instance["last_run_at"] is not None
+    finally:
+        with get_session() as session:
+            session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+            session.commit()
+
+
+# --- LangSmith trace URL surfaced on run detail (API-073, REL-062) -------------------------
+
+
+def test_run_detail_serializes_the_real_langsmith_trace_url_column():
+    run_id = uuid.uuid4()
+    marker_url = f"https://smith.langchain.com/trace/{uuid.uuid4()}"
+    with get_session() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                graph_thread_id=str(uuid.uuid4()),
+                agent_name="TradingOSGraph",
+                status="Completed",
+                started_at=datetime.now(UTC),
+                langsmith_trace_url=marker_url,
+            )
+        )
+        session.commit()
+    try:
+        response = client.get(f"/api/v1/agents/runs/{run_id}")
+        assert response.status_code == 200
+        assert response.json()["langsmith_trace_url"] == marker_url
+    finally:
+        with get_session() as session:
+            session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+            session.commit()
+
+
+def test_run_detail_langsmith_trace_url_is_none_when_tracing_was_never_configured():
+    run_id = uuid.uuid4()
+    with get_session() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                graph_thread_id=str(uuid.uuid4()),
+                agent_name="TradingOSGraph",
+                status="Completed",
+                started_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    try:
+        response = client.get(f"/api/v1/agents/runs/{run_id}")
+        assert response.status_code == 200
+        assert response.json()["langsmith_trace_url"] is None
+    finally:
+        with get_session() as session:
+            session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+            session.commit()

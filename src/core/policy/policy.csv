@@ -22,6 +22,8 @@ p, SystemAdministrator, /api/v1/system/jwt-signing-key/rotate, POST
 p, SystemAdministrator, /api/v1/users, GET
 p, SystemAdministrator, /api/v1/users, POST
 p, SystemAdministrator, /api/v1/users/{user_id}/revoke-sessions, POST
+p, SystemAdministrator, /api/v1/users/{user_id}/role, PATCH
+p, SystemAdministrator, /api/v1/users/{user_id}, DELETE
 p, SystemAdministrator, /api/v1/auth/mfa/disable, POST
 p, SystemAdministrator, /api/v1/risk-limits/change-requests, POST
 p, RiskManager, /api/v1/risk-limits/change-requests, POST
@@ -125,3 +127,15 @@ p, SystemAdministrator, /api/v1/positions/{symbol}/close, POST
 p, PortfolioManager, /api/v1/positions/{symbol}/close, POST
 p, RiskManager, /api/v1/positions/{symbol}/close, POST
 p, SystemAdministrator, /api/v1/market/ingest/trigger, POST
+p, SystemAdministrator, /api/v1/memory/ingest, POST
+p, PortfolioManager, /api/v1/memory/ingest, POST
+p, RiskManager, /api/v1/memory/ingest, POST
+p, SystemAdministrator, /api/v1/memory/{vector_id}, DELETE
+p, PortfolioManager, /api/v1/memory/{vector_id}, DELETE
+p, RiskManager, /api/v1/memory/{vector_id}, DELETE
+p, SystemAdministrator, /api/v1/strategies, POST
+p, PortfolioManager, /api/v1/strategies, POST
+p, RiskManager, /api/v1/strategies, POST
+p, SystemAdministrator, /api/v1/strategies/{strategy_id}, PATCH
+p, PortfolioManager, /api/v1/strategies/{strategy_id}, PATCH
+p, RiskManager, /api/v1/strategies/{strategy_id}, PATCH
