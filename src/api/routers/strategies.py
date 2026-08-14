@@ -285,6 +285,7 @@ def create_strategy(
         account = get_paper_account(session)
         strategy = Strategy(
             account_id=account.id,
+            tenant_id=account.tenant_id,
             name=body.name,
             hypothesis=body.hypothesis,
             asset_class=body.asset_class,

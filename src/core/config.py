@@ -211,6 +211,17 @@ class Settings(BaseSettings):
     # Set to `True` only inside that one CI job's own environment, never in dev/prod.
     zap_test_endpoint_enabled: bool = False
 
+    # REL-064 (API-014): a real, general REST rate limit -- unlike webhook_rate_limit.py (chat-ID
+    # scoped, only guards the 3 messaging-platform webhooks), this applies to every route via
+    # RateLimitMiddleware. `False` disables enforcement outright (the real kill switch); the
+    # pytest session sets this False by default (tests/conftest.py) since hundreds of automated
+    # calls sharing one test IP/user across the suite is a real, exceptional traffic pattern this
+    # limit isn't meant to police -- the middleware itself still gets dedicated, explicit tests
+    # with the flag re-enabled and a tight limit.
+    api_rate_limit_enabled: bool = True
+    api_rate_limit_requests: int = 300
+    api_rate_limit_window_seconds: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:

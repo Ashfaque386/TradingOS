@@ -241,7 +241,18 @@ def _get_or_create_live_account(session: Session, user_id: uuid.UUID) -> Account
     ).first()
     if account is not None:
         return account
-    account = Account(user_id=user_id, broker="LIVE", account_type="Live", capital_allocated=0)
+    # REL-064: a new Account row needs a real tenant_id (NOT NULL) -- inherited from the
+    # placing user's own tenant, not the global default, since a Live account is genuinely
+    # this specific user's, unlike the one shared seeded Paper account.
+    user = session.get(User, user_id)
+    assert user is not None
+    account = Account(
+        user_id=user_id,
+        tenant_id=user.tenant_id,
+        broker="LIVE",
+        account_type="Live",
+        capital_allocated=0,
+    )
     session.add(account)
     session.flush()
     return account
@@ -384,6 +395,7 @@ async def place_order(
 
         order = Order(
             account_id=account.id,
+            tenant_id=account.tenant_id,
             strategy_id=strategy.id,
             broker_order_id=response.broker_order_id,
             symbol=response.symbol,

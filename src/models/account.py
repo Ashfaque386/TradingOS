@@ -1,11 +1,12 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import CHAR, Boolean, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import CHAR, Boolean, ForeignKey, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin, UUIDPKMixin
+from src.models.tenant import DEFAULT_TENANT_ID
 
 
 class Account(Base, UUIDPKMixin, TimestampMixin):
@@ -15,6 +16,14 @@ class Account(Base, UUIDPKMixin, TimestampMixin):
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    # REL-064 (API-015): every row backfilled onto one seeded "Primary Tenant" at migration time
+    # (alembic/versions/w4x5y6z7a8b9) -- existing single-tenant behavior is unchanged.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        server_default=text(f"'{DEFAULT_TENANT_ID}'"),
     )
     broker: Mapped[str] = mapped_column(String(20), nullable=False)
     account_type: Mapped[str] = mapped_column(String(20), nullable=False)

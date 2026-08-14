@@ -2,11 +2,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, String
+from sqlalchemy import Boolean, ForeignKey, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin, UUIDPKMixin
+from src.models.tenant import DEFAULT_TENANT_ID
 
 
 class User(Base, UUIDPKMixin, TimestampMixin):
@@ -21,6 +22,14 @@ class User(Base, UUIDPKMixin, TimestampMixin):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(150))
     role: Mapped[str] = mapped_column(String(30), nullable=False)
+    # REL-064 (API-015): every row backfilled onto one seeded "Primary Tenant" at migration time
+    # (alembic/versions/w4x5y6z7a8b9) -- existing single-tenant behavior is unchanged.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        server_default=text(f"'{DEFAULT_TENANT_ID}'"),
+    )
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None]

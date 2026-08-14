@@ -15,6 +15,7 @@ from src.models.risk_limit_change_request import RiskLimitChangeRequest
 from src.models.shadow_mode import ShadowModeAttempt
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
+from src.models.tenant import Tenant
 from src.models.trading import Order, PortfolioPosition, RiskLimit, Trade
 from src.models.user import MfaBackupCode, NotificationChannel, User
 from src.models.webhook import WebhookEvent
@@ -45,4 +46,5 @@ __all__ = [
     "ChatMessage",
     "PaperTrade",
     "ShadowModeAttempt",
+    "Tenant",
 ]

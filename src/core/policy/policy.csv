@@ -139,3 +139,6 @@ p, RiskManager, /api/v1/strategies, POST
 p, SystemAdministrator, /api/v1/strategies/{strategy_id}, PATCH
 p, PortfolioManager, /api/v1/strategies/{strategy_id}, PATCH
 p, RiskManager, /api/v1/strategies/{strategy_id}, PATCH
+p, SystemAdministrator, /api/v1/tenants, POST
+p, SystemAdministrator, /api/v1/tenants/{tenant_id}/context, GET
+p, PortfolioManager, /api/v1/tenants/{tenant_id}/context, GET

@@ -72,7 +72,7 @@ from src.engine.paper_trading.account_equity import compute_account_equity
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
-from src.models.account import AccountEquitySnapshot
+from src.models.account import Account, AccountEquitySnapshot
 from src.models.agent import AgentControlState, AgentLog, AgentRun
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
@@ -375,8 +375,17 @@ def _persist_strategy_progress(
             return  # no Paper Account seeded yet -- can't satisfy Strategy.account_id's NOT NULL FK
 
         logic = output["strategy_logic"]
+        # REL-064: the resolved Paper account already carries a real tenant_id (every existing
+        # row was backfilled onto the one seeded "Primary Tenant" at migration time) -- one extra
+        # lookup at this already-established write site, not a new query pattern. account_id was
+        # already validated to resolve to a real row above (get_paper_account), so this is never
+        # None in practice.
+        account = session.get(Account, tracking.account_id)
+        assert account is not None
+        account_tenant_id = account.tenant_id
         strategy = Strategy(
             account_id=tracking.account_id,
+            tenant_id=account_tenant_id,
             name=logic.hypothesis[:150],
             hypothesis=logic.hypothesis,
             asset_class=logic.asset_class,

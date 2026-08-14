@@ -29,9 +29,11 @@ from src.api.routers.skills import router as skills_router
 from src.api.routers.strategies import router as strategies_router
 from src.api.routers.streams import router as streams_router
 from src.api.routers.system import router as system_router
+from src.api.routers.tenants import router as tenants_router
 from src.api.routers.users import router as users_router
 from src.api.routers.webhooks import router as webhooks_router
 from src.core.config import get_settings
+from src.core.rate_limit_middleware import RateLimitMiddleware
 from src.core.security_headers import SecurityHeadersMiddleware
 from src.core.vault import ensure_kv_engine
 from src.core.vault_transit import VaultTransitUnavailableError, ensure_transit_key
@@ -85,6 +87,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="TradingOS API", version="0.1.0", lifespan=lifespan)
+# REL-064 (API-014): registered FIRST, deliberately -- Starlette's add_middleware makes the
+# *last*-added call the *outermost* layer, so RateLimitMiddleware must be innermost (added before
+# CORS/SecurityHeaders below) for its own 429 responses to still bubble up through both of them
+# (CORS headers, security headers) on the way out. Registering it last instead would make it
+# outermost, and a rate-limited cross-origin call from the real dashboard would see an opaque CORS
+# failure rather than a readable 429 body -- see rate_limit_middleware.py's own module docstring.
+app.add_middleware(RateLimitMiddleware)
 # Dev-only: the Next.js dashboard (Phase 4 E4.3) runs on a different origin
 # (http://localhost:3000) than this API (http://localhost:8001), so the browser needs CORS to
 # call REST endpoints and open WebSocket connections here.
@@ -132,6 +141,7 @@ app.include_router(market_data_router)
 app.include_router(broker_config_router)
 app.include_router(memory_router)
 app.include_router(orders_router)
+app.include_router(tenants_router)
 configure_tracing(app)
 
 

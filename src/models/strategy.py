@@ -10,11 +10,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin, UUIDPKMixin
+from src.models.tenant import DEFAULT_TENANT_ID
 
 
 class Strategy(Base, UUIDPKMixin, TimestampMixin):
@@ -30,6 +32,16 @@ class Strategy(Base, UUIDPKMixin, TimestampMixin):
 
     account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False
+    )
+    # REL-064 (API-015): every row backfilled onto one seeded "Primary Tenant" at migration time
+    # (alembic/versions/w4x5y6z7a8b9) -- existing single-tenant behavior is unchanged. Set
+    # explicitly at this row's one authoritative write site (_persist_strategy_progress /
+    # create_strategy) from the resolved account's own tenant_id, not left to drift.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        server_default=text(f"'{DEFAULT_TENANT_ID}'"),
     )
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

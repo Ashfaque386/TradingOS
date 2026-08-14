@@ -8,15 +8,20 @@ read-only endpoint in this codebase -- this MVP auth pass only gates the sensiti
 (Phase_14_Master_Development_Roadmap.md §5.3), not a blanket relogin requirement for every GET.
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from src.api.deps import require_role
+from src.api.deps import get_current_user, require_role
 from src.core import vault_transit
+from src.core.api_rate_limit import peek
+from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.core.vault_transit import VaultTransitUnavailableError
 from src.engine.risk import kill_switch_service
+from src.memory.redis_client import get_redis_client
 from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
@@ -97,3 +102,33 @@ def rotate_jwt_signing_key(
     except VaultTransitUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return JwtSigningKeyRotateResponse(new_version=new_version)
+
+
+class RateLimitStatusResponse(BaseModel):
+    limit: int
+    remaining: int
+    window_seconds: int
+    reset_at: datetime
+
+
+@router.get("/rate-limit/status", response_model=RateLimitStatusResponse)
+def rate_limit_status(user: User = Depends(get_current_user)) -> RateLimitStatusResponse:
+    """API-014. Reads the caller's own current-window usage back out of
+    RateLimitMiddleware's real counter (src/core/api_rate_limit.py::peek, read-only -- this call
+    itself doesn't spend from the budget it reports) -- the same "user:{id}" key the middleware
+    used for this exact request. "My own data," not a privileged action, so this stays gated to
+    any authenticated caller rather than a specific role, matching this router's own precedent of
+    leaving plain reads open where nothing sensitive is exposed."""
+    settings = get_settings()
+    result = peek(
+        f"user:{user.id}",
+        redis_client=get_redis_client(),
+        limit=settings.api_rate_limit_requests,
+        window_seconds=settings.api_rate_limit_window_seconds,
+    )
+    return RateLimitStatusResponse(
+        limit=result.limit,
+        remaining=result.remaining,
+        window_seconds=settings.api_rate_limit_window_seconds,
+        reset_at=result.reset_at,
+    )

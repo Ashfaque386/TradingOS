@@ -1,11 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin, UUIDPKMixin
+from src.models.tenant import DEFAULT_TENANT_ID
 
 
 class Order(Base, UUIDPKMixin):
@@ -18,6 +19,16 @@ class Order(Base, UUIDPKMixin):
     )
     strategy_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=False
+    )
+    # REL-064 (API-015): every row backfilled onto one seeded "Primary Tenant" at migration time
+    # (alembic/versions/w4x5y6z7a8b9) -- existing single-tenant behavior is unchanged. Set
+    # explicitly at this row's one authoritative write site (place_order/cancel_order) from the
+    # resolved account's own tenant_id, not left to drift.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        server_default=text(f"'{DEFAULT_TENANT_ID}'"),
     )
     broker_order_id: Mapped[str | None] = mapped_column(String(50))
     symbol: Mapped[str] = mapped_column(String(30), nullable=False)
