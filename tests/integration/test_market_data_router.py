@@ -4,8 +4,10 @@ ingestion runs in this Docker stack (RELIANCE is a real, confirmed-present symbo
 tests/integration/test_corporate_actions_backtest_diff.py, which relies on the same fact).
 """
 
+import time
 import uuid
 from datetime import UTC, date, datetime
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +15,9 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.db import get_session
+from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.corporate_action import CorporateAction
+from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
 
@@ -135,3 +139,118 @@ def test_option_chain_against_a_real_broker():
         )
     body = response.json()
     assert body["underlying"] == "NIFTY"
+
+
+# REL-055: POST /ingest/trigger + GET /ingest/jobs/{job_id}/status.
+
+
+def test_ingest_trigger_requires_the_gated_role():
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    try:
+        response = client.post(
+            "/api/v1/market/ingest/trigger",
+            json={
+                "source": "yfinance",
+                "symbols": ["RELIANCE"],
+                "start": "2024-01-01",
+                "end": "2024-01-02",
+            },
+            headers=auth_header(token),
+        )
+        assert response.status_code == 403
+    finally:
+        cleanup_user(user_id)
+
+
+def test_ingest_trigger_rejects_an_unknown_source():
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.post(
+            "/api/v1/market/ingest/trigger",
+            json={
+                "source": "not_a_real_source",
+                "symbols": ["RELIANCE"],
+                "start": "2024-01-01",
+                "end": "2024-01-02",
+            },
+            headers=auth_header(token),
+        )
+        assert response.status_code == 422  # Literal["bhavcopy", "yfinance"] rejects it first
+    finally:
+        cleanup_user(user_id)
+
+
+def test_ingest_trigger_runs_a_real_job_to_completion_and_status_reflects_it():
+    """Mocks only run_ingestion itself (the real network fetch) -- the job state machine
+    (Running -> Completed, real threading.Thread, real job_id/status polling) all runs for
+    real, mirroring strategies.py's own backtest-trigger job pattern."""
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        with patch("src.api.routers.market_data.run_ingestion", return_value=42):
+            trigger = client.post(
+                "/api/v1/market/ingest/trigger",
+                json={
+                    "source": "yfinance",
+                    "symbols": ["RELIANCE"],
+                    "start": "2024-01-01",
+                    "end": "2024-01-02",
+                },
+                headers=auth_header(token),
+            )
+        assert trigger.status_code == 202
+        job_id = trigger.json()["job_id"]
+
+        deadline = time.monotonic() + 5
+        status_body = {}
+        while time.monotonic() < deadline:
+            status_response = client.get(f"/api/v1/market/ingest/jobs/{job_id}/status")
+            assert status_response.status_code == 200
+            status_body = status_response.json()
+            if status_body["status"] != "Running":
+                break
+            time.sleep(0.05)
+
+        assert status_body["status"] == "Completed"
+        assert status_body["rows_written"] == 42
+        assert status_body["error"] is None
+    finally:
+        cleanup_user(user_id)
+
+
+def test_ingest_trigger_job_reports_a_real_failure_honestly():
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        with patch(
+            "src.api.routers.market_data.run_ingestion",
+            side_effect=RuntimeError("real adapter failure for test"),
+        ):
+            trigger = client.post(
+                "/api/v1/market/ingest/trigger",
+                json={
+                    "source": "bhavcopy",
+                    "symbols": ["RELIANCE"],
+                    "start": "2024-01-01",
+                    "end": "2024-01-02",
+                },
+                headers=auth_header(token),
+            )
+        job_id = trigger.json()["job_id"]
+
+        deadline = time.monotonic() + 5
+        status_body = {}
+        while time.monotonic() < deadline:
+            status_response = client.get(f"/api/v1/market/ingest/jobs/{job_id}/status")
+            status_body = status_response.json()
+            if status_body["status"] != "Running":
+                break
+            time.sleep(0.05)
+
+        assert status_body["status"] == "Failed"
+        assert "real adapter failure for test" in status_body["error"]
+    finally:
+        cleanup_user(user_id)
+
+
+def test_ingest_job_status_unknown_job_is_a_404():
+    response = client.get(f"/api/v1/market/ingest/jobs/{uuid.uuid4()}/status")
+    assert response.status_code == 404

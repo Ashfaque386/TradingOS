@@ -109,3 +109,13 @@ p, RiskManager, /api/v1/paper-trading/execute, POST
 p, SystemAdministrator, /api/v1/shadow-mode/attempt, POST
 p, PortfolioManager, /api/v1/shadow-mode/attempt, POST
 p, RiskManager, /api/v1/shadow-mode/attempt, POST
+p, SystemAdministrator, /api/v1/orders, POST
+p, PortfolioManager, /api/v1/orders, POST
+p, RiskManager, /api/v1/orders, POST
+p, SystemAdministrator, /api/v1/orders/{order_id}, DELETE
+p, PortfolioManager, /api/v1/orders/{order_id}, DELETE
+p, RiskManager, /api/v1/orders/{order_id}, DELETE
+p, SystemAdministrator, /api/v1/positions/{symbol}/close, POST
+p, PortfolioManager, /api/v1/positions/{symbol}/close, POST
+p, RiskManager, /api/v1/positions/{symbol}/close, POST
+p, SystemAdministrator, /api/v1/market/ingest/trigger, POST

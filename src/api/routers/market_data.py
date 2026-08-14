@@ -6,23 +6,41 @@ broker adapter for live quotes/option chains from E10.4) -- no endpoint here wri
 places an order. Left ungated, matching every other plain market-data-style read in this
 codebase (src/api/routers/portfolio.py's `/positions`/`/portfolio/margin`, src/api/routers/
 agents.py's `/runs`) -- these predate real JWT/RBAC (REL-007) and carry no execution authority.
+
+REL-055: `POST /ingest/trigger` is a genuine write action -- unlike everything else in this
+file, it's gated (SystemAdministrator only, an infra/ops action). Reuses
+`strategies.py`'s exact background-job pattern (`_BacktestJob`/`threading.Thread(daemon=True)`,
+`strategies.py:365-548`) because `src.data.ingest.pipeline.run()` is synchronous, blocking
+network I/O (real bhavcopy/yfinance calls) that would stall the event loop if awaited directly
+inside an `async def` handler.
 """
 
+import threading
+import uuid
+from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from src.api.deps import require_role
 from src.brokers.base import OptionChain, Quote
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.config import get_settings
 from src.core.db import get_session
+from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake, IntradayDataLake
+from src.data.ingest.pipeline import ADAPTERS
+from src.data.ingest.pipeline import run as run_ingestion
 from src.models.corporate_action import CorporateAction
+from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/market", tags=["market-data"])
+
+_can_trigger_ingest = require_role(ROLE_SYSTEM_ADMINISTRATOR, audit_denials=True)
 
 
 class OhlcvBar(BaseModel):
@@ -160,3 +178,96 @@ async def get_option_chain(underlying: str, expiry: date) -> OptionChain:
         raise HTTPException(
             status_code=502, detail=f"Broker option-chain request failed: {exc}"
         ) from exc
+
+
+@dataclass
+class _IngestJob:
+    status: Literal["Running", "Completed", "Failed"]
+    error: str | None = None
+    rows_written: int | None = None
+
+
+_ingest_jobs: dict[str, _IngestJob] = {}
+_ingest_jobs_lock = threading.Lock()
+
+
+class IngestTriggerRequest(BaseModel):
+    source: Literal["bhavcopy", "yfinance"]
+    symbols: list[str]
+    start: date
+    end: date
+
+
+class IngestTriggerResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class IngestJobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    error: str | None
+    rows_written: int | None
+
+
+def _run_ingest_job(
+    *, job_id: str, source: str, symbols: list[str], start: date, end: date
+) -> None:
+    try:
+        written = run_ingestion(source, symbols, start, end)
+    except Exception as exc:  # noqa: BLE001 -- a real, unpredictable adapter/network failure
+        # must land in the job's own status, not crash this daemon thread silently.
+        with _ingest_jobs_lock:
+            _ingest_jobs[job_id] = _IngestJob(status="Failed", error=str(exc))
+        return
+    with _ingest_jobs_lock:
+        _ingest_jobs[job_id] = _IngestJob(status="Completed", rows_written=written)
+
+
+@router.post("/ingest/trigger", response_model=IngestTriggerResponse, status_code=202)
+def trigger_ingest(
+    body: IngestTriggerRequest, _user: User = Depends(_can_trigger_ingest)
+) -> IngestTriggerResponse:
+    """API-036. Manually trigger the same real EOD ingestion `python -m
+    src.data.ingest.pipeline` already performs from the CLI -- run in a background thread
+    (mirrors strategies.py's own backtest-trigger job pattern) since the real fetch/write is
+    synchronous, blocking I/O that would stall the event loop if awaited directly here."""
+    if body.source not in ADAPTERS:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown source -- choices are {sorted(ADAPTERS)}"
+        )
+    if not body.symbols:
+        raise HTTPException(status_code=400, detail="symbols must not be empty")
+
+    job_id = str(uuid.uuid4())
+    with _ingest_jobs_lock:
+        _ingest_jobs[job_id] = _IngestJob(status="Running")
+
+    threading.Thread(
+        target=_run_ingest_job,
+        kwargs={
+            "job_id": job_id,
+            "source": body.source,
+            "symbols": [s.strip().upper() for s in body.symbols if s.strip()],
+            "start": body.start,
+            "end": body.end,
+        },
+        daemon=True,
+    ).start()
+
+    return IngestTriggerResponse(job_id=job_id, status="Running")
+
+
+@router.get("/ingest/jobs/{job_id}/status", response_model=IngestJobStatusResponse)
+def get_ingest_job_status(job_id: str) -> IngestJobStatusResponse:
+    """Polls one specific trigger_ingest() job's real status/row-count -- NOT the same thing as
+    API-037's own "/market/datalake/status -- data freshness/partition completeness check",
+    which asks a different question (is the lake as a whole current) regardless of any specific
+    trigger call. API-037 stays genuinely open; this only closes API-036."""
+    with _ingest_jobs_lock:
+        job = _ingest_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown ingest job (or the app restarted)")
+    return IngestJobStatusResponse(
+        job_id=job_id, status=job.status, error=job.error, rows_written=job.rows_written
+    )
