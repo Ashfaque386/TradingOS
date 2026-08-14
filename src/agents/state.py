@@ -78,6 +78,14 @@ class StrategyLogic(StrictModel):
     # compliance_checker.py's own module docstrings named this exact gap). None for "Equity"
     # strategies, where there is nothing to declare.
     option_legs: list[StrategyOptionLeg] | None = None
+    # REL-053: an optional structured tunable-parameter space -- {name: (kind, low, high)},
+    # matching src/engine/optimization/optuna_sweep.py's own ParamSpace shape exactly -- the
+    # Strategy Generator Agent may declare this alongside its free-text logic above whenever the
+    # strategy has genuinely tunable numeric thresholds (e.g. a moving-average window, a stop-
+    # loss %). None (not fabricated) whenever no tunable parameters were declared, which the
+    # Optimization Agent treats as "this strategy has nothing for Optuna to sweep over" -- an
+    # honest per-strategy absence, not a global skip.
+    tunable_parameters: dict[str, tuple[Literal["int", "float"], float, float]] | None = None
 
 
 class PythonCode(StrictModel):
@@ -160,6 +168,14 @@ class OptimizationResult(StrictModel):
     # one rolling window -- see that module's own docstring for why, not fabricated as a pass.
     walk_forward_results: list[dict[str, object]] = Field(default_factory=list)
     walk_forward_passed: bool | None = None  # None: WFO didn't run at all (see notes)
+    # REL-053: real Optuna hyperparameter-sweep output, populated only when
+    # state.strategy_logic.tunable_parameters was declared -- best_params above is reused
+    # (the shapes already match); these three are Optuna-specific. optuna_ran=False (not
+    # fabricated) whenever no tunable_parameters exist, mirroring walk_forward_passed's own
+    # None-means-didn't-run convention.
+    optuna_ran: bool = False
+    optuna_best_value: float | None = None
+    optuna_parameter_importances: dict[str, float] = Field(default_factory=dict)
     notes: str | None = None
 
 
