@@ -111,6 +111,13 @@ export function KillSwitchButton() {
   );
 }
 
+/** Assumed max drag distance for progress-linked effects (fill width, label fade, glow) --
+ * matches the ~300px track width set below; the real per-render max (`handleDragEnd`'s own
+ * `maxDrag`, from the track's actual measured `clientWidth`) is what the confirm threshold and
+ * release-spring snap-back use, so a small mismatch here only softens the visual ramp, never the
+ * real confirm behavior. */
+const PROGRESS_RANGE = 232;
+
 function SlideToHalt({
   onConfirm,
   pending,
@@ -122,7 +129,9 @@ function SlideToHalt({
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const x = useMotionValue(0);
-  const glow = useTransform(x, [0, 240], [0.12, 0.85]);
+  const progress = useTransform(x, [0, PROGRESS_RANGE], [0, 1], { clamp: true });
+  const fillWidth = useTransform(progress, (p) => `${p * 100}%`);
+  const labelOpacity = useTransform(progress, [0, 1], [0.55, 1]);
   const [triggered, setTriggered] = useState(false);
   const locked = pending || triggered || disabled;
 
@@ -160,13 +169,19 @@ function SlideToHalt({
         <div
           ref={trackRef}
           data-testid="kill-switch-track"
-          className="relative h-14 w-full shrink-0 overflow-hidden rounded-full border border-down/25 bg-bg sm:w-[300px]"
+          className="relative h-14 w-full shrink-0 overflow-hidden rounded-full border border-down/25 bg-bg shadow-[inset_0_1px_3px_rgba(0,0,0,0.06)] sm:w-[300px]"
         >
+          {/* Real drag-progress fill, not a flat opacity wash -- grows with the handle so the
+              track itself communicates how close the drag is to confirming, matching the
+              slide-to-pay pattern used by real payment/exchange confirm sliders. */}
           <motion.div
-            className="pointer-events-none absolute inset-0 bg-down/20"
-            style={{ opacity: glow }}
+            className="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-down/20 to-down/35"
+            style={{ width: fillWidth }}
           />
-          <div className="absolute inset-0 flex items-center justify-center text-xs font-medium uppercase tracking-[0.2em] text-down/60">
+          <motion.div
+            className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs font-medium uppercase tracking-[0.2em] text-down/70"
+            style={{ opacity: locked ? 1 : labelOpacity }}
+          >
             {pending
               ? "Halting…"
               : triggered
@@ -174,7 +189,7 @@ function SlideToHalt({
                 : disabled
                   ? "Insufficient role"
                   : "Slide to confirm"}
-          </div>
+          </motion.div>
           <motion.div
             data-testid="kill-switch-slider"
             drag={locked ? false : "x"}
@@ -182,8 +197,10 @@ function SlideToHalt({
             dragElastic={0.04}
             dragMomentum={false}
             onDragEnd={handleDragEnd}
-            style={{ x, width: HANDLE_WIDTH, left: TRACK_PADDING, top: TRACK_PADDING }}
-            className="absolute flex h-12 cursor-grab items-center justify-center rounded-full bg-down text-white shadow-[0_0_20px_rgba(244,63,94,0.55)] active:cursor-grabbing"
+            animate={!locked ? { scale: [1, 1.05, 1] } : { scale: 1 }}
+            transition={!locked ? { duration: 2.4, repeat: Infinity, ease: "easeInOut" } : undefined}
+            style={{ x, top: "50%", y: "-50%", width: HANDLE_WIDTH, left: TRACK_PADDING }}
+            className="absolute flex h-12 cursor-grab items-center justify-center rounded-full bg-gradient-to-b from-down to-down/90 text-white shadow-[0_2px_10px_rgba(244,63,94,0.45),0_0_20px_rgba(244,63,94,0.4)] ring-1 ring-white/20 active:cursor-grabbing"
           >
             <ChevronsRight className="h-5 w-5" />
           </motion.div>
