@@ -12,9 +12,11 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
+import polars as pl
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.account import Account
@@ -607,6 +609,138 @@ def test_cross_strategy_backtest_views_rel_040():
         _cleanup_fixture_rows(*ids_a)
         _cleanup_fixture_rows(*ids_b)
         cleanup_user(admin_id)
+
+
+def _write_equity_curve_parquet(backtest_id: uuid.UUID, equities: list[float]) -> None:
+    """Same real path/schema src.engine.sandbox.backtest_runner.write_equity_curve_parquet uses
+    in production -- writing it directly here (rather than via a real ~60-90s sandbox run) lets
+    the correlation endpoint be exercised against a real, readable parquet file with a known
+    return series, matching test_cross_strategy_backtest_views_rel_040's own precedent of
+    directly inserting a BacktestResult row instead of always paying for a real sandbox run."""
+    root = get_settings().data_lake_root.parent / "equity_curves"
+    root.mkdir(parents=True, exist_ok=True)
+    dates = [f"2026-08-{i + 1:02d}" for i in range(len(equities))]
+    pl.DataFrame({"date": dates, "equity": equities}).write_parquet(root / f"{backtest_id}.parquet")
+
+
+def test_backtest_compare_correlation_and_wider_monte_carlo_percentiles_rel_069():
+    """REL-069: GET /backtests/compare/correlation (real pairwise return correlation, honest
+    None for insufficient-overlap/zero-curve pairs, same 6-id cap + omission convention as
+    /backtests/compare) and the extended /monte-carlo response (P50/P75/P90/P95/P99, all derived
+    from the same simulated_max_drawdowns array the existing P95 field already used)."""
+    ids_a = _create_fixture_rows()
+    ids_b = _create_fixture_rows()
+    rising = [100.0, 102.0, 101.0, 105.0, 103.0, 108.0, 106.0, 110.0, 109.0, 112.0, 115.0]
+    inverted = [100.0]
+    for i in range(1, len(rising)):
+        pct = (rising[i] - rising[i - 1]) / rising[i - 1]
+        inverted.append(inverted[-1] * (1 - pct))
+    backtest_up_id = uuid.uuid4()
+    backtest_down_id = uuid.uuid4()
+    backtest_empty_id = uuid.uuid4()
+
+    try:
+        with get_session() as session:
+            session.add(
+                BacktestResult(
+                    id=backtest_up_id,
+                    strategy_version_id=ids_a[3],
+                    date_from=date(2025, 1, 1),
+                    date_to=date(2025, 12, 31),
+                    initial_capital=100000.00,
+                    total_trades=4,
+                    trades=[
+                        {"return_pct": 0.05},
+                        {"return_pct": -0.03},
+                        {"return_pct": 0.02},
+                        {"return_pct": 0.01},
+                    ],
+                    equity_curve_path=str(
+                        get_settings().data_lake_root.parent
+                        / "equity_curves"
+                        / f"{backtest_up_id}.parquet"
+                    ),
+                )
+            )
+            session.add(
+                BacktestResult(
+                    id=backtest_down_id,
+                    strategy_version_id=ids_b[3],
+                    date_from=date(2025, 1, 1),
+                    date_to=date(2025, 12, 31),
+                    initial_capital=100000.00,
+                    total_trades=0,
+                    trades=[],
+                    equity_curve_path=str(
+                        get_settings().data_lake_root.parent
+                        / "equity_curves"
+                        / f"{backtest_down_id}.parquet"
+                    ),
+                )
+            )
+            session.add(
+                BacktestResult(
+                    id=backtest_empty_id,
+                    strategy_version_id=ids_a[3],
+                    date_from=date(2025, 1, 1),
+                    date_to=date(2025, 12, 31),
+                    initial_capital=100000.00,
+                    total_trades=0,
+                    trades=[],
+                )
+            )
+            session.commit()
+        _write_equity_curve_parquet(backtest_up_id, rising)
+        _write_equity_curve_parquet(backtest_down_id, inverted)
+
+        response = client.get(
+            "/api/v1/strategies/backtests/compare/correlation",
+            params={
+                "ids": f"{backtest_up_id},{backtest_down_id},{backtest_empty_id},{uuid.uuid4()}"
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["run_ids"]) == 3  # the random 4th id is silently omitted
+        idx = {rid: i for i, rid in enumerate(body["run_ids"])}
+        matrix = body["matrix"]
+
+        assert matrix[idx[str(backtest_up_id)]][idx[str(backtest_up_id)]] == 1.0
+        # up and down are exact sign-inverted return series -> perfectly anti-correlated.
+        down_corr = matrix[idx[str(backtest_up_id)]][idx[str(backtest_down_id)]]
+        assert down_corr < -0.99
+        # symmetric.
+        assert down_corr == matrix[idx[str(backtest_down_id)]][idx[str(backtest_up_id)]]
+        # the empty curve has no real points at all -> None, never a fabricated 0.
+        assert matrix[idx[str(backtest_up_id)]][idx[str(backtest_empty_id)]] is None
+
+        too_many_ids = ",".join(str(uuid.uuid4()) for _ in range(7))
+        capped_response = client.get(
+            "/api/v1/strategies/backtests/compare/correlation", params={"ids": too_many_ids}
+        )
+        assert capped_response.status_code == 422
+
+        mc_response = client.get(f"/api/v1/strategies/backtests/{backtest_up_id}/monte-carlo")
+        assert mc_response.status_code == 200
+        mc = mc_response.json()
+        assert (
+            0
+            <= mc["percentile_50_max_drawdown"]
+            <= mc["percentile_75_max_drawdown"]
+            <= mc["percentile_90_max_drawdown"]
+            <= mc["percentile_95_max_drawdown"]
+            <= mc["percentile_99_max_drawdown"]
+        )
+    finally:
+        with get_session() as session:
+            for bid in (backtest_up_id, backtest_down_id, backtest_empty_id):
+                session.query(BacktestResult).filter(BacktestResult.id == bid).delete()
+            session.commit()
+        for bid in (backtest_up_id, backtest_down_id):
+            path = get_settings().data_lake_root.parent / "equity_curves" / f"{bid}.parquet"
+            path.unlink(missing_ok=True)
+        _cleanup_fixture_rows(*ids_a)
+        _cleanup_fixture_rows(*ids_b)
 
 
 # --- Suggestions (REL-048/049) -----------------------------------------------------------------

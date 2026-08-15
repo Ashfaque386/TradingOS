@@ -59,6 +59,7 @@ from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake
+from src.engine.backtest.comparison import EquityCurveSeries, compute_return_correlation_matrix
 from src.engine.optimization.monte_carlo import run_monte_carlo_simulation
 from src.engine.optimization.monte_carlo_persistence import persist_monte_carlo_p95_max_drawdown
 from src.engine.optimization.walk_forward_adapter import run_walk_forward_from_real_backtest
@@ -764,6 +765,20 @@ def list_latest_backtests() -> list[BacktestWithStrategy]:
         ]
 
 
+def _parse_backtest_ids(ids: str) -> list[uuid.UUID]:
+    """REL-040/069: shared by /backtests/compare and /backtests/compare/correlation, both of
+    which operate over the same "up to 6 arbitrary backtest ids" selection."""
+    raw_ids = [i.strip() for i in ids.split(",") if i.strip()]
+    if len(raw_ids) > 6:
+        raise HTTPException(
+            status_code=422, detail="At most 6 backtest ids may be compared at once"
+        )
+    try:
+        return [uuid.UUID(i) for i in raw_ids]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid backtest id: {exc}") from exc
+
+
 @router.get("/backtests/compare", response_model=list[BacktestCompareRow])
 def compare_backtests(
     ids: str = Query(..., description="Comma-separated backtest UUIDs, max 6"),
@@ -773,15 +788,7 @@ def compare_backtests(
     graceful-degradation convention src/api/routers/portfolio.py's by-broker endpoints already
     established. Includes each row's real equity curve so the frontend can overlay them from one
     round trip instead of N follow-up requests."""
-    raw_ids = [i.strip() for i in ids.split(",") if i.strip()]
-    if len(raw_ids) > 6:
-        raise HTTPException(
-            status_code=422, detail="At most 6 backtest ids may be compared at once"
-        )
-    try:
-        parsed_ids = [uuid.UUID(i) for i in raw_ids]
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid backtest id: {exc}") from exc
+    parsed_ids = _parse_backtest_ids(ids)
 
     rows: list[BacktestCompareRow] = []
     with get_session() as session:
@@ -806,10 +813,54 @@ def compare_backtests(
     return rows
 
 
+class CorrelationMatrixResponse(BaseModel):
+    run_ids: list[str]
+    run_labels: list[str]
+    matrix: list[list[float | None]]
+
+
+@router.get("/backtests/compare/correlation", response_model=CorrelationMatrixResponse)
+def compare_backtests_correlation(
+    ids: str = Query(..., description="Comma-separated backtest UUIDs, max 6"),
+) -> CorrelationMatrixResponse:
+    """REL-069: real pairwise return correlation between the same runs GET /backtests/compare
+    already fetches -- do two strategies tend to win and lose on the same days? A `null` cell
+    means fewer than comparison.MIN_OVERLAP_DAYS real calendar dates overlap between that pair's
+    equity curves (e.g. non-overlapping backtest windows), never a fabricated 0 or 1. Reuses the
+    same id-parsing and per-entry graceful-omission convention as /backtests/compare itself."""
+    parsed_ids = _parse_backtest_ids(ids)
+
+    series: list[EquityCurveSeries] = []
+    labels: list[str] = []
+    with get_session() as session:
+        for backtest_id in parsed_ids:
+            result = session.get(BacktestResult, backtest_id)
+            if result is None:
+                continue
+            version = session.get(StrategyVersion, result.strategy_version_id)
+            if version is None:
+                continue
+            strategy = session.get(Strategy, version.strategy_id)
+            if strategy is None:
+                continue
+            points = [(p.date, p.equity) for p in _read_equity_curve(result)]
+            series.append(EquityCurveSeries(run_id=str(result.id), points=points))
+            labels.append(f"{strategy.name} · {result.created_at.date().isoformat()}")
+
+    matrix_by_pair = compute_return_correlation_matrix(series)
+    run_ids = [s.run_id for s in series]
+    matrix = [[matrix_by_pair[(a, b)] for b in run_ids] for a in run_ids]
+    return CorrelationMatrixResponse(run_ids=run_ids, run_labels=labels, matrix=matrix)
+
+
 class MonteCarloHistogramResponse(BaseModel):
     bucket_edges: list[float]
     bucket_counts: list[int]
+    percentile_50_max_drawdown: float
+    percentile_75_max_drawdown: float
+    percentile_90_max_drawdown: float
     percentile_95_max_drawdown: float
+    percentile_99_max_drawdown: float
     historical_max_drawdown: float
     n_simulations: int
 
@@ -820,7 +871,11 @@ def get_monte_carlo_histogram(backtest_id: uuid.UUID) -> MonteCarloHistogramResp
     persisted real trade ledger (REL-022) -- cheap (milliseconds, pure numpy resampling), no
     schema change, no re-running the sandboxed vectorbt backtest. Only the single percentile_95
     summary is ever persisted (REL-023, BacktestResult.monte_carlo_p95_max_drawdown); the full
-    distribution this endpoint returns is always computed fresh and never written back."""
+    distribution this endpoint returns is always computed fresh and never written back.
+
+    REL-069: percentile_50/75/90/99 are extracted from the same `simulated_max_drawdowns` array
+    the P95 figure already comes from -- zero extra simulation cost, just a richer read of a
+    distribution this endpoint already paid to compute."""
     with get_session() as session:
         result = session.get(BacktestResult, backtest_id)
         if result is None:
@@ -839,7 +894,11 @@ def get_monte_carlo_histogram(backtest_id: uuid.UUID) -> MonteCarloHistogramResp
     return MonteCarloHistogramResponse(
         bucket_edges=[float(e) for e in edges],
         bucket_counts=[int(c) for c in counts],
+        percentile_50_max_drawdown=float(np.percentile(mc_result.simulated_max_drawdowns, 50)),
+        percentile_75_max_drawdown=float(np.percentile(mc_result.simulated_max_drawdowns, 75)),
+        percentile_90_max_drawdown=float(np.percentile(mc_result.simulated_max_drawdowns, 90)),
         percentile_95_max_drawdown=float(mc_result.percentile_95_max_drawdown),
+        percentile_99_max_drawdown=float(np.percentile(mc_result.simulated_max_drawdowns, 99)),
         historical_max_drawdown=float(mc_result.historical_max_drawdown),
         n_simulations=mc_result.n_simulations,
     )

@@ -195,6 +195,55 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
     });
   });
 
+  it("REL-069: the Comparison Workspace shows a real risk-adjusted metrics chart and return correlation matrix for 2 selected runs", () => {
+    loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) => {
+      cy.request({
+        url: `${API_URL}/api/v1/strategies/backtests/latest`,
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((latestRes) => {
+        const realRows = latestRes.body as { strategy_name: string }[];
+        if (realRows.length < 2) {
+          cy.log("Fewer than 2 strategies have a real backtest -- skipping compare-metrics check.");
+          return;
+        }
+        loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+        cy.visit("/backtests");
+
+        function checkboxes() {
+          return cy
+            .get("main")
+            .contains("Latest backtest per strategy")
+            .parents(".rounded-card")
+            .find('input[type="checkbox"]');
+        }
+        checkboxes().eq(0).click();
+        cy.url().should("match", /compare=[0-9a-f-]+$/i);
+        checkboxes().filter(":not(:checked)").eq(0).click();
+        cy.url().should("match", /compare=[^&]+(,|%2C)[^&]+/i);
+
+        cy.contains("Risk-Adjusted Metrics").should("be.visible");
+        cy.contains("Return Correlation").should("be.visible");
+        // The metrics chart is a real echarts <svg>; the correlation matrix always shows at
+        // least a self-correlation diagonal cell reading "1.00" for a run with any real trades.
+        cy.contains("Risk-Adjusted Metrics")
+          .parents(".rounded-card")
+          .find("svg")
+          .should("exist");
+        // Either real correlation cells render, or the honest not-enough-data copy -- never a
+        // blank silent gap. Uses `.should(callback)` (not `.then()`) so Cypress retries this
+        // check against the async GET /backtests/compare/correlation response instead of
+        // sampling the DOM once while the query is still loading.
+        cy.contains("Return Correlation")
+          .parents(".rounded-card")
+          .should(($card) => {
+            const hasCells = $card.find('[title^="Correlation:"], [title*="overlapping"]').length > 0;
+            const hasFallback = $card.text().includes("Not enough of the selected runs");
+            expect(hasCells || hasFallback, "correlation cells or honest fallback").to.be.true;
+          });
+      });
+    });
+  });
+
   it("Monte Carlo tab reflects the real per-trade return distribution (histogram or the honest <2-trades state)", () => {
     loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) => {
       cy.request({
@@ -221,6 +270,47 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
           if (backtest.total_trades !== null && backtest.total_trades >= 2) {
             cy.contains("resamples of this backtest").should("be.visible");
             // ReactECharts (opts.renderer: "svg") mounts a real <svg> chart, not a placeholder.
+            cy.get("main svg").should("exist");
+            // REL-069: the P50-P99 percentile stat strip, all derived from the same real
+            // simulated_max_drawdowns array the histogram itself plots.
+            cy.contains("P50 Max DD").should("be.visible");
+            cy.contains("P75 Max DD").should("be.visible");
+            cy.contains("P90 Max DD").should("be.visible");
+            cy.contains("P95 Max DD").should("be.visible");
+            cy.contains("P99 Max DD").should("be.visible");
+          } else {
+            cy.contains("Not enough real closed trades").should("be.visible");
+          }
+        });
+      });
+    });
+  });
+
+  it("REL-069: PnL Distribution tab reflects the real per-trade return histogram (or the honest <2-trades state)", () => {
+    loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) => {
+      cy.request({
+        url: `${API_URL}/api/v1/strategies`,
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((strategiesRes) => {
+        const withBacktests = (strategiesRes.body as { id: string; backtest_count: number }[]).find(
+          (s) => s.backtest_count > 0,
+        );
+        if (!withBacktests) {
+          cy.log("No strategy with a real backtest exists -- skipping PnL Distribution tab check.");
+          return;
+        }
+        cy.request({
+          url: `${API_URL}/api/v1/strategies/${withBacktests.id}`,
+          headers: { Authorization: `Bearer ${token}` },
+        }).then((detailRes) => {
+          const backtest = detailRes.body.backtests[0] as { id: string; total_trades: number | null };
+
+          loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+          cy.visit(`/backtests?strategy=${withBacktests.id}&run=${backtest.id}&tab=pnl-distribution`);
+          cy.contains("PnL Distribution").click();
+
+          if (backtest.total_trades !== null && backtest.total_trades >= 2) {
+            cy.contains("real per-trade returns, bucketed by outcome").should("be.visible");
             cy.get("main svg").should("exist");
           } else {
             cy.contains("Not enough real closed trades").should("be.visible");

@@ -15,6 +15,10 @@ paths = [
 # a real false positive on a real identifier, not a secret. Allowlisted by exact string rather
 # than by path, since this name legitimately appears in both the Python model and the TS
 # frontend type it mirrors.
+# REL-068: same false positive, same reasoning, for `p95_duration_seconds` (a real
+# AgentAnalyticsSummaryRow field, src/api/routers/agents.py, mirrored in
+# frontend/src/components/agents/agent-success-rate-table.tsx).
 regexes = [
     '''monte_carlo_p95_max_drawdown''',
+    '''p95_duration_seconds''',
 ]

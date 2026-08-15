@@ -2,12 +2,16 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { Card } from "@/components/ui/card";
 import { BacktestComparisonTable } from "./comparison-table";
 import { CompareEquityCurveChart } from "./compare-equity-curve-chart";
+import { CompareMetricsChart } from "./compare-metrics-chart";
+import { CorrelationMatrix } from "./correlation-matrix";
 
 /** REL-042: renders once 2+ runs are selected (checkboxes on the cross-strategy comparison
  * table below, state lives in the page's own `?compare=` URL param) -- a real KPI grid plus a
- * real multi-run equity-curve overlay in one round trip via GET /strategies/backtests/compare. */
+ * real multi-run equity-curve overlay in one round trip via GET /strategies/backtests/compare.
+ * REL-069 adds a risk-adjusted metrics ranking chart and a real return-correlation heatmap. */
 export function CompareWorkspace({ ids }: { ids: string[] }) {
   const query = useQuery({
     queryKey: ["compare-backtests", ids],
@@ -39,6 +43,14 @@ export function CompareWorkspace({ ids }: { ids: string[] }) {
           backtest: r,
         }))}
       />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card eyebrow="Ranked" title="Risk-Adjusted Metrics">
+          <CompareMetricsChart rows={rows} />
+        </Card>
+        <Card eyebrow="Diversification" title="Return Correlation">
+          <CorrelationMatrix ids={ids} />
+        </Card>
+      </div>
       <CompareEquityCurveChart rows={rows} />
     </div>
   );

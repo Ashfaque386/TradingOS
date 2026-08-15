@@ -17,6 +17,7 @@ import { BacktestComparisonTable } from "@/components/backtests/comparison-table
 import { TradeListTable } from "@/components/backtests/trade-list-table";
 import { WalkForwardTable } from "@/components/backtests/walk-forward-table";
 import { MonteCarloHistogram } from "@/components/backtests/monte-carlo-histogram";
+import { TradePnlHistogram } from "@/components/backtests/trade-pnl-histogram";
 import { CompareWorkspace } from "@/components/backtests/compare-workspace";
 import { ExportButton } from "@/components/backtests/export-button";
 
@@ -241,6 +242,7 @@ function BacktestsPageInner() {
               <TabsTrigger value="trades">Trade List</TabsTrigger>
               <TabsTrigger value="walk-forward">Walk-Forward</TabsTrigger>
               <TabsTrigger value="monte-carlo">Monte Carlo</TabsTrigger>
+              <TabsTrigger value="pnl-distribution">PnL Distribution</TabsTrigger>
             </TabsList>
             <TabsContent value="trades">
               <TradeListTable trades={tradesQuery.data} isLoading={tradesQuery.isLoading} />
@@ -250,6 +252,9 @@ function BacktestsPageInner() {
             </TabsContent>
             <TabsContent value="monte-carlo">
               <MonteCarloHistogram backtestId={selectedBacktest.id} />
+            </TabsContent>
+            <TabsContent value="pnl-distribution">
+              <TradePnlHistogram trades={tradesQuery.data} />
             </TabsContent>
           </Tabs>
         </Card>

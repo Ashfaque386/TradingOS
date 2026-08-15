@@ -364,9 +364,21 @@ export interface BacktestCompareRow extends BacktestWithStrategy {
 export interface MonteCarloHistogramResponse {
   bucket_edges: number[];
   bucket_counts: number[];
+  percentile_50_max_drawdown: number;
+  percentile_75_max_drawdown: number;
+  percentile_90_max_drawdown: number;
   percentile_95_max_drawdown: number;
+  percentile_99_max_drawdown: number;
   historical_max_drawdown: number;
   n_simulations: number;
+}
+
+// REL-069: real pairwise return correlation between compared runs -- a `null` cell means too
+// few real overlapping calendar days between that pair's equity curves, never a fabricated 0.
+export interface CorrelationMatrixResponse {
+  run_ids: string[];
+  run_labels: string[];
+  matrix: (number | null)[][];
 }
 
 export interface VersionCode {
@@ -973,6 +985,10 @@ export const api = {
   latestBacktests: () => get<BacktestWithStrategy[]>("/api/v1/strategies/backtests/latest"),
   compareBacktests: (ids: string[]) =>
     get<BacktestCompareRow[]>(`/api/v1/strategies/backtests/compare${toQuery({ ids: ids.join(",") })}`),
+  compareBacktestsCorrelation: (ids: string[]) =>
+    get<CorrelationMatrixResponse>(
+      `/api/v1/strategies/backtests/compare/correlation${toQuery({ ids: ids.join(",") })}`,
+    ),
   monteCarloHistogram: (backtestId: string) =>
     get<MonteCarloHistogramResponse>(`/api/v1/strategies/backtests/${backtestId}/monte-carlo`),
   backtestExportPath: (backtestId: string, format: "csv" | "ndjson") =>

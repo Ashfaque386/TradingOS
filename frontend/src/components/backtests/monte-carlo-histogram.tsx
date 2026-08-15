@@ -90,12 +90,35 @@ export function MonteCarloHistogram({ backtestId }: { backtestId: string }) {
     ],
   };
 
+  const percentileTiles: { label: string; value: number }[] = [
+    { label: "P50", value: mc.percentile_50_max_drawdown },
+    { label: "P75", value: mc.percentile_75_max_drawdown },
+    { label: "P90", value: mc.percentile_90_max_drawdown },
+    { label: "P95", value: mc.percentile_95_max_drawdown },
+    { label: "P99", value: mc.percentile_99_max_drawdown },
+  ];
+
   return (
     <div>
       <p className="mb-2 text-[11px] text-text-faint">
         {mc.n_simulations.toLocaleString("en-IN")} resamples of this backtest&apos;s real
         per-trade returns.
       </p>
+      <div className="mb-3 grid grid-cols-5 gap-2">
+        {percentileTiles.map(({ label, value }) => (
+          <div
+            key={label}
+            className="rounded-btn border border-card-edge bg-bg p-2 text-center"
+          >
+            <div className="font-mono-tabular text-sm font-semibold text-text">
+              {(value * 100).toFixed(1)}%
+            </div>
+            <div className="mt-0.5 text-[9px] uppercase tracking-wider text-text-faint">
+              {label} Max DD
+            </div>
+          </div>
+        ))}
+      </div>
       <ReactECharts option={option} style={{ height: 260 }} opts={{ renderer: "svg" }} />
     </div>
   );
