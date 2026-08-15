@@ -713,6 +713,58 @@ export interface OhlcvBar {
   volume: number;
 }
 
+// REL-067 -- real, date-aligned technical indicators (src/data/features/indicators.py, wired to
+// GET /market/ohlcv/{symbol}/indicators for the first time this release). A rolling-window field
+// is genuinely `null` for the leading bars that don't have enough history yet -- never a
+// fabricated 0 or a copy of the close price standing in for a real value.
+export interface IndicatorPoint {
+  date: string;
+  close: number;
+  sma_20: number | null;
+  ema_20: number | null;
+  rsi_14: number | null;
+  atr_14: number | null;
+  bb_upper: number | null;
+  bb_mid: number | null;
+  bb_lower: number | null;
+  macd_line: number | null;
+  macd_signal: number | null;
+  macd_histogram: number | null;
+}
+
+// REL-067 -- real India VIX + NSE sector-index day-change (src/data/market_pulse.py), the same
+// real data the Market Analyst Agent's own IndiaVixSkill/NseSectorDataSkill already fetch, now
+// also exposed here. `india_vix` is `null` and `sectors` can be shorter than 4 if yfinance had
+// no data for one or more tickers at request time -- honestly omitted, never fabricated.
+export interface MarketPulseIndex {
+  name: string;
+  value: number;
+  change_pct: number;
+  as_of: string;
+}
+
+export interface MarketPulseResponse {
+  india_vix: MarketPulseIndex | null;
+  sectors: MarketPulseIndex[];
+}
+
+// REL-010 E10.8a -- real per-symbol ingestion freshness (src/data/datalake/freshness.py), the
+// exact same check the Scheduler's own pre-research-cycle gate already enforces. Existed on the
+// backend since REL-010; this is its first frontend consumer (REL-067).
+export interface SymbolFreshness {
+  symbol: string;
+  is_fresh: boolean;
+  expected_date: string;
+  latest_available: string | null;
+}
+
+export interface DatalakeStatusResponse {
+  status: "Fresh" | "Stale";
+  as_of: string;
+  total_symbols: number;
+  stale_symbols: SymbolFreshness[];
+}
+
 // REL-013 -- src/api/routers/paper_trading.py's real response models. Every row is a real
 // depth-walked simulated fill against a real live broker quote; nothing here ever calls
 // place_order (src/engine/paper_trading/execution_service.py).
@@ -957,7 +1009,11 @@ export const api = {
   // a literal "^" in a template-string URL is not itself invalid, but this is the correct fix
   // for any symbol containing a URL-meaningful character, not just this one.
   ohlcv: (symbol: string) => get<OhlcvBar[]>(`/api/v1/market/ohlcv/${encodeURIComponent(symbol)}`),
+  ohlcvIndicators: (symbol: string) =>
+    get<IndicatorPoint[]>(`/api/v1/market/ohlcv/${encodeURIComponent(symbol)}/indicators`),
   symbols: () => get<string[]>("/api/v1/market/symbols"),
+  marketPulse: () => get<MarketPulseResponse>("/api/v1/market/pulse"),
+  datalakeStatus: () => get<DatalakeStatusResponse>("/api/v1/market/datalake/status"),
 
   paperTrades: (strategyId?: string) =>
     get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),

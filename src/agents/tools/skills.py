@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import black
-import yfinance
 from qdrant_client import QdrantClient
 
 from src.agents.tools.base import BaseSkill
@@ -44,6 +43,7 @@ from src.agents.tools.notifiers import (
 from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
+from src.data.market_pulse import SECTOR_TICKERS, fetch_india_vix_history, fetch_sector_history
 from src.engine.sandbox.runner import execute_in_sandbox
 from src.memory.embeddings import embed_text
 from src.models.trading import PortfolioPosition
@@ -307,7 +307,7 @@ class IndiaVixSkill(BaseSkill):
     version = "1.0.0"
 
     def execute(self, **kwargs: Any) -> Any:
-        history = yfinance.Ticker("^INDIAVIX").history(period="5d", interval="1d")
+        history = fetch_india_vix_history()
         if history.empty:
             raise SkillNotImplementedError(
                 "fetch_india_vix: Yahoo Finance returned no data for ^INDIAVIX"
@@ -325,19 +325,15 @@ class NseSectorDataSkill(BaseSkill):
     version = "1.0.0"
     # Real, confirmed-working Yahoo Finance tickers for real NSE sector indices (verified
     # empirically at implementation time, not guessed) -- a small, honest subset, not the full
-    # NSE sector taxonomy.
-    _SECTOR_TICKERS = {
-        "IT": "^CNXIT",
-        "BANK": "^NSEBANK",
-        "AUTO": "^CNXAUTO",
-        "PHARMA": "^CNXPHARMA",
-    }
+    # NSE sector taxonomy. Shared with GET /market/pulse (REL-067) via _SECTOR_TICKERS below so
+    # the two can never drift apart.
+    _SECTOR_TICKERS = SECTOR_TICKERS
 
     def execute(self, **kwargs: Any) -> Any:
         result: dict[str, Any] = {}
         for sector, ticker in self._SECTOR_TICKERS.items():
             try:
-                history = yfinance.Ticker(ticker).history(period="5d", interval="1d")
+                history = fetch_sector_history(ticker)
             except Exception as exc:  # noqa: BLE001 - one bad ticker shouldn't sink the others
                 result[sector] = {"error": str(exc)}
                 continue

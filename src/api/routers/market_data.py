@@ -34,8 +34,10 @@ from src.core.db import get_session
 from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.freshness import check_freshness
 from src.data.datalake.query import DataLake, IntradayDataLake
+from src.data.features.indicators import with_indicators
 from src.data.ingest.pipeline import ADAPTERS
 from src.data.ingest.pipeline import run as run_ingestion
+from src.data.market_pulse import get_market_pulse
 from src.models.corporate_action import CorporateAction
 from src.models.user import User
 
@@ -127,6 +129,91 @@ def get_datalake_status(as_of: date | None = None) -> DatalakeStatusResponse:
         total_symbols=len(symbols),
         stale_symbols=stale,
     )
+
+
+class MarketPulseIndex(BaseModel):
+    name: str
+    value: float
+    change_pct: float
+    as_of: date
+
+
+class MarketPulseResponse(BaseModel):
+    india_vix: MarketPulseIndex | None
+    sectors: list[MarketPulseIndex]
+
+
+@router.get("/pulse", response_model=MarketPulseResponse)
+def get_pulse() -> MarketPulseResponse:
+    """REL-067. Real India VIX + NSE sector-index day-change, via the same
+    `src.data.market_pulse.get_market_pulse()` the Market Analyst Agent's own `IndiaVixSkill`/
+    `NseSectorDataSkill` (src/agents/tools/skills.py) fetch through -- this endpoint and the
+    agent read the literal same real data path, never two implementations that could drift.
+    `india_vix` is `None` and/or `sectors` can be a shorter list than 4 if yfinance had no data
+    for one or more tickers at request time -- honestly omitted, never a fabricated value."""
+    pulse = get_market_pulse()
+    india_vix = (
+        MarketPulseIndex(
+            name=pulse.india_vix.name,
+            value=pulse.india_vix.value,
+            change_pct=pulse.india_vix.change_pct,
+            as_of=pulse.india_vix.as_of,
+        )
+        if pulse.india_vix is not None
+        else None
+    )
+    sectors = [
+        MarketPulseIndex(name=s.name, value=s.value, change_pct=s.change_pct, as_of=s.as_of)
+        for s in pulse.sectors
+    ]
+    return MarketPulseResponse(india_vix=india_vix, sectors=sectors)
+
+
+class IndicatorPoint(BaseModel):
+    date: date
+    close: float
+    sma_20: float | None
+    ema_20: float | None
+    rsi_14: float | None
+    atr_14: float | None
+    bb_upper: float | None
+    bb_mid: float | None
+    bb_lower: float | None
+    macd_line: float | None
+    macd_signal: float | None
+    macd_histogram: float | None
+
+
+@router.get("/ohlcv/{symbol}/indicators", response_model=list[IndicatorPoint])
+def get_ohlcv_indicators(
+    symbol: str, start: date | None = None, end: date | None = None
+) -> list[IndicatorPoint]:
+    """REL-067. Wires `src.data.features.indicators.with_indicators()` -- a complete, correct
+    Polars indicators module with zero callers anywhere before this endpoint -- against the real
+    daily OHLCV lake, the exact same source `GET /ohlcv/{symbol}` above already reads. Leading
+    rows where a rolling window (e.g. `sma_20`) has fewer than `window` prior bars come back with
+    that field `null`, not a fabricated early value."""
+    df = _daily_lake().read_symbol(symbol, start=start, end=end)
+    if df.height == 0:
+        return []
+    enriched = with_indicators(df)
+    return [
+        IndicatorPoint(
+            date=row["date"],
+            close=row["close"],
+            sma_20=row["sma_20"],
+            ema_20=row["ema_20"],
+            rsi_14=row["rsi_14"],
+            atr_14=row["atr_14"],
+            bb_upper=row["bb_upper"],
+            bb_mid=row["bb_mid"],
+            bb_lower=row["bb_lower"],
+            macd_line=row["macd_line"],
+            macd_signal=row["macd_signal"],
+            macd_histogram=row["macd_histogram"],
+        )
+        for row in enriched.to_dicts()
+    ]
 
 
 @router.get("/ohlcv/{symbol}", response_model=list[OhlcvBar])

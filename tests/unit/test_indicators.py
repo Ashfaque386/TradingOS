@@ -86,6 +86,17 @@ def test_macd_line_is_negative_when_strictly_decreasing():
 def test_with_indicators_appends_all_expected_columns():
     df = _ohlcv([10 + i for i in range(25)])
     result = with_indicators(df)
-    for column in ["sma_20", "ema_20", "rsi_14", "atr_14", "bb_upper", "bb_mid", "bb_lower"]:
+    for column in [
+        "sma_20",
+        "ema_20",
+        "rsi_14",
+        "atr_14",
+        "bb_upper",
+        "bb_mid",
+        "bb_lower",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+    ]:
         assert column in result.columns
     assert result.height == df.height

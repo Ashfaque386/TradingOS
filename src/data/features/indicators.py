@@ -57,8 +57,10 @@ def macd(
 
 
 def with_indicators(df: pl.DataFrame) -> pl.DataFrame:
-    """Returns `df` with sma_20, ema_20, rsi_14, atr_14, bb_upper/mid/lower columns appended."""
+    """Returns `df` with sma_20, ema_20, rsi_14, atr_14, bb_upper/mid/lower, and
+    macd_line/macd_signal/macd_histogram columns appended."""
     bb_upper, bb_mid, bb_lower = bollinger_bands(df)
+    macd_line, macd_signal, macd_histogram = macd(df)
     return df.with_columns(
         sma(df, 20).alias("sma_20"),
         ema(df, 20).alias("ema_20"),
@@ -67,4 +69,7 @@ def with_indicators(df: pl.DataFrame) -> pl.DataFrame:
         bb_upper.alias("bb_upper"),
         bb_mid.alias("bb_mid"),
         bb_lower.alias("bb_lower"),
+        macd_line.alias("macd_line"),
+        macd_signal.alias("macd_signal"),
+        macd_histogram.alias("macd_histogram"),
     )

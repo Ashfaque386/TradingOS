@@ -291,3 +291,62 @@ def test_ingest_trigger_job_reports_a_real_failure_honestly():
 def test_ingest_job_status_unknown_job_is_a_404():
     response = client.get(f"/api/v1/market/ingest/jobs/{uuid.uuid4()}/status")
     assert response.status_code == 404
+
+
+# REL-067: GET /market/ohlcv/{symbol}/indicators wires src.data.features.indicators against the
+# real daily OHLCV lake (previously dead code, zero callers anywhere).
+
+
+def test_ohlcv_indicators_returns_real_computed_columns_for_a_real_symbol():
+    response = client.get(f"/api/v1/market/ohlcv/{_REAL_SYMBOL}/indicators")
+    assert response.status_code == 200
+    points = response.json()
+    assert len(points) > 0
+    first = points[0]
+    assert set(first) == {
+        "date",
+        "close",
+        "sma_20",
+        "ema_20",
+        "rsi_14",
+        "atr_14",
+        "bb_upper",
+        "bb_mid",
+        "bb_lower",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+    }
+    # A rolling 20-period SMA is null until the 20th real bar exists -- the early rows of a long
+    # enough real symbol prove that honestly, not fabricated as 0 or the close price.
+    assert points[0]["sma_20"] is None
+    last = points[-1]
+    assert last["sma_20"] is not None
+    assert last["ema_20"] > 0
+
+
+def test_ohlcv_indicators_returns_empty_list_for_an_unknown_symbol():
+    response = client.get("/api/v1/market/ohlcv/NOTAREALSYMBOL12345/indicators")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+# REL-067: GET /market/pulse -- real India VIX + NSE sector-index day-change, via the same
+# src.data.market_pulse.get_market_pulse() IndiaVixSkill/NseSectorDataSkill fetch through
+# (tests/integration/test_market_data_skills.py exercises those skills directly; real network
+# call here too, same class of test).
+
+
+def test_market_pulse_returns_real_vix_and_sector_data():
+    response = client.get("/api/v1/market/pulse")
+    assert response.status_code == 200
+    body = response.json()
+    assert "india_vix" in body
+    assert "sectors" in body
+    if body["india_vix"] is not None:
+        assert body["india_vix"]["value"] > 0
+        assert body["india_vix"]["name"] == "India VIX"
+    assert isinstance(body["sectors"], list)
+    for sector in body["sectors"]:
+        assert set(sector) == {"name", "value", "change_pct", "as_of"}
+        assert sector["value"] > 0
