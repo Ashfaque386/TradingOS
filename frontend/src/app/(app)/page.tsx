@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { formatCompactINR } from "@/lib/utils";
@@ -11,28 +10,29 @@ import { Card } from "@/components/ui/card";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { RiskGauge } from "@/components/portfolio/risk-gauge";
 import { ExposureDonut } from "@/components/portfolio/exposure-donut";
-import { PositionsTable } from "@/components/portfolio/positions-table";
-import { CapitalSummary } from "@/components/portfolio/capital-summary";
 import { KillSwitchButton } from "@/components/portfolio/kill-switch-button";
 import { CandlestickChart } from "@/components/portfolio/candlestick-chart";
+import { AccountsPanel } from "@/components/portfolio/accounts-panel";
 import {
   BrokerConnectionBanner,
   type BrokerConnectionState,
 } from "@/components/portfolio/broker-connection-banner";
-import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
 
-/** Phase 2C: fixed premium layout replacing the drag/resize GridWorkspace grid -- a hero row
- * (P&L + Kill Switch), a risk-gauge row, a secondary allocation/margin/positions row, and the
- * candlestick chart full-width at the bottom, instead of manually positioned, user-draggable
- * panels.
+/** Phase 2C: fixed premium layout replacing the drag/resize GridWorkspace grid -- a persistent
+ * Kill Switch band, a hero P&L row, a risk-gauge row, an allocation donut, a unified tabbed
+ * Accounts panel, and the candlestick chart full-width at the bottom, instead of manually
+ * positioned, user-draggable panels.
  *
- * REL-036: scope-aware -- the Live section below is real broker data (build_broker(), Zerodha/
- * Upstox) and the Paper section is the real seeded ₹100,000 account (same data /account shows).
- * They are never summed into one figure -- a Paper account's simulated capital and a Live
- * broker's real margin are not the same unit of risk -- so "Both" renders them as two separate,
- * clearly tagged blocks, not one blended number. KillSwitchButton and the candlestick chart stay
- * visible regardless of scope: the kill switch is a real-money safety control, not account
- * display data, and the chart is market data, not account data. */
+ * REL-066: the Kill Switch is a real-money safety control, not account display data, so it
+ * renders as its own full-width band at the very top of the page, unconditional on account
+ * scope -- it halts every connected broker regardless of which account you're currently viewing.
+ * The Live aggregate hero/gauges/donut below (real broker data via build_broker(), Zerodha-
+ * primary/Upstox-fallback) and the per-account Paper/Zerodha/Upstox breakdown (AccountsPanel)
+ * are two different things: the former is genuine cross-account aggregate risk, the latter is
+ * each account's own real figures, tabbed rather than stacked as 3 near-identical sections.
+ * Paper's simulated capital and a Live broker's real margin are still never summed into one
+ * blended number -- see AccountsPanel's own note. The candlestick chart stays visible regardless
+ * of scope: it's market data, not account data. */
 export default function PortfolioCommandCenter() {
   const { tick, connected } = usePortfolioSocket();
   const scope = useAccountScopeStore((s) => s.scope);
@@ -92,16 +92,10 @@ export default function PortfolioCommandCenter() {
   const showLive = scope !== "paper";
   const showPaper = scope !== "live";
   const summary = summaryQuery.data;
-  const realizedPositive = (summary?.realized_pnl_total ?? 0) >= 0;
-  const unrealizedPositive = (summary?.unrealized_pnl_total ?? 0) >= 0;
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-      <div className="flex justify-end">
-        <div className="w-full sm:max-w-sm">
-          <KillSwitchButton />
-        </div>
-      </div>
+      <KillSwitchButton />
 
       {showLive && (
         <section className="flex flex-col gap-4">
@@ -199,138 +193,19 @@ export default function PortfolioCommandCenter() {
               strategyAvailable={allocationQuery.data?.strategy_data_available ?? false}
             />
           </Card>
-
-          {/* REL-038: build_broker() resolves ONE adapter (Zerodha-primary/Upstox-fallback) --
-              a real, separately-funded Upstox account never shows up in the single "Margin"
-              card above as long as the Zerodha call itself succeeds, even with a genuinely
-              empty account. Each configured broker gets its own tagged Capital + Positions
-              cards below, queried independently (GET /portfolio/margin/by-broker, GET
-              /positions/by-broker), so neither broker can silently shadow the other. */}
-          {(marginByBrokerQuery.data ?? []).map((entry) => {
-            const positionsEntry = (positionsByBrokerQuery.data ?? []).find(
-              (p) => p.broker === entry.broker,
-            );
-            return (
-              <div key={entry.broker} className="flex flex-col gap-4">
-                <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-faint">
-                  {entry.broker}
-                </p>
-                <Card eyebrow={entry.broker} title="Capital">
-                  {!entry.configured ? (
-                    <p className="text-[11px] text-text-faint">Not connected</p>
-                  ) : entry.error ? (
-                    <p className="text-[11px] text-down">{entry.error}</p>
-                  ) : (
-                    <CapitalSummary
-                      used={entry.margin?.used_margin ?? 0}
-                      available={entry.margin?.available_margin ?? 0}
-                    />
-                  )}
-                </Card>
-                {entry.configured && (
-                  <Card eyebrow={entry.broker} title="Positions">
-                    <PositionsTable positions={positionsEntry?.positions ?? []} />
-                  </Card>
-                )}
-              </div>
-            );
-          })}
         </section>
       )}
 
-      {showPaper && (
-        <section className="flex flex-col gap-4">
-          {scope === "both" && (
-            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-faint">
-              Paper Account
-            </p>
-          )}
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-            <Card
-              eyebrow="Paper"
-              title="Account Equity"
-              className="lg:col-span-12"
-              action={
-                <Link
-                  href="/account"
-                  className="text-[11px] font-medium text-text-dim underline underline-offset-2 hover:text-text"
-                >
-                  Full ledger →
-                </Link>
-              }
-            >
-              {summaryQuery.isLoading ? (
-                <div className="h-16 animate-pulse rounded-xl bg-bg" />
-              ) : (
-                <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">
-                      Equity
-                    </p>
-                    <NumberTicker
-                      value={summary?.equity ?? 0}
-                      format={formatCompactINR}
-                      className="font-mono-tabular text-2xl font-semibold tracking-tight text-text"
-                    />
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">
-                      Cash
-                    </p>
-                    <p className="font-mono-tabular text-2xl font-semibold tracking-tight text-text-dim">
-                      {formatCompactINR(summary?.cash ?? 0)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">
-                      Realized
-                    </p>
-                    <p
-                      className={`font-mono-tabular text-2xl font-semibold tracking-tight ${
-                        realizedPositive ? "text-up" : "text-down"
-                      }`}
-                    >
-                      {formatCompactINR(summary?.realized_pnl_total ?? 0)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">
-                      Unrealized
-                    </p>
-                    <p
-                      className={`font-mono-tabular text-2xl font-semibold tracking-tight ${
-                        unrealizedPositive ? "text-up" : "text-down"
-                      }`}
-                    >
-                      {formatCompactINR(summary?.unrealized_pnl_total ?? 0)}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </Card>
-          </div>
-
-          <Card eyebrow="Paper" title="Capital">
-            {summaryQuery.isLoading ? (
-              <div className="h-16 animate-pulse rounded-xl bg-bg" />
-            ) : (
-              <CapitalSummary
-                used={summary?.margin_blocked ?? 0}
-                available={(summary?.cash ?? 0) - (summary?.margin_blocked ?? 0)}
-              />
-            )}
-          </Card>
-
-          <Card eyebrow="Open" title="Paper Positions">
-            {paperPositionsQuery.isLoading ? (
-              <div className="h-40 animate-pulse rounded-xl bg-bg" />
-            ) : (
-              <PaperPositionsTable positions={paperPositionsQuery.data ?? []} />
-            )}
-          </Card>
-        </section>
-      )}
+      <AccountsPanel
+        showPaper={showPaper}
+        showLive={showLive}
+        paperSummary={summary}
+        paperSummaryLoading={summaryQuery.isLoading}
+        paperPositions={paperPositionsQuery.data}
+        paperPositionsLoading={paperPositionsQuery.isLoading}
+        brokerMargins={marginByBrokerQuery.data ?? []}
+        brokerPositions={positionsByBrokerQuery.data ?? []}
+      />
 
       <Card eyebrow="Market" title="Candlestick Chart">
         <CandlestickChart />
