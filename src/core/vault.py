@@ -52,6 +52,7 @@ _LLM_PROVIDER_KEYS_PREFIX = "llm-provider-keys"
 _MFA_SECRETS_PREFIX = "mfa-secrets"
 _WEBHOOK_SECRETS_PREFIX = "webhook-secrets"
 _BOT_TOKENS_PREFIX = "bot-tokens"
+_MARKET_DATA_CREDENTIALS_PREFIX = "market-data-credentials"
 
 
 def _client(settings: Settings) -> hvac.Client | None:
@@ -228,6 +229,38 @@ def read_llm_provider_key(provider: str, *, settings: Settings | None = None) ->
         f"{_LLM_PROVIDER_KEYS_PREFIX}/{provider}", settings=settings or get_settings()
     )
     return stored.get("api_key") if stored else None
+
+
+def write_market_data_credential(
+    provider: str, token: str, *, settings: Settings | None = None
+) -> bool:
+    """REL-070: read-only market-data credentials (currently just Upstox's Analytics Token --
+    a single long-lived bearer token, not a multi-field OAuth flow like the broker credentials
+    above), same Vault-first pattern as everything else in this file. `provider` is "upstox" for
+    now; kept generic (not `write_upstox_analytics_token`) since a future market-data provider
+    needing its own credential follows the same path. See `write_broker_credentials` on the
+    `settings` param."""
+    return _write_secret(
+        f"{_MARKET_DATA_CREDENTIALS_PREFIX}/{provider}",
+        {"token": token},
+        settings=settings or get_settings(),
+    )
+
+
+def read_market_data_credential(provider: str, *, settings: Settings | None = None) -> str | None:
+    """Falls back to `Settings` (`.env`-sourced) at the call site, same as every other
+    Vault-first read in this file -- `None` here whether Vault is unreachable or nothing has
+    been written yet, indistinguishably."""
+    stored = _read_secret(
+        f"{_MARKET_DATA_CREDENTIALS_PREFIX}/{provider}", settings=settings or get_settings()
+    )
+    return stored.get("token") if stored else None
+
+
+def delete_market_data_credential(provider: str, *, settings: Settings | None = None) -> bool:
+    return _delete_secret(
+        f"{_MARKET_DATA_CREDENTIALS_PREFIX}/{provider}", settings=settings or get_settings()
+    )
 
 
 def write_mfa_secret(user_id: str, totp_secret: str, *, settings: Settings | None = None) -> bool:

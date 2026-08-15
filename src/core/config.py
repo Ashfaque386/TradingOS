@@ -156,6 +156,27 @@ class Settings(BaseSettings):
     zerodha_redirect_uri: str | None = None
     zerodha_access_token: str | None = None
 
+    # REL-070 (Upstox V3 + yfinance dual market-data system, Phase 1). The Analytics Token is a
+    # separate, read-only, 1-year-validity credential from upstox_access_token above -- generated
+    # once from the Developer Apps -> Analytics tab, no daily OAuth re-login, no sandbox variant
+    # (Upstox's sandbox 404s on historical market data entirely, confirmed empirically by
+    # UpstoxAdapter.get_historical_candles's own docstring above -- the Analytics Token is
+    # inherently production-scoped, safe to hit directly since it's read-only market data, never
+    # order placement). Vault-first via src/core/vault.py::read_market_data_credential, same
+    # fail-open .env fallback pattern as the broker credentials above.
+    upstox_analytics_token: str | None = None
+    primary_market_data_provider: Literal["upstox_v3", "yfinance"] = "upstox_v3"
+    fallback_market_data_provider: Literal["upstox_v3", "yfinance"] = "yfinance"
+    enable_provider_failover: bool = True
+    # Deliberately unprefixed to match the exact .env variable names this feature was specced
+    # with (MAX_RETRIES/REQUEST_TIMEOUT/BACKOFF_FACTOR/MAX_CONCURRENT_REQUESTS) -- generic-
+    # sounding, but real, dedicated market-data-fetch tuning knobs, not an existing concern
+    # elsewhere in this Settings class being overloaded.
+    max_retries: int = 3
+    request_timeout: float = 10.0
+    backoff_factor: float = 1.0
+    max_concurrent_requests: int = 5
+
     # OpenTelemetry distributed tracing (Phase 4 E4.2, Phase_8_DevOps_Architecture.md §5).
     # Optional like the LLM providers above: real trace context is still created/propagated
     # across FastAPI/httpx/manual spans with no exporter configured (spans just aren't shipped
