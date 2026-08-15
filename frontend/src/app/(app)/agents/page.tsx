@@ -6,16 +6,22 @@ import { api } from "@/lib/api";
 import { useAgentLogStream } from "@/hooks/useAgentLogStream";
 import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GraphFlowchart } from "@/components/agents/graph-flowchart";
 import { ThoughtStream } from "@/components/agents/thought-stream";
 import { PromptManager } from "@/components/agents/prompt-manager";
 import { RunControls } from "@/components/agents/run-controls";
 import { HitlPanel } from "@/components/agents/hitl-panel";
 import { AgentRegistry } from "@/components/agents/agent-registry";
+import { AgentAnalyticsPanel } from "@/components/agents/agent-analytics-panel";
 
 /** Phase 2C: fixed premium layout replacing the drag/resize GridWorkspace grid -- a real visual
  * hierarchy (execution state, then registry, then a reasoning/prompts row) instead of manually
- * positioned, user-draggable panels. */
+ * positioned, user-draggable panels.
+ *
+ * REL-068: tabbed into Console (this original layout, unchanged) and Analytics (real
+ * agent-execution stats) -- Agent Console is already where a user looks for agent-execution
+ * insight, so the new capability lives here rather than as a new top-level nav entry. */
 export default function AgentConsole() {
   const { logs, connected } = useAgentLogStream();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -38,47 +44,60 @@ export default function AgentConsole() {
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
-      <Card eyebrow="Orchestrator" title="Research Cycle">
-        <RunControls selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
-      </Card>
+      <Tabs defaultValue="console">
+        <TabsList>
+          <TabsTrigger value="console">Console</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+        </TabsList>
 
-      <Card eyebrow="LangGraph" title="Live Execution State">
-        {topologyQuery.data ? (
-          <GraphFlowchart topology={topologyQuery.data} run={runDetailQuery.data ?? null} />
-        ) : (
-          <div className="h-24 animate-pulse rounded-xl bg-bg" />
-        )}
-        <p className="mt-3 text-[11px] text-text-faint">
-          5 real nodes (CEO → Market Analyst → Strategy Generator → Code Generator ↺ Validator)
-          plus a placeholder terminal node awaiting the Phase 3 backtesting engine. Topology is
-          introspected live from the compiled graph, not hand-drawn.
-        </p>
-        <HitlPanel run={runDetailQuery.data ?? null} />
-      </Card>
+        <TabsContent value="console" className="mt-4 flex flex-col gap-4">
+          <Card eyebrow="Orchestrator" title="Research Cycle">
+            <RunControls selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
+          </Card>
 
-      <Card eyebrow="Per-agent control" title="Agent Registry">
-        <p className="mb-3 text-[11px] text-text-faint">
-          The real, durable enable/disable state for every currently-shipped agent (ADR 11,
-          Phase_1_Architecture_Decision_Record.md). A disabled pipeline node halts the next run
-          before its real logic executes; a disabled scheduled agent is skipped at its next
-          trigger. Rows marked &ldquo;not yet enforced&rdquo; store real state but no call site
-          checks it yet.
-        </p>
-        <AgentRegistry />
-      </Card>
+          <Card eyebrow="LangGraph" title="Live Execution State">
+            {topologyQuery.data ? (
+              <GraphFlowchart topology={topologyQuery.data} run={runDetailQuery.data ?? null} />
+            ) : (
+              <div className="h-24 animate-pulse rounded-xl bg-bg" />
+            )}
+            <p className="mt-3 text-[11px] text-text-faint">
+              5 real nodes (CEO → Market Analyst → Strategy Generator → Code Generator ↺
+              Validator) plus a placeholder terminal node awaiting the Phase 3 backtesting engine.
+              Topology is introspected live from the compiled graph, not hand-drawn.
+            </p>
+            <HitlPanel run={runDetailQuery.data ?? null} />
+          </Card>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Card eyebrow="Reasoning" title="Thought Stream" className="lg:col-span-7">
-          <div className="h-[420px]">
-            <ThoughtStream messages={logs} connected={connected} />
+          <Card eyebrow="Per-agent control" title="Agent Registry">
+            <p className="mb-3 text-[11px] text-text-faint">
+              The real, durable enable/disable state for every currently-shipped agent (ADR 11,
+              Phase_1_Architecture_Decision_Record.md). A disabled pipeline node halts the next
+              run before its real logic executes; a disabled scheduled agent is skipped at its
+              next trigger. Rows marked &ldquo;not yet enforced&rdquo; store real state but no
+              call site checks it yet.
+            </p>
+            <AgentRegistry />
+          </Card>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <Card eyebrow="Reasoning" title="Thought Stream" className="lg:col-span-7">
+              <div className="h-[420px]">
+                <ThoughtStream messages={logs} connected={connected} />
+              </div>
+            </Card>
+            <Card eyebrow="Hot-swappable" title="Prompt Management" className="lg:col-span-5">
+              <div className="max-h-[420px] overflow-y-auto">
+                <PromptManager />
+              </div>
+            </Card>
           </div>
-        </Card>
-        <Card eyebrow="Hot-swappable" title="Prompt Management" className="lg:col-span-5">
-          <div className="max-h-[420px] overflow-y-auto">
-            <PromptManager />
-          </div>
-        </Card>
-      </div>
+        </TabsContent>
+
+        <TabsContent value="analytics" className="mt-4">
+          <AgentAnalyticsPanel />
+        </TabsContent>
+      </Tabs>
     </main>
   );
 }

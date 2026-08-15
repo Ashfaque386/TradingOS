@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.agents import prompt_registry
+from src.agents.analytics import bucket_by_day, group_by_agent, summarize_runs
 from src.agents.checkpointer import runtime_checkpoint_dsn
 from src.agents.control import (
     KNOWN_AGENTS,
@@ -1500,6 +1501,92 @@ def get_run(run_id: uuid.UUID) -> AgentRunDetail:
                 for log in logs
             ],
         )
+
+
+# --- Agent Monitoring Analytics (REL-068, API-157..158) ---------------------------------------
+
+
+class AgentAnalyticsSummaryRow(BaseModel):
+    agent_name: str
+    display_name: str
+    total_runs: int
+    completed: int
+    failed: int
+    running: int
+    success_rate: float | None
+    avg_duration_seconds: float | None
+    p50_duration_seconds: float | None
+    p95_duration_seconds: float | None
+
+
+@router.get("/analytics/summary", response_model=list[AgentAnalyticsSummaryRow])
+def get_analytics_summary(days: int = 30) -> list[AgentAnalyticsSummaryRow]:
+    """REL-068. Real per-agent execution stats over the real ledger (AgentRun) -- every root
+    graph run AND every per-node child run, not just the root-only rows GET /runs returns. The
+    real aggregation math (success rate, Python-side duration percentiles matching
+    `src.engine.optimization.monte_carlo`'s own established convention) lives in
+    `src.agents.analytics`, independently unit-tested against fixture data."""
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    display_names = {a.name: a.display_name for a in KNOWN_AGENTS}
+
+    with get_session() as session:
+        rows = session.execute(
+            select(
+                AgentRun.agent_name, AgentRun.status, AgentRun.started_at, AgentRun.ended_at
+            ).where(AgentRun.started_at >= cutoff)
+        ).all()
+
+    by_agent = group_by_agent([tuple(row) for row in rows])
+    result: list[AgentAnalyticsSummaryRow] = []
+    for agent_name, entries in sorted(by_agent.items()):
+        stats = summarize_runs(entries)
+        result.append(
+            AgentAnalyticsSummaryRow(
+                agent_name=agent_name,
+                display_name=display_names.get(agent_name, agent_name),
+                total_runs=stats.total_runs,
+                completed=stats.completed,
+                failed=stats.failed,
+                running=stats.running,
+                success_rate=stats.success_rate,
+                avg_duration_seconds=stats.avg_duration_seconds,
+                p50_duration_seconds=stats.p50_duration_seconds,
+                p95_duration_seconds=stats.p95_duration_seconds,
+            )
+        )
+    return result
+
+
+class AgentAnalyticsTrendPoint(BaseModel):
+    date: date
+    total_runs: int
+    completed: int
+    failed: int
+
+
+@router.get("/analytics/trend", response_model=list[AgentAnalyticsTrendPoint])
+def get_analytics_trend(days: int = 30) -> list[AgentAnalyticsTrendPoint]:
+    """REL-068. Real daily run-volume trend across every AgentRun row (root graph runs and every
+    per-node child run) in the window -- genuine day-by-day execution activity across the whole
+    system, not narrowly scoped to one graph type (this ledger already has more than one real
+    root-level graph -- TradingOSGraph, SuggestionRegeneration, and independent ML-training
+    dispatches -- so an all-rows view is the honest "how busy was the system" answer, not one
+    graph's own subset). Only real days with at least 1 run are returned -- never a zero-filled
+    synthetic day. Bucketing logic lives in `src.agents.analytics`, independently unit-tested."""
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+
+    with get_session() as session:
+        rows = session.execute(
+            select(AgentRun.status, AgentRun.started_at).where(AgentRun.started_at >= cutoff)
+        ).all()
+
+    buckets = bucket_by_day([tuple(row) for row in rows])
+    return [
+        AgentAnalyticsTrendPoint(
+            date=b.date, total_runs=b.total_runs, completed=b.completed, failed=b.failed
+        )
+        for b in buckets
+    ]
 
 
 # --- Orchestrator HITL (REL-010 E10.8d, API-020..024) -----------------------------------------

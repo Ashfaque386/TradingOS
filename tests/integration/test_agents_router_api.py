@@ -14,8 +14,9 @@ run or an unintended prompt swap.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.agents.control import KNOWN_AGENTS
@@ -248,4 +249,132 @@ def test_run_detail_langsmith_trace_url_is_none_when_tracing_was_never_configure
     finally:
         with get_session() as session:
             session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+            session.commit()
+
+
+# REL-068: GET /agents/analytics/summary and GET /agents/analytics/trend -- real aggregate
+# stats over real AgentRun rows. Seeded with a uuid-marked agent_name so assertions are
+# deterministic regardless of whatever real runs this shared dev DB already has (confirmed
+# non-empty -- compliance/python_code_generator/etc. already have dozens of real rows).
+
+
+def test_analytics_summary_reports_real_success_rate_and_duration_for_a_seeded_agent():
+    marker_agent = f"cy-analytics-agent-{uuid.uuid4().hex[:8]}"
+    run_ids = [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
+    now = datetime.now(UTC)
+    with get_session() as session:
+        session.add_all(
+            [
+                AgentRun(
+                    id=run_ids[0],
+                    graph_thread_id=str(uuid.uuid4()),
+                    agent_name=marker_agent,
+                    status="Completed",
+                    started_at=now,
+                    ended_at=now + timedelta(seconds=10),
+                ),
+                AgentRun(
+                    id=run_ids[1],
+                    graph_thread_id=str(uuid.uuid4()),
+                    agent_name=marker_agent,
+                    status="Completed",
+                    started_at=now,
+                    ended_at=now + timedelta(seconds=30),
+                ),
+                AgentRun(
+                    id=run_ids[2],
+                    graph_thread_id=str(uuid.uuid4()),
+                    agent_name=marker_agent,
+                    status="Failed",
+                    started_at=now,
+                    ended_at=now + timedelta(seconds=5),
+                ),
+            ]
+        )
+        session.commit()
+    try:
+        response = client.get("/api/v1/agents/analytics/summary?days=1")
+        assert response.status_code == 200
+        rows = {r["agent_name"]: r for r in response.json()}
+        assert marker_agent in rows
+        row = rows[marker_agent]
+        assert row["total_runs"] == 3
+        assert row["completed"] == 2
+        assert row["failed"] == 1
+        assert row["success_rate"] == pytest.approx(2 / 3)
+        assert row["avg_duration_seconds"] == pytest.approx(20.0)
+    finally:
+        with get_session() as session:
+            session.query(AgentRun).filter(AgentRun.id.in_(run_ids)).delete(
+                synchronize_session=False
+            )
+            session.commit()
+
+
+def test_analytics_summary_days_param_excludes_runs_outside_the_window():
+    marker_agent = f"cy-analytics-old-{uuid.uuid4().hex[:8]}"
+    run_id = uuid.uuid4()
+    old_start = datetime.now(UTC) - timedelta(days=90)
+    with get_session() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                graph_thread_id=str(uuid.uuid4()),
+                agent_name=marker_agent,
+                status="Completed",
+                started_at=old_start,
+                ended_at=old_start + timedelta(seconds=1),
+            )
+        )
+        session.commit()
+    try:
+        response = client.get("/api/v1/agents/analytics/summary?days=1")
+        assert response.status_code == 200
+        assert marker_agent not in {r["agent_name"] for r in response.json()}
+    finally:
+        with get_session() as session:
+            session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+            session.commit()
+
+
+def test_analytics_trend_buckets_real_runs_by_day():
+    marker_thread = f"cy-trend-{uuid.uuid4().hex[:8]}"
+    run_ids = [uuid.uuid4(), uuid.uuid4()]
+    now = datetime.now(UTC)
+    with get_session() as session:
+        session.add_all(
+            [
+                AgentRun(
+                    id=run_ids[0],
+                    graph_thread_id=marker_thread,
+                    agent_name="TradingOSGraph",
+                    status="Completed",
+                    started_at=now,
+                    ended_at=now + timedelta(seconds=1),
+                ),
+                AgentRun(
+                    id=run_ids[1],
+                    graph_thread_id=marker_thread,
+                    agent_name="TradingOSGraph",
+                    status="Failed",
+                    started_at=now,
+                    ended_at=now + timedelta(seconds=1),
+                ),
+            ]
+        )
+        session.commit()
+    try:
+        response = client.get("/api/v1/agents/analytics/trend?days=1")
+        assert response.status_code == 200
+        points = response.json()
+        today = [p for p in points if p["date"] == now.date().isoformat()]
+        assert len(today) == 1
+        assert today[0]["total_runs"] >= 2
+        assert today[0]["completed"] >= 1
+        assert today[0]["failed"] >= 1
+    finally:
+        with get_session() as session:
+            session.query(AgentRun).filter(AgentRun.id.in_(run_ids)).delete(
+                synchronize_session=False
+            )
             session.commit()

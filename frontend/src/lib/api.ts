@@ -176,6 +176,30 @@ export interface AgentRunDetail extends AgentRunSummary {
   logs: AgentLogEntry[];
 }
 
+// REL-068 -- real per-agent execution stats over the AgentRun ledger (src/agents/analytics.py),
+// every root graph run AND every per-node child run, not just the root-only rows `runs()`
+// returns. `success_rate`/duration fields are `null`, never fabricated, when there isn't enough
+// real data yet for that figure (no finished run, or no completed run with a real ended_at).
+export interface AgentAnalyticsSummaryRow {
+  agent_name: string;
+  display_name: string;
+  total_runs: number;
+  completed: number;
+  failed: number;
+  running: number;
+  success_rate: number | null;
+  avg_duration_seconds: number | null;
+  p50_duration_seconds: number | null;
+  p95_duration_seconds: number | null;
+}
+
+export interface AgentAnalyticsTrendPoint {
+  date: string;
+  total_runs: number;
+  completed: number;
+  failed: number;
+}
+
 // REL-019 E19.2 (ADR 11): src/agents/control.py::KNOWN_AGENTS joined against the real
 // agent_control_state table -- `enforced` tells the UI honestly whether a real call site
 // checks this agent's state today, not just whether the toggle itself is real (it always is).
@@ -916,6 +940,10 @@ export const api = {
   triggerResearch: () => post<TriggerResponse>("/api/v1/agents/research/trigger"),
   runs: () => get<AgentRunSummary[]>("/api/v1/agents/runs"),
   run: (runId: string) => get<AgentRunDetail>(`/api/v1/agents/runs/${runId}`),
+  agentAnalyticsSummary: (days: number) =>
+    get<AgentAnalyticsSummaryRow[]>(`/api/v1/agents/analytics/summary?days=${days}`),
+  agentAnalyticsTrend: (days: number) =>
+    get<AgentAnalyticsTrendPoint[]>(`/api/v1/agents/analytics/trend?days=${days}`),
   prompts: () => get<PromptSummary[]>("/api/v1/agents/prompts"),
   promptVersion: (slug: string, version: number) =>
     get<PromptVersionContent>(`/api/v1/agents/prompts/${slug}/versions/${version}`),
