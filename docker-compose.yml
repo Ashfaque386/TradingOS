@@ -512,9 +512,28 @@ services:
       # packages) -- keeping node_modules entirely inside the Linux container/volume side-steps
       # it permanently. Source-only bind mount above still gives Next.js hot-reload on save.
       - frontend_node_modules:/app/node_modules
+      # Same reasoning applies to Turbopack's own .next build cache -- writing it through the
+      # Windows bind mount above is measurably slower than a native Linux volume, and it's the
+      # direct cause of the real ~75s-per-route cold compile confirmed live (`docker compose
+      # logs frontend`: "Compiling /login ... GET /login 200 in 75s"). A named volume here
+      # doesn't eliminate that first-ever compile, but it makes every compile after the first
+      # (including ones after a plain `docker compose down`/`up`, not just hot-reload saves)
+      # meaningfully faster, and survives a container recreate the same way node_modules already
+      # does.
+      - frontend_next_cache:/app/.next
     depends_on:
       app:
         condition: service_started
+    # Real readiness signal, not just "the process started" -- `docker compose ps` otherwise
+    # reports this container "Up" the instant `next dev` binds the port, well before it's
+    # actually served a single page. `start_period` covers the real cold-Turbopack-compile
+    # window measured above so a slow-but-healthy first compile isn't flagged unhealthy.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
 
 volumes:
   postgres_data:
@@ -527,6 +546,8 @@ volumes:
     name: tradingos_app_data_lake
   frontend_node_modules:
     name: tradingos_app_frontend_node_modules
+  frontend_next_cache:
+    name: tradingos_app_frontend_next_cache
   # REL-015 E15.1 (GLH-01): real persistent storage for the `file` Vault backend
   # (docker/vault/config.hcl) -- the whole point of this epic, replacing dev mode's
   # always-in-memory storage.
