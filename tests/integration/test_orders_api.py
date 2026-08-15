@@ -24,7 +24,7 @@ from src.memory.redis_client import ORDER_EVENT_CHANNEL, get_redis_client
 from src.models.account import Account
 from src.models.paper_trading import PaperTrade
 from src.models.strategy import Strategy
-from src.models.trading import Order, Trade
+from src.models.trading import Order, PortfolioPosition, Trade
 from src.models.user import User
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
@@ -71,11 +71,35 @@ def _seed_strategy() -> uuid.UUID:
 
 
 def _cleanup_strategy(strategy_id: uuid.UUID) -> None:
+    """Self-sufficient by design (REL-069 fix): previously deleted only the Strategy row itself,
+    relying entirely on each caller to have already deleted every real FK-dependent row (Order/
+    Trade via a separate _cleanup_orders() call) first -- silently missed whenever a test's own
+    real API call created a dependent row the test never explicitly tracked (e.g. a
+    PortfolioPosition, a real side effect of live order placement, with no seed helper of its
+    own in this file to remind a caller it exists). Any miss left the Strategy delete failing on
+    a NOT NULL FK violation, aborting cleanup entirely and orphaning the Strategy row too -- the
+    real, confirmed source of this file's own "orders-api-test-strategy" duplicates. Now deletes
+    every real dependent (Trade/Order/PortfolioPosition/PaperTrade) itself first, so it's correct
+    regardless of what a caller did or didn't track -- calling _cleanup_orders() beforehand (as
+    existing callers do) is still fine, just redundant, not required."""
     with get_session() as session:
         strategy = session.get(Strategy, strategy_id)
         if strategy is None:
             return
         account_id = strategy.account_id
+        order_ids = [
+            o.id for o in session.query(Order).filter(Order.strategy_id == strategy_id).all()
+        ]
+        session.query(Trade).filter(Trade.order_id.in_(order_ids)).delete(synchronize_session=False)
+        session.query(Order).filter(Order.strategy_id == strategy_id).delete(
+            synchronize_session=False
+        )
+        session.query(PortfolioPosition).filter(
+            PortfolioPosition.strategy_id == strategy_id
+        ).delete(synchronize_session=False)
+        session.query(PaperTrade).filter(PaperTrade.strategy_id == strategy_id).delete(
+            synchronize_session=False
+        )
         session.query(Strategy).filter(Strategy.id == strategy_id).delete()
         session.commit()
     with get_session() as session:
