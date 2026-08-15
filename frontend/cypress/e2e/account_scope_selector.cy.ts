@@ -15,28 +15,27 @@ function login() {
 }
 
 describe("Account scope selector", () => {
-  it("defaults to Both, showing the Live hero and a Paper tab in the unified Accounts panel", () => {
+  it("defaults to Both, showing the Live hero and a Paper card in the unified Accounts panel", () => {
     login();
     cy.get('[aria-label="Account scope"]').should("be.visible");
     cy.contains("Live Account").should("be.visible");
     cy.contains("Total P&L").should("be.visible");
-    cy.contains("Paper, Zerodha & Upstox").should("be.visible");
-    cy.get('[role="tab"]').contains("Paper").should("be.visible");
+    cy.contains("h2", "Paper").should("be.visible");
   });
 
-  it("Paper scope hides the Live section and shows only the Paper tab", () => {
+  it("Paper scope hides the Live section and shows only the Paper account card", () => {
     login();
     cy.get('[aria-label="Account scope"]').contains("Paper").click();
     cy.contains("Total P&L").should("not.exist");
-    cy.get('[role="tab"]').contains("Paper").should("be.visible");
-    cy.get('[role="tab"]').contains("Zerodha").should("not.exist");
-    cy.get('[role="tab"]').contains("Upstox").should("not.exist");
+    cy.contains("h2", "Paper").should("be.visible");
+    cy.contains("h2", "Zerodha").should("not.exist");
+    cy.contains("h2", "Upstox").should("not.exist");
   });
 
-  it("Live scope hides the Paper tab and shows only the Live section", () => {
+  it("Live scope hides the Paper account card and shows only the Live section", () => {
     login();
     cy.get('[aria-label="Account scope"]').contains("Live").click();
-    cy.get('[role="tab"]').contains("Paper").should("not.exist");
+    cy.contains("h2", "Paper").should("not.exist");
     cy.contains("Total P&L").should("be.visible");
   });
 
@@ -45,7 +44,7 @@ describe("Account scope selector", () => {
     cy.get('[aria-label="Account scope"]').contains("Paper").click();
     cy.contains("Total P&L").should("not.exist");
     cy.reload();
-    cy.get('[role="tab"]').contains("Paper").should("be.visible");
+    cy.contains("h2", "Paper").should("be.visible");
     cy.contains("Total P&L").should("not.exist");
     // Reset to Both so later specs in the same browser session see the default.
     cy.get('[aria-label="Account scope"]').contains("Both").click();

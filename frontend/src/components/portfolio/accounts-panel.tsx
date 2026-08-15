@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { cn, formatCompactINR } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { NumberTicker } from "@/components/ui/number-ticker";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CapitalSummary } from "@/components/portfolio/capital-summary";
 import { PositionsTable } from "@/components/portfolio/positions-table";
 import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
@@ -18,29 +17,39 @@ import type {
 
 type StatusDot = "ok" | "warn" | "error";
 
-const DOT_COLOR: Record<StatusDot, string> = {
-  ok: "bg-up",
-  warn: "bg-warn",
-  error: "bg-down",
+const STATUS_STYLE: Record<StatusDot, { dot: string; badge: string; label: string }> = {
+  ok: { dot: "bg-up", badge: "border-up/25 bg-up/10 text-up", label: "Connected" },
+  warn: { dot: "bg-warn", badge: "border-warn/25 bg-warn/10 text-warn", label: "Not connected" },
+  error: { dot: "bg-down", badge: "border-down/25 bg-down/10 text-down", label: "Error" },
 };
 
-interface AccountTabDef {
+function StatusBadge({ status, label }: { status: StatusDot; label?: string }) {
+  const style = STATUS_STYLE[status];
+  return (
+    <Badge variant="outline" className={cn("gap-1.5", style.badge)}>
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", style.dot)} aria-hidden="true" />
+      {label ?? style.label}
+    </Badge>
+  );
+}
+
+interface AccountCardDef {
   key: string;
   label: string;
   status: StatusDot;
-  /** null = nothing real to show yet (not connected / errored), never a fabricated 0. */
-  availableToTrade: number | null;
+  statusLabel?: string;
   panel: React.ReactNode;
 }
 
 /** REL-066: the one place Paper/Zerodha/Upstox account data renders -- replaces the 3 separately
- * stacked sections that used to repeat the same Capital+Positions shape once per account with a
- * single tabbed card, each tab properly labeled by account. A broker keeps its tab even when not
- * configured (status dot + "Not connected" content) so it stays discoverable rather than
- * silently disappearing -- matching the connection-awareness `BrokerConnectionBanner` already
- * established (REL-036). Paper's simulated capital and a Live broker's real margin are still
- * never summed -- the comparison strip below lists each account's own Available-to-Trade
- * side by side, never blended into one figure. */
+ * stacked sections that used to repeat the same Capital+Positions shape once per account. Every
+ * configured account renders as its own card, side by side, all visible at once (not hidden
+ * behind tab-switching -- direct user feedback after an earlier tabbed version). A broker keeps
+ * its card even when not configured (status badge + "Connect in Settings" content) so it stays
+ * discoverable rather than silently disappearing, matching the connection-awareness
+ * `BrokerConnectionBanner` already established (REL-036). Paper's simulated capital and a Live
+ * broker's real margin are still never summed -- each card shows only its own real figures,
+ * side by side, never blended into one number. */
 export function AccountsPanel({
   showPaper,
   showLive,
@@ -60,44 +69,41 @@ export function AccountsPanel({
   brokerMargins: BrokerMarginEntry[];
   brokerPositions: BrokerPositionsEntry[];
 }) {
-  const tabs: AccountTabDef[] = [];
+  const accounts: AccountCardDef[] = [];
 
   if (showPaper) {
     const realizedPositive = (paperSummary?.realized_pnl_total ?? 0) >= 0;
     const unrealizedPositive = (paperSummary?.unrealized_pnl_total ?? 0) >= 0;
-    const available = paperSummary
-      ? paperSummary.cash - paperSummary.margin_blocked
-      : null;
 
-    tabs.push({
+    accounts.push({
       key: "paper",
       label: "Paper",
       status: "ok",
-      availableToTrade: available,
+      statusLabel: "Active",
       panel: (
         <div className="flex flex-col gap-4">
           {paperSummaryLoading ? (
-            <div className="h-16 animate-pulse rounded-xl bg-bg" />
+            <div className="h-14 animate-pulse rounded-xl bg-bg" />
           ) : (
-            <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">Equity</p>
                 <NumberTicker
                   value={paperSummary?.equity ?? 0}
                   format={formatCompactINR}
-                  className="font-mono-tabular text-2xl font-semibold tracking-tight text-text"
+                  className="font-mono-tabular text-xl font-semibold tracking-tight text-text"
                 />
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">Cash</p>
-                <p className="font-mono-tabular text-2xl font-semibold tracking-tight text-text-dim">
+                <p className="font-mono-tabular text-xl font-semibold tracking-tight text-text-dim">
                   {formatCompactINR(paperSummary?.cash ?? 0)}
                 </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">Realized</p>
                 <p
-                  className={`font-mono-tabular text-2xl font-semibold tracking-tight ${
+                  className={`font-mono-tabular text-xl font-semibold tracking-tight ${
                     realizedPositive ? "text-up" : "text-down"
                   }`}
                 >
@@ -109,7 +115,7 @@ export function AccountsPanel({
                   Unrealized
                 </p>
                 <p
-                  className={`font-mono-tabular text-2xl font-semibold tracking-tight ${
+                  className={`font-mono-tabular text-xl font-semibold tracking-tight ${
                     unrealizedPositive ? "text-up" : "text-down"
                   }`}
                 >
@@ -121,7 +127,7 @@ export function AccountsPanel({
 
           <div className="border-t border-card-edge pt-4">
             {paperSummaryLoading ? (
-              <div className="h-16 animate-pulse rounded-xl bg-bg" />
+              <div className="h-14 animate-pulse rounded-xl bg-bg" />
             ) : (
               <CapitalSummary
                 used={paperSummary?.margin_blocked ?? 0}
@@ -143,9 +149,11 @@ export function AccountsPanel({
               </Link>
             </div>
             {paperPositionsLoading ? (
-              <div className="h-40 animate-pulse rounded-xl bg-bg" />
+              <div className="h-32 animate-pulse rounded-xl bg-bg" />
             ) : (
-              <PaperPositionsTable positions={paperPositions ?? []} />
+              <div className="max-h-[240px] overflow-y-auto">
+                <PaperPositionsTable positions={paperPositions ?? []} />
+              </div>
             )}
           </div>
         </div>
@@ -157,14 +165,11 @@ export function AccountsPanel({
     for (const entry of brokerMargins) {
       const positionsEntry = brokerPositions.find((p) => p.broker === entry.broker);
       const status: StatusDot = !entry.configured ? "warn" : entry.error ? "error" : "ok";
-      const available =
-        entry.configured && !entry.error && entry.margin ? entry.margin.available_margin : null;
 
-      tabs.push({
+      accounts.push({
         key: entry.broker,
         label: entry.broker,
         status,
-        availableToTrade: available,
         panel: !entry.configured ? (
           <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-card-edge text-center">
             <p className="text-xs text-text-faint">{entry.broker} is not connected.</p>
@@ -186,10 +191,18 @@ export function AccountsPanel({
               available={entry.margin?.available_margin ?? 0}
             />
             <div className="border-t border-card-edge pt-4">
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.18em] text-text-faint">
-                Positions
-              </p>
-              <PositionsTable positions={positionsEntry?.positions ?? []} />
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-faint">
+                  Positions
+                </p>
+                <span className="text-[11px] text-text-faint">
+                  {(positionsEntry?.positions ?? []).length}{" "}
+                  {(positionsEntry?.positions ?? []).length === 1 ? "position" : "positions"}
+                </span>
+              </div>
+              <div className="max-h-[240px] overflow-y-auto">
+                <PositionsTable positions={positionsEntry?.positions ?? []} />
+              </div>
             </div>
           </div>
         ),
@@ -197,49 +210,29 @@ export function AccountsPanel({
     }
   }
 
-  const [active, setActive] = useState(tabs[0]?.key ?? "");
-  const activeKey = tabs.some((t) => t.key === active) ? active : (tabs[0]?.key ?? "");
-
-  if (tabs.length === 0) return null;
+  if (accounts.length === 0) return null;
 
   return (
-    <Card eyebrow="Accounts" title="Paper, Zerodha & Upstox">
-      <div className="mb-5 flex flex-wrap gap-2">
-        {tabs.map((tab) => (
-          <div
-            key={tab.key}
-            className="flex items-center gap-2 rounded-lg border border-card-edge bg-bg px-3 py-2"
+    <section className="flex flex-col gap-4">
+      <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-text-faint">
+        Accounts
+      </p>
+      <div
+        className={cn(
+          "grid grid-cols-1 gap-4",
+          accounts.length === 2 ? "lg:grid-cols-2" : "lg:grid-cols-3",
+        )}
+      >
+        {accounts.map((account) => (
+          <Card
+            key={account.key}
+            title={account.label}
+            action={<StatusBadge status={account.status} label={account.statusLabel} />}
           >
-            <span
-              className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT_COLOR[tab.status])}
-              aria-hidden="true"
-            />
-            <span className="text-[11px] font-medium text-text-dim">{tab.label}</span>
-            <span className="font-mono-tabular text-[11px] text-text-faint">
-              {tab.availableToTrade !== null ? formatCompactINR(tab.availableToTrade) : "—"}
-            </span>
-          </div>
+            {account.panel}
+          </Card>
         ))}
       </div>
-
-      <Tabs value={activeKey} onValueChange={(v) => setActive(v as string)}>
-        <TabsList>
-          {tabs.map((tab) => (
-            <TabsTrigger key={tab.key} value={tab.key}>
-              <span
-                className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT_COLOR[tab.status])}
-                aria-hidden="true"
-              />
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {tabs.map((tab) => (
-          <TabsContent key={tab.key} value={tab.key} className="mt-4">
-            {tab.panel}
-          </TabsContent>
-        ))}
-      </Tabs>
-    </Card>
+    </section>
   );
 }
