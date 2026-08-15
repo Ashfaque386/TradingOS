@@ -582,6 +582,22 @@ async function postNoContent(path: string, body?: unknown): Promise<void> {
   }
 }
 
+/** FastAPI's own real error shape is always `{"detail": "..."}` -- extracts that plain message
+ * when the body parses as JSON with one, so a caller-surfaced error reads as the real reason
+ * (e.g. "No historical data ingested for NIFTY 50") instead of a raw JSON blob. Falls back to
+ * today's raw-text format for anything that isn't shaped that way (a 500 with an HTML error
+ * page, a non-JSON body, etc.) rather than fabricating a message. */
+async function extractErrorMessage(method: string, path: string, res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed.detail === "string") return parsed.detail;
+  } catch {
+    // Not JSON -- fall through to the raw-text format below.
+  }
+  return `${method} ${path} failed: ${res.status} ${text}`;
+}
+
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -589,7 +605,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
+    throw new Error(await extractErrorMessage("POST", path, res));
   }
   return res.json() as Promise<T>;
 }

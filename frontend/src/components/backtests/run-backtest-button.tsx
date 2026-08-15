@@ -68,6 +68,11 @@ export function RunBacktestButton({
       {jobQuery.data?.status === "Failed" && (
         <p className="mt-1.5 text-[10px] text-down">Backtest failed: {jobQuery.data.error}</p>
       )}
+      {trigger.isError && (
+        <p className="mt-1.5 max-w-[220px] text-[10px] text-down">
+          Couldn&apos;t start: {trigger.error.message}
+        </p>
+      )}
     </Gated>
   );
 }

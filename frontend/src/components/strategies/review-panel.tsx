@@ -220,6 +220,9 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
         {jobQuery.data?.status === "Failed" && (
           <p className="mb-3 text-[11px] text-down">Backtest failed: {jobQuery.data.error}</p>
         )}
+        {trigger.isError && (
+          <p className="mb-3 text-[11px] text-down">Couldn&apos;t start: {trigger.error.message}</p>
+        )}
 
         {strategy.backtests.length === 0 ? (
           <p className="text-xs text-text-faint">No backtests run yet.</p>
