@@ -9,13 +9,24 @@ every other real strategy in a long-lived dev database tends to share names acro
 runs (e.g. "strategies-api-nouniv-strategy"), which is fine for those tests' own purposes but
 would make an unambiguous by-name click unreliable here.
 
-Idempotent: re-running deletes and recreates both fixtures by their fixed names rather than
-duplicating them, since a Strategy has no unique name constraint (matching the seed_admin_user.py
-idempotency convention where a real column *does* have one). Run via:
-`docker exec tradingos-app python scripts/seed_strategies_cypress_fixtures.py` (or
-`docker compose run --rm app python scripts/seed_strategies_cypress_fixtures.py` locally).
+Idempotent by REUSE, not by destroy-and-recreate (REL-069 fix): the F&O fixture is also the real
+target of the spec's own "submits a suggestion" / "AI review resolves a suggestion" tests, which
+genuinely re-enter REL-048's Suggestion Regeneration pipeline (a real LLM call) and mutate the
+strategy's own hypothesis/entry_conditions/confidence_score/asset_class/style/status/universe in
+place -- exactly as that feature is designed to do in production. A prior version of this script
+unconditionally deleted and recreated both fixtures by name on every run, which silently discarded
+that same real, legitimate agent-driven progress every time -- not a reset, a regression each run.
+Now: if a fixture with the target name already exists, it's left alone (whatever state real agent
+research/analysis/backtest activity has since brought it to) rather than being destroyed. Only a
+genuinely missing fixture is created fresh. Pass `--reset` to force a full delete-and-recreate back
+to the canonical starting values (e.g. after the row has drifted into a state no longer useful as a
+starting point, or to bootstrap a brand-new dev DB) -- an explicit, deliberate action, not the
+default. Run via:
+`docker exec tradingos-app python scripts/seed_strategies_cypress_fixtures.py [--reset]` (or
+`docker compose run --rm app python scripts/seed_strategies_cypress_fixtures.py [--reset]` locally).
 """
 
+import sys
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -264,12 +275,35 @@ def _seed_premigration_fixture() -> None:
         session.commit()
 
 
+def _exists(name: str) -> bool:
+    with get_session() as session:
+        return session.query(Strategy).filter(Strategy.name == name).first() is not None
+
+
 def main() -> None:
-    _delete_existing(STRATEGY_NAME)
-    _delete_existing(PREMIGRATION_STRATEGY_NAME)
-    _seed_fno_fixture()
-    _seed_premigration_fixture()
-    print(f"Seeded: {STRATEGY_NAME}, {PREMIGRATION_STRATEGY_NAME}")
+    reset = "--reset" in sys.argv
+
+    if reset:
+        _delete_existing(STRATEGY_NAME)
+        _delete_existing(PREMIGRATION_STRATEGY_NAME)
+
+    if _exists(STRATEGY_NAME):
+        print(
+            f"{STRATEGY_NAME}: already exists, reusing its real current state as-is "
+            f"(pass --reset to force a clean recreate)."
+        )
+    else:
+        _seed_fno_fixture()
+        print(f"{STRATEGY_NAME}: created fresh.")
+
+    if _exists(PREMIGRATION_STRATEGY_NAME):
+        print(
+            f"{PREMIGRATION_STRATEGY_NAME}: already exists, reusing (pass --reset to force "
+            f"a clean recreate)."
+        )
+    else:
+        _seed_premigration_fixture()
+        print(f"{PREMIGRATION_STRATEGY_NAME}: created fresh.")
 
 
 if __name__ == "__main__":
