@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { api, API_BASE, type MfaEnrollResponse } from "@/lib/api";
+import { api, API_BASE, ApiError, type MfaEnrollResponse } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -15,15 +15,19 @@ import { Button } from "@/components/ui/button";
 //   - mfa_required=true, mfa_enrolled=true  -> already enrolled, just needs a fresh code (verify).
 type Step = "credentials" | "enroll" | "verify";
 
-// A genuine 401 from the backend (wrong credentials/code) throws an Error whose message
-// contains the real HTTP status (see lib/api.ts's post()/get() helpers: `POST ${path} failed:
-// ${res.status} ...`). Anything else -- fetch() itself throwing, e.g. a TLS handshake the
-// browser hasn't been told to trust yet, a DNS failure, the backend being down -- is a
-// connection problem, not a bad password, and showing "Incorrect email or password" for that
-// case is actively misleading (confirmed the hard way: a real user's login attempts against an
-// untrusted self-signed cert never even reached this backend -- no LOGIN_FAILURE audit row
-// existed for them -- yet they saw the same "incorrect password" message a real 401 would show).
+// A genuine 4xx from the backend (wrong credentials/code) is a real rejection; anything else --
+// fetch() itself throwing, e.g. a TLS handshake the browser hasn't been told to trust yet, a DNS
+// failure, the backend being down -- is a connection problem, not a bad password, and showing
+// "Incorrect email or password" for that case is actively misleading (confirmed the hard way: a
+// real user's login attempts against an untrusted self-signed cert never even reached this
+// backend -- no LOGIN_FAILURE audit row existed for them -- yet they saw the same "incorrect
+// password" message a real 401 would show).
+// `login()` goes through lib/api.ts's post(), which throws a real ApiError carrying the HTTP
+// status; the MFA calls (mfaEnroll/mfaConfirm/mfaVerify) still go through postWithToken(), which
+// hasn't been migrated off the older `failed: ${status}` raw-text Error -- both are checked here
+// so this stays correct for both paths without having to migrate postWithToken() just for this.
 function isAuthRejection(err: unknown): boolean {
+  if (err instanceof ApiError) return err.status >= 400 && err.status < 500;
   return err instanceof Error && /failed: 4\d\d/.test(err.message);
 }
 

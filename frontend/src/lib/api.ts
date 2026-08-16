@@ -598,6 +598,20 @@ async function extractErrorMessage(method: string, path: string, res: Response):
   return `${method} ${path} failed: ${res.status} ${text}`;
 }
 
+/** Carries the real HTTP status alongside the message extractErrorMessage() produces -- that
+ * message is now the server's plain `detail` text (e.g. "Incorrect email or password"), which
+ * no longer contains the old raw `failed: 401` substring login/page.tsx's isAuthRejection() used
+ * to regex-match. Callers that need to distinguish "a real 4xx rejection" from "the request
+ * never reached the server" should check `status`, not parse `message`. */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
@@ -605,7 +619,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    throw new Error(await extractErrorMessage("POST", path, res));
+    throw new ApiError(res.status, await extractErrorMessage("POST", path, res));
   }
   return res.json() as Promise<T>;
 }
@@ -815,6 +829,26 @@ export interface DatalakeStatusResponse {
   as_of: string;
   total_symbols: number;
   stale_symbols: SymbolFreshness[];
+}
+
+// REL-071: src/data/ingest/instrument_sync.py's real, locally-synced Upstox instrument master
+// (src/models/instrument.py) -- unlike `symbols` above (whatever's already been ingested into
+// the EOD lake), this is the full real, searchable NSE/BSE equity + index universe.
+export interface InstrumentSummary {
+  instrument_key: string;
+  exchange: string;
+  segment: string;
+  symbol: string;
+  name: string;
+  instrument_type: string;
+  isin: string | null;
+}
+
+export interface InstrumentSearchResponse {
+  items: InstrumentSummary[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 // REL-013 -- src/api/routers/paper_trading.py's real response models. Every row is a real
@@ -1074,6 +1108,13 @@ export const api = {
   symbols: () => get<string[]>("/api/v1/market/symbols"),
   marketPulse: () => get<MarketPulseResponse>("/api/v1/market/pulse"),
   datalakeStatus: () => get<DatalakeStatusResponse>("/api/v1/market/datalake/status"),
+  instrumentSearch: (params: {
+    q?: string;
+    exchange?: string;
+    instrument_type?: string;
+    page?: number;
+    page_size?: number;
+  }) => get<InstrumentSearchResponse>(`/api/v1/market/instruments/search${toQuery(params)}`),
 
   paperTrades: (strategyId?: string) =>
     get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),

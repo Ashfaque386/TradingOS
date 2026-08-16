@@ -8,6 +8,7 @@ from src.models.agent import AgentLog, AgentRun
 from src.models.audit import AuditLog
 from src.models.base import Base
 from src.models.chat import ChatMessage
+from src.models.instrument import Instrument
 from src.models.ml import MLModel
 from src.models.paper_trading import PaperTrade
 from src.models.refresh_token import RefreshToken
@@ -47,4 +48,5 @@ __all__ = [
     "PaperTrade",
     "ShadowModeAttempt",
     "Tenant",
+    "Instrument",
 ]

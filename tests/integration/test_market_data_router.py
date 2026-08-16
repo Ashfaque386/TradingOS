@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
 from src.api.main import app
 from src.brokers.factory import NoBrokerConfigured, build_broker
@@ -19,6 +20,7 @@ from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.query import DataLake
 from src.models.corporate_action import CorporateAction
+from src.models.instrument import Instrument
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
@@ -217,6 +219,27 @@ def test_ingest_trigger_rejects_an_unknown_source():
         cleanup_user(user_id)
 
 
+def test_ingest_trigger_accepts_the_managed_source():
+    # REL-071: this endpoint's Literal + ADAPTERS check previously couldn't reach the real
+    # Upstox V3 + yfinance failover path added in REL-070 -- only the CLI could ask for it.
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        with patch("src.api.routers.market_data.run_ingestion", return_value=7):
+            trigger = client.post(
+                "/api/v1/market/ingest/trigger",
+                json={
+                    "source": "managed",
+                    "symbols": ["RELIANCE"],
+                    "start": "2024-01-01",
+                    "end": "2024-01-02",
+                },
+                headers=auth_header(token),
+            )
+        assert trigger.status_code == 202
+    finally:
+        cleanup_user(user_id)
+
+
 def test_ingest_trigger_runs_a_real_job_to_completion_and_status_reflects_it():
     """Mocks only run_ingestion itself (the real network fetch) -- the job state machine
     (Running -> Completed, real threading.Thread, real job_id/status polling) all runs for
@@ -350,3 +373,84 @@ def test_market_pulse_returns_real_vix_and_sector_data():
     for sector in body["sectors"]:
         assert set(sector) == {"name", "value", "change_pct", "as_of"}
         assert sector["value"] > 0
+
+
+# REL-071: GET /market/instruments/search -- the real, locally-synced Upstox instrument table
+# (src/data/ingest/instrument_sync.py, src/data/instruments.py). Seeds real rows under a fake,
+# dedicated provider/exchange pair so this test never depends on -- or disturbs -- whatever the
+# real live Upstox sync has (or hasn't) populated in this environment.
+
+_INSTR_PROVIDER = "test_router_provider"
+_INSTR_EXCHANGE = "TESTREX"
+
+
+def _seed_test_instruments() -> None:
+    with get_session() as session:
+        session.add(
+            Instrument(
+                provider=_INSTR_PROVIDER,
+                instrument_key=f"{_INSTR_EXCHANGE}_EQ|ROUTERTEST",
+                exchange=_INSTR_EXCHANGE,
+                segment=f"{_INSTR_EXCHANGE}_EQ",
+                symbol="ROUTERTESTCO",
+                name="Router Test Co Ltd",
+                instrument_type="EQ",
+                isin="INE_ROUTER_01",
+                is_active=True,
+            )
+        )
+        session.commit()
+
+
+def _cleanup_test_instruments() -> None:
+    with get_session() as session:
+        session.execute(
+            delete(Instrument).where(
+                Instrument.provider == _INSTR_PROVIDER, Instrument.exchange == _INSTR_EXCHANGE
+            )
+        )
+        session.commit()
+
+
+def test_instrument_search_returns_a_real_seeded_match():
+    _seed_test_instruments()
+    try:
+        response = client.get(
+            "/api/v1/market/instruments/search",
+            params={"q": "Router Test", "exchange": _INSTR_EXCHANGE},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["page"] == 1
+        assert body["page_size"] == 25
+        assert len(body["items"]) == 1
+        item = body["items"][0]
+        assert item["symbol"] == "ROUTERTESTCO"
+        assert item["instrument_key"] == f"{_INSTR_EXCHANGE}_EQ|ROUTERTEST"
+        assert item["isin"] == "INE_ROUTER_01"
+    finally:
+        _cleanup_test_instruments()
+
+
+def test_instrument_search_returns_empty_for_no_match():
+    response = client.get(
+        "/api/v1/market/instruments/search", params={"q": "NoSuchInstrumentAtAll12345"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+def test_instrument_search_respects_page_size():
+    response = client.get("/api/v1/market/instruments/search", params={"page": 1, "page_size": 3})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["page_size"] == 3
+    assert len(body["items"]) <= 3
+
+
+def test_instrument_search_rejects_an_out_of_range_page_size():
+    response = client.get("/api/v1/market/instruments/search", params={"page_size": 1000})
+    assert response.status_code == 422

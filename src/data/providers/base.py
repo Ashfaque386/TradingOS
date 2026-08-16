@@ -99,9 +99,12 @@ class Candle:
 @dataclass(frozen=True)
 class InstrumentHit:
     """A single real search/lookup result -- the shape `search_instrument`/`get_instruments`
-    return. Phase 2 (REL-071) is where a real, synced instrument table backs this; Phase 1's
-    provider implementations raise `NotImplementedError` from these two methods rather than
-    fabricate a partial answer."""
+    return. REL-071 (Phase 2) found Upstox has no live per-call search API at all (its real
+    mechanism is a daily-refreshed static file, see src/data/ingest/instrument_sync.py) --
+    so the real, working implementation lives against the locally-synced `instruments` table in
+    src/data/instruments.py (`search`, `get_equities`, `get_indices`, `resolve_instrument_key`),
+    not on this provider interface. These two methods stay unimplemented here, on purpose: a
+    provider genuinely has no live search call to make."""
 
     instrument_key: str
     symbol: str
@@ -200,14 +203,23 @@ class MarketDataProvider(ABC):
         ...
 
     def search_instrument(self, query: str) -> list[InstrumentHit]:
-        """Phase 2 (REL-071): backed by a real synced instrument table. Not abstract in Phase 1
-        so existing/new providers don't need a premature implementation; the default raises
-        rather than returning a fabricated empty result."""
-        raise NotImplementedError(f"{self.name}: instrument search ships in Phase 2 (REL-071)")
+        """Not implemented here -- REL-071 (Phase 2) found this provider has no live per-call
+        search API to wrap (Upstox's real instrument discovery is a daily static file, not a
+        query endpoint). Use `src.data.instruments.search()` against the real, locally-synced
+        `instruments` table instead. Left concrete-but-raising (not abstract) so existing/new
+        providers don't need a premature implementation; the default raises rather than
+        returning a fabricated empty result."""
+        raise NotImplementedError(
+            f"{self.name}: no live instrument search API -- use src.data.instruments.search()"
+        )
 
     def get_instruments(self, *, exchange: str, segment: str | None = None) -> list[InstrumentHit]:
-        """Phase 2 (REL-071), same as `search_instrument` above."""
-        raise NotImplementedError(f"{self.name}: instrument listing ships in Phase 2 (REL-071)")
+        """Not implemented here, same reason as `search_instrument` above -- use
+        `src.data.instruments.get_equities()`/`get_indices()` against the real, locally-synced
+        `instruments` table instead."""
+        raise NotImplementedError(
+            f"{self.name}: no live instrument listing API -- use src.data.instruments module"
+        )
 
     @abstractmethod
     def health_check(self) -> bool:

@@ -34,7 +34,7 @@ ADAPTERS: dict[str, type[EODDataSourceAdapter]] = {
     "bhavcopy": BhavcopyAdapter,
     "yfinance": YFinanceAdapter,
 }
-_MANAGED_SOURCE = "managed"
+MANAGED_SOURCE = "managed"
 
 
 def _candles_to_eod_dataframe(symbol: str, candles: list[Candle]) -> pl.DataFrame:
@@ -97,7 +97,7 @@ def run(source: str, symbols: list[str], start: date, end: date) -> int:
 
     rows = (
         _fetch_managed(symbols, start, end)
-        if source == _MANAGED_SOURCE
+        if source == MANAGED_SOURCE
         else ADAPTERS[source]().fetch(symbols, start, end)
     )
     written = writer.write(rows)
@@ -110,7 +110,7 @@ def main() -> None:
         description="Ingest EOD OHLCV data into the TradingOS Parquet data lake."
     )
     parser.add_argument(
-        "--source", choices=[_MANAGED_SOURCE, *sorted(ADAPTERS)], default=_MANAGED_SOURCE
+        "--source", choices=[MANAGED_SOURCE, *sorted(ADAPTERS)], default=MANAGED_SOURCE
     )
     parser.add_argument(
         "--symbols", required=True, help="Comma-separated NSE symbols, e.g. RELIANCE,TCS,INFY"

@@ -22,7 +22,7 @@ from datetime import date
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -35,8 +35,9 @@ from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
 from src.data.datalake.freshness import check_freshness
 from src.data.datalake.query import DataLake, IntradayDataLake
 from src.data.features.indicators import with_indicators
-from src.data.ingest.pipeline import ADAPTERS
+from src.data.ingest.pipeline import ADAPTERS, MANAGED_SOURCE
 from src.data.ingest.pipeline import run as run_ingestion
+from src.data.instruments import search as search_instruments
 from src.data.market_pulse import get_market_pulse
 from src.models.corporate_action import CorporateAction
 from src.models.user import User
@@ -331,7 +332,11 @@ _ingest_jobs_lock = threading.Lock()
 
 
 class IngestTriggerRequest(BaseModel):
-    source: Literal["bhavcopy", "yfinance"]
+    # REL-071: "managed" (the real Upstox V3 + yfinance automatic-failover path added in REL-070)
+    # was missing here entirely -- this endpoint could only reach the two single-source adapters
+    # directly, a real gap between what the CLI (src/data/ingest/pipeline.py) could already do
+    # and what this REST trigger could ask for.
+    source: Literal["bhavcopy", "yfinance", "managed"]
     symbols: list[str]
     start: date
     end: date
@@ -371,9 +376,10 @@ def trigger_ingest(
     src.data.ingest.pipeline` already performs from the CLI -- run in a background thread
     (mirrors strategies.py's own backtest-trigger job pattern) since the real fetch/write is
     synchronous, blocking I/O that would stall the event loop if awaited directly here."""
-    if body.source not in ADAPTERS:
+    if body.source != MANAGED_SOURCE and body.source not in ADAPTERS:
         raise HTTPException(
-            status_code=400, detail=f"Unknown source -- choices are {sorted(ADAPTERS)}"
+            status_code=400,
+            detail=f"Unknown source -- choices are {sorted({MANAGED_SOURCE, *ADAPTERS})}",
         )
     if not body.symbols:
         raise HTTPException(status_code=400, detail="symbols must not be empty")
@@ -410,3 +416,58 @@ def get_ingest_job_status(job_id: str) -> IngestJobStatusResponse:
     return IngestJobStatusResponse(
         job_id=job_id, status=job.status, error=job.error, rows_written=job.rows_written
     )
+
+
+class InstrumentSummary(BaseModel):
+    instrument_key: str
+    exchange: str
+    segment: str
+    symbol: str
+    name: str
+    instrument_type: str
+    isin: str | None
+
+
+class InstrumentSearchResponse(BaseModel):
+    items: list[InstrumentSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.get("/instruments/search", response_model=InstrumentSearchResponse)
+def search_instruments_endpoint(
+    q: str | None = None,
+    exchange: str | None = None,
+    instrument_type: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+) -> InstrumentSearchResponse:
+    """REL-071 (Phase 2). Real, locally-synced Upstox instrument master
+    (src/data/ingest/instrument_sync.py) -- searches `symbol` and `name` (Upstox's own Nifty 50
+    row has symbol="NIFTY" but name="Nifty 50", so both are checked; see
+    src/data/instruments.py). This is the first real server-side paginated search in this API --
+    the daily-sync table can hold thousands of NSE/BSE rows, unlike API-038's `/symbols`, which
+    only ever lists what's already been ingested into the EOD lake."""
+    with get_session() as session:
+        rows, total = search_instruments(
+            session,
+            query=q,
+            exchange=exchange,
+            instrument_type=instrument_type,
+            page=page,
+            page_size=page_size,
+        )
+        items = [
+            InstrumentSummary(
+                instrument_key=row.instrument_key,
+                exchange=row.exchange,
+                segment=row.segment,
+                symbol=row.symbol,
+                name=row.name,
+                instrument_type=row.instrument_type,
+                isin=row.isin,
+            )
+            for row in rows
+        ]
+    return InstrumentSearchResponse(items=items, total=total, page=page, page_size=page_size)
