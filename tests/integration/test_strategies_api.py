@@ -244,6 +244,8 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         # as before the optional BacktestTriggerRequest was added -- DEFAULT_INITIAL_CAPITAL, now
         # actually surfaced on the response for the first time.
         assert backtest_summary["initial_capital"] == 100_000.0
+        # REL-075: no symbol override supplied -- falls back to the strategy's own universe[0].
+        assert backtest_summary["symbol"] == "TCS"
 
         equity_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/equity-curve")
         assert equity_response.status_code == 200
@@ -526,6 +528,155 @@ def test_backtest_trigger_rejects_non_positive_initial_capital():
         )
         # Pydantic's own gt=0 validation, before any DB/lake work.
         assert response.status_code == 422
+    finally:
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_symbol_override_replaces_the_strategys_own_universe():
+    """REL-075: a caller-supplied symbol overrides strategy.universe[0] for this one run only --
+    the persisted BacktestResult and the response must reflect the override, not the strategy's
+    own configured universe (TCS, per _create_fixture_rows). Real backtest, real sandbox, real
+    RELIANCE data, polled to completion (~60-90s), same pattern as the other full E2E tests in
+    this file."""
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    try:
+        trigger_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={"symbol": "RELIANCE"},
+        )
+        assert trigger_response.status_code == 202
+        job_id = trigger_response.json()["job_id"]
+
+        deadline = time.monotonic() + 150
+        job_status = None
+        while time.monotonic() < deadline:
+            job_response = client.get(f"/api/v1/strategies/backtests/jobs/{job_id}/status")
+            job_status = job_response.json()
+            if job_status["status"] != "Running":
+                break
+            time.sleep(3)
+        assert job_status is not None and job_status["status"] == "Completed", job_status
+        backtest_id = job_status["backtest_result_id"]
+
+        detail = client.get(f"/api/v1/strategies/{strategy_id}").json()
+        summary = next(b for b in detail["backtests"] if b["id"] == backtest_id)
+        assert summary["symbol"] == "RELIANCE"
+
+        with get_session() as session:
+            result_row = session.get(BacktestResult, uuid.UUID(backtest_id))
+            assert result_row is not None
+            assert result_row.symbol == "RELIANCE"
+    finally:
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_symbol_override_bypasses_the_no_universe_409():
+    """REL-075: a caller-supplied symbol override bypasses the "Strategy has no universe
+    recorded" 409 -- the strategy's own universe is only required when no override is given.
+    Polled to real completion (not just the initial 202) so the finally block's cleanup never
+    races a still-running background job -- the same real TCS 5/20 SMA code
+    test_backtest_rejects_a_strategy_with_no_universe_recorded's own fixture uses, just with a
+    real symbol override instead of a strategy-level universe."""
+    user_id, account_id = uuid.uuid4(), uuid.uuid4()
+    strategy_id, version_id = uuid.uuid4(), uuid.uuid4()
+
+    with get_session() as session:
+        session.add(
+            User(
+                id=user_id,
+                email=f"strategies-api-nouniv-override-{user_id}@example.invalid",
+                hashed_password="x",
+                role="Trader",
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        session.add(
+            Account(
+                id=account_id,
+                user_id=user_id,
+                broker="Zerodha",
+                account_type="Paper",
+                capital_allocated=Decimal("100000.00"),
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        strategy = Strategy(
+            id=strategy_id,
+            account_id=account_id,
+            name="strategies-api-nouniv-override-strategy",
+            asset_class="Equity",
+            style="Intraday",
+            status="Ideation",
+            max_drawdown_limit=Decimal("15.00"),
+        )
+        session.add(strategy)
+        session.flush()
+        session.add(
+            StrategyVersion(
+                id=version_id,
+                strategy_id=strategy_id,
+                version_no=1,
+                python_code=_STRATEGY_CODE,
+                validation_status="Pending",
+            )
+        )
+        strategy.current_version_id = version_id
+        session.commit()
+
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    try:
+        trigger_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={"symbol": "TCS"},
+        )
+        assert trigger_response.status_code == 202
+        job_id = trigger_response.json()["job_id"]
+
+        deadline = time.monotonic() + 150
+        job_status = None
+        while time.monotonic() < deadline:
+            job_response = client.get(f"/api/v1/strategies/backtests/jobs/{job_id}/status")
+            job_status = job_response.json()
+            if job_status["status"] != "Running":
+                break
+            time.sleep(3)
+        assert job_status is not None and job_status["status"] == "Completed", job_status
+
+        with get_session() as session:
+            result_row = session.get(BacktestResult, uuid.UUID(job_status["backtest_result_id"]))
+            assert result_row is not None
+            assert result_row.symbol == "TCS"
+    finally:
+        _cleanup_fixture_rows(user_id, account_id, strategy_id, version_id)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_rejects_a_symbol_override_with_no_lake_coverage():
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    try:
+        response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={"symbol": "NOT_A_REAL_INGESTED_SYMBOL"},
+        )
+        assert response.status_code == 409
+        assert "NOT_A_REAL_INGESTED_SYMBOL" in response.json()["detail"]
     finally:
         _cleanup_fixture_rows(*ids)
         cleanup_user(admin_id)

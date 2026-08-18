@@ -28,6 +28,19 @@ function loginViaUi(email: string, password: string) {
   cy.url().should("eq", Cypress.config().baseUrl + "/");
 }
 
+// REL-075: the "Select Strategy" card now has TWO real <select> elements -- the strategy picker
+// (StrategyPicker, options carrying real "N runs" text) and RunBacktestButton's own new symbol
+// override picker (options are plain symbol tickers, first option "Strategy's own symbol").
+// `cy.get("main select").first()` is no longer reliable now that a second select exists earlier
+// in DOM order (RunBacktestButton renders in the Card's header action slot, before the picker in
+// the Card body) -- this finds the strategy picker specifically, by its real, stable "N runs"
+// option-text signature, regardless of DOM position.
+function strategyPickerSelect() {
+  return cy.get("main select").filter((_i, el) =>
+    Array.from((el as HTMLSelectElement).options).some((o) => /\d+ runs?/.test(o.text)),
+  );
+}
+
 /** REL-043 test helper: `total_trades` (BacktestResult's own persisted metrics column) and the
  * real per-trade ledger (`trades`, REL-022) are two independently-populated columns -- a
  * pre-REL-022 backtest row can genuinely have a positive total_trades count with an empty/absent
@@ -67,8 +80,7 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
 
     // The picker's options are real <option> text -- "N runs"/"N run" is real backtest_count,
     // not a placeholder, for whichever strategy the app defaulted to.
-    cy.get("main select")
-      .first()
+    strategyPickerSelect()
       .find("option")
       .first()
       .invoke("text")
@@ -107,8 +119,7 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
   it("never lists a strategy with no code version as a selectable option", () => {
     loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
     cy.visit("/backtests");
-    cy.get("main select")
-      .first()
+    strategyPickerSelect()
       .find("option")
       .should("not.contain.text", "cypress-rel044-premigration-fixture-strategy");
   });
@@ -125,6 +136,8 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
       .within(() => {
         cy.get('input[type="date"]').should("have.length", 2);
         cy.get('input[type="number"]').should("have.length", 1);
+        // REL-075: a real symbol override select, sourced from GET /market/symbols.
+        cy.get("select").should("have.length.at.least", 1);
       });
 
     cy.get("main").then(($main) => {
@@ -136,6 +149,34 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
       } else {
         cy.log("Selected default strategy has no backtests yet -- nothing to check here.");
       }
+    });
+  });
+
+  // REL-075: the symbol override select's options must be the real, currently-ingested lake
+  // symbols -- never a fabricated or hardcoded list.
+  it("the symbol override select lists the real symbols GET /market/symbols returns", () => {
+    loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) => {
+      cy.request({
+        url: `${API_URL}/api/v1/market/symbols`,
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((symbolsRes) => {
+        const realSymbols = symbolsRes.body as string[];
+        loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+        cy.visit("/backtests");
+        cy.contains("Run New Backtest")
+          .parent()
+          .within(() => {
+            // .should() (not .then()) so this retries until the symbols query -- a real async
+            // fetch -- has actually resolved and populated the select's options.
+            cy.get("select")
+              .first()
+              .find("option")
+              .should(($options) => {
+                const optionValues = [...$options].map((o) => o.getAttribute("value"));
+                realSymbols.forEach((symbol) => expect(optionValues).to.include(symbol));
+              });
+          });
+      });
     });
   });
 
@@ -160,7 +201,7 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
 
           loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
           cy.visit(`/backtests?strategy=${withBacktests.id}&run=${realBacktestId}`);
-          cy.get("main select").first().should("have.value", withBacktests.id);
+          strategyPickerSelect().should("have.value", withBacktests.id);
           cy.get("main").contains("Key Metrics").should("be.visible");
           cy.url().should("include", `run=${realBacktestId}`);
         });

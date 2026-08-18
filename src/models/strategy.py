@@ -125,6 +125,11 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     date_from: Mapped[date] = mapped_column(nullable=False)
     date_to: Mapped[date] = mapped_column(nullable=False)
     initial_capital: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
+    # REL-075: the real symbol this run actually backtested against -- always implicitly
+    # strategy.universe[0] before a one-off trigger-time override became possible, so a
+    # pre-existing row genuinely never recorded it. Nullable, not backfilled (honest None), same
+    # convention as data_adjusted/provider_used/initial_capital before it.
+    symbol: Mapped[str | None] = mapped_column(String(30))
     sharpe_ratio: Mapped[float | None] = mapped_column(Numeric(6, 3))
     sortino_ratio: Mapped[float | None] = mapped_column(Numeric(6, 3))
     calmar_ratio: Mapped[float | None] = mapped_column(Numeric(8, 3))

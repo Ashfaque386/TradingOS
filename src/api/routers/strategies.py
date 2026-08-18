@@ -161,6 +161,10 @@ class BacktestSummary(BaseModel):
     strategy_version_id: uuid.UUID
     date_from: date
     date_to: date
+    # REL-075: the real symbol this run actually backtested against -- `None` for a row created
+    # before this field existed (implicitly the strategy's own universe[0] at the time, but
+    # never actually recorded).
+    symbol: str | None
     sharpe_ratio: float | None
     sortino_ratio: float | None
     calmar_ratio: float | None
@@ -253,6 +257,7 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         strategy_version_id=result.strategy_version_id,
         date_from=result.date_from,
         date_to=result.date_to,
+        symbol=result.symbol,
         sharpe_ratio=result.sharpe_ratio,
         sortino_ratio=result.sortino_ratio,
         calmar_ratio=result.calmar_ratio,
@@ -474,6 +479,10 @@ class BacktestTriggerRequest(BaseModel):
     date_from: date | None = None
     date_to: date | None = None
     initial_capital: float | None = Field(default=None, gt=0)
+    # REL-075: a one-off override of which real, already-ingested symbol this run backtests
+    # against, instead of the strategy's own fixed universe[0]. When omitted, `trigger_backtest`
+    # falls back to the strategy's own universe exactly as before.
+    symbol: str | None = None
 
 
 class BacktestTriggerResponse(BaseModel):
@@ -508,6 +517,7 @@ def _run_backtest_job(
     date_from: date,
     date_to: date,
     initial_capital: float,
+    symbol: str,
 ) -> None:
     outcome: RealBacktestOutcome = run_real_backtest(
         # python_code isn't on StrategyVersionSummary; re-fetched by id below to keep this
@@ -531,6 +541,7 @@ def _run_backtest_job(
             date_from=date_from,
             date_to=date_to,
             initial_capital=initial_capital,
+            symbol=symbol,
             sharpe_ratio=outcome.metrics.get("sharpe_ratio"),
             sortino_ratio=outcome.metrics.get("sortino_ratio"),
             calmar_ratio=outcome.metrics.get("calmar_ratio"),
@@ -605,13 +616,22 @@ def trigger_backtest(
     payload: BacktestTriggerRequest | None = None,
     _user: User = Depends(_can_trigger_backtest),
 ) -> BacktestTriggerResponse:
+    req = payload or BacktestTriggerRequest()
+
     with get_session() as session:
         strategy = session.get(Strategy, strategy_id)
         if strategy is None:
             raise HTTPException(status_code=404, detail="Strategy not found")
         if strategy.current_version_id is None:
             raise HTTPException(status_code=409, detail="Strategy has no code version yet")
-        if not strategy.universe:
+        # REL-075: a caller-supplied symbol overrides the strategy's own fixed universe for this
+        # one run only -- the strategy's own universe record is only required when no override
+        # is given.
+        if req.symbol:
+            universe = [req.symbol]
+        elif strategy.universe:
+            universe = list(strategy.universe)
+        else:
             raise HTTPException(
                 status_code=409,
                 detail="Strategy has no universe recorded -- can't load historical data for it",
@@ -625,9 +645,6 @@ def trigger_backtest(
             validation_status=version.validation_status,
             validator_feedback=version.validator_feedback,
         )
-        universe = list(strategy.universe)
-
-    req = payload or BacktestTriggerRequest()
 
     # A trailing window ending at the *data lake's* latest ingested bar for this symbol, not
     # wall-clock "now": this system does a one-time historical backfill (Phase 1), it doesn't
@@ -676,6 +693,7 @@ def trigger_backtest(
             "date_from": date_from,
             "date_to": date_to,
             "initial_capital": initial_capital,
+            "symbol": universe[0],
         },
         daemon=True,
     ).start()

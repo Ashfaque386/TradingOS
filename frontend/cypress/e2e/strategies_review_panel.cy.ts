@@ -214,6 +214,24 @@ describe("Strategies page (REL-044/045/046)", () => {
     });
   });
 
+  // REL-075: a one-off symbol override at trigger time -- LIVE_TRIGGER_FIXTURE_NAME's own
+  // universe is TCS, but picking RELIANCE in the new select must run the backtest against
+  // RELIANCE instead, and the resulting VerdictPanel's Symbol clause must say so. Slow (~60-90s
+  // real cold sandbox run, same real budget as the no-reload test above).
+  it("a symbol override at trigger time replaces the strategy's own universe", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/strategies");
+    cy.contains(LIVE_TRIGGER_FIXTURE_NAME).click();
+    cy.contains("Sandbox").parents(".rounded-card").within(() => {
+      cy.get("select").select("RELIANCE");
+      cy.contains("button", "Run Backtest").click();
+      cy.contains("button", "Running…", { timeout: 15_000 }).should("be.visible");
+      cy.contains("button", "Running…", { timeout: 240_000 }).should("not.exist");
+      cy.contains(/Symbol: RELIANCE/, { timeout: 15_000 }).should("be.visible");
+      cy.contains(/Symbol: TCS/).should("not.exist");
+    });
+  });
+
   // REL-047: the Asset/Style/Stage filter bar added to fix an always-growing, unfilterable
   // Kanban board -- the two REL-044 fixtures are real, distinct rows to filter by. Reads the F&O
   // fixture's real current asset_class rather than assuming it's still "F&O" (REL-069: a real

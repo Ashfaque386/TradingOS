@@ -83,17 +83,20 @@ export function VerdictPanel({ backtest }: { backtest: BacktestSummary }) {
   const windowTo = backtest.date_to ? new Date(backtest.date_to).toLocaleDateString("en-IN") : null;
   const capital =
     typeof backtest.initial_capital === "number" ? backtest.initial_capital.toLocaleString("en-IN") : null;
+  // REL-075: the real symbol this run actually backtested against -- null for a row from before
+  // a one-off symbol override was possible, an honest gap not a rendering bug.
+  const configParts = [
+    windowFrom && windowTo ? `Window: ${windowFrom} → ${windowTo}` : null,
+    capital ? `Capital: ₹${capital}` : null,
+    backtest.symbol ? `Symbol: ${backtest.symbol}` : null,
+  ].filter(Boolean);
 
   return (
     <div className="rounded-xl border border-card-edge bg-bg/50 p-3">
       {/* What this run was actually configured with -- the direct fix for "no way to see what
-        * date range/capital a backtest used." */}
-      {(windowFrom || capital) && (
-        <div className="mb-2 text-[10px] text-text-faint">
-          {windowFrom && windowTo ? `Window: ${windowFrom} → ${windowTo}` : null}
-          {windowFrom && capital ? " · " : null}
-          {capital ? `Capital: ₹${capital}` : null}
-        </div>
+        * date range/capital/symbol a backtest used." */}
+      {configParts.length > 0 && (
+        <div className="mb-2 text-[10px] text-text-faint">{configParts.join(" · ")}</div>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={evaluationTone} label={`Evaluation: ${backtest.evaluation_verdict ?? "Not yet evaluated"}`} />

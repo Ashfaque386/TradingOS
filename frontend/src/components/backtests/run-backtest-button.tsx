@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
@@ -46,9 +46,15 @@ export function RunBacktestButton({
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [capital, setCapital] = useState("");
+  const [symbol, setSymbol] = useState("");
   const jobQuery = useBacktestJob(jobId);
   const jobRunning = jobQuery.data?.status === "Running";
   const notifiedJobIdRef = useRef<string | null>(null);
+
+  // REL-075: real symbols actually present in the data lake -- the only ones a backtest can
+  // ever succeed against, matching the "no fabricated options" convention `GET /market/symbols`
+  // itself already documents.
+  const symbolsQuery = useQuery({ queryKey: ["market-symbols"], queryFn: api.symbols });
 
   const trigger = useMutation({
     mutationFn: () =>
@@ -56,6 +62,7 @@ export function RunBacktestButton({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         initial_capital: capital ? Number(capital) : undefined,
+        symbol: symbol || undefined,
       }),
     onSuccess: (res) => setJobId(res.job_id),
   });
@@ -80,6 +87,19 @@ export function RunBacktestButton({
     <Gated permission="triggerBacktest">
       <div className="flex flex-col items-end gap-1.5">
         <div className="flex items-center gap-1">
+          <select
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+            title="Symbol (defaults to the strategy's own configured universe)"
+            className={`${inputClass} w-[100px]`}
+          >
+            <option value="">Strategy&apos;s own symbol</option>
+            {(symbolsQuery.data ?? []).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
           <input
             type="date"
             value={dateFrom}

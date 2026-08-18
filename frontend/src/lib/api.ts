@@ -315,6 +315,9 @@ export interface BacktestSummary {
   strategy_version_id: string;
   date_from: string;
   date_to: string;
+  // REL-075: the real symbol this run actually backtested against -- null for a row created
+  // before this field existed.
+  symbol: string | null;
   sharpe_ratio: number | null;
   sortino_ratio: number | null;
   calmar_ratio: number | null;
@@ -402,6 +405,8 @@ export interface BacktestTriggerRequest {
   date_from?: string;
   date_to?: string;
   initial_capital?: number;
+  // REL-075: overrides the strategy's own universe[0] for this one run only.
+  symbol?: string;
 }
 
 export interface BacktestTriggerResponse {
