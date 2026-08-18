@@ -30,6 +30,7 @@ from src.data.ingest.instrument_sync import InstrumentSyncService
 from src.data.ingest.pipeline import candles_to_eod_dataframe
 from src.data.ingest.writer import ParquetLakeWriter
 from src.data.instruments import resolve_instrument_key
+from src.data.provenance import upsert_provenance
 from src.data.providers.manager import MarketDataUnavailable, build_market_data_manager
 from src.models.strategy import Strategy
 
@@ -115,6 +116,14 @@ def run_incremental_ingestion() -> IncrementalIngestionSummary:
                 continue
 
             written = writer.write(candles_to_eod_dataframe(symbol, result.candles))
+            # REL-073: real provenance, closing the gap run_real_backtest() can't answer on its
+            # own (the Parquet lake carries no per-row provider/fetch-time column).
+            upsert_provenance(
+                session,
+                symbol=symbol,
+                provider=result.provider_used,
+                retrieved_at=result.retrieved_at,
+            )
             (summary.symbols_backfilled if is_backfill else summary.symbols_topped_up).append(
                 symbol
             )

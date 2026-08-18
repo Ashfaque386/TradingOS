@@ -11,13 +11,16 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import delete
 
 from src.core.db import get_session
 from src.data.ingest import scheduled_sync
 from src.data.ingest.scheduled_sync import INITIAL_BACKFILL_DAYS, run_incremental_ingestion
+from src.data.provenance import get_provenance
 from src.data.providers.base import Candle, DataQualityReport
 from src.data.providers.manager import MarketDataResult, MarketDataUnavailable
 from src.models.account import Account
+from src.models.market_data_provenance import MarketDataProvenance
 from src.models.strategy import Strategy
 from src.models.user import User
 
@@ -226,6 +229,24 @@ def test_run_incremental_ingestion_backfills_top_ups_skips_and_isolates_failures
 
     # One symbol's real provider failure never stops the others from being processed.
     assert len(fake_writer.written) == 2  # EXISTING_TOPUP + the backfilled universe symbol
+
+    # REL-073: a real provenance row lands for every successfully-processed symbol.
+    try:
+        with get_session() as session:
+            topup_provenance = get_provenance(session, "EXISTING_TOPUP")
+            assert topup_provenance is not None
+            assert topup_provenance.provider == "upstox_v3"
+            backfill_provenance = get_provenance(session, universe_symbol)
+            assert backfill_provenance is not None
+            assert backfill_provenance.provider == "upstox_v3"
+    finally:
+        with get_session() as session:
+            session.execute(
+                delete(MarketDataProvenance).where(
+                    MarketDataProvenance.symbol.in_(["EXISTING_TOPUP", universe_symbol])
+                )
+            )
+            session.commit()
 
 
 def test_run_incremental_ingestion_survives_a_real_instrument_sync_failure(

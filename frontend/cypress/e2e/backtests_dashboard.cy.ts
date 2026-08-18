@@ -82,6 +82,17 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
           .parents(".rounded-card")
           .contains(/Evaluation:|Risk:|Deployment:/)
           .should("be.visible");
+        // REL-072/073: real data provenance chips -- "Unknown" is a real, honest state for a
+        // backtest run before these fields existed, not a rendering bug, so the regex accepts
+        // either a real value or "Unknown" rather than assuming a specific one.
+        cy.contains("Go / No-Go Verdict")
+          .parents(".rounded-card")
+          .contains(/Data: (Split\/Bonus-Adjusted|Raw|Unknown)/)
+          .should("be.visible");
+        cy.contains("Go / No-Go Verdict")
+          .parents(".rounded-card")
+          .contains(/Source: (Upstox V3|Yahoo Finance|Unknown)/)
+          .should("be.visible");
       } else {
         cy.log("Selected default strategy has no backtests yet -- verdict panel correctly absent.");
       }

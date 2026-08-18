@@ -9,17 +9,20 @@ fresh sandboxed subprocess every run, matching test_real_backtest_runner.py's ow
 
 import time
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import polars as pl
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
 from src.api.main import app
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
+from src.data.provenance import get_provenance, upsert_provenance
 from src.models.account import Account
+from src.models.market_data_provenance import MarketDataProvenance
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
@@ -171,6 +174,20 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
     admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
     headers = auth_header(admin_token)
 
+    # REL-073: seed a known, real TCS provenance row so the assertion below is deterministic --
+    # whether a real managed/scheduled ingestion has touched TCS *today* (this test's own run
+    # time) is genuinely non-deterministic (depends on whether real EOD data has published yet),
+    # so this test controls it directly rather than depending on incidental live timing.
+    # Restores whatever real state existed before, never destroys real provenance.
+    with get_session() as session:
+        original_tcs_provenance = get_provenance(session, "TCS")
+        upsert_provenance(
+            session,
+            symbol="TCS",
+            provider="upstox_v3",
+            retrieved_at=datetime(2026, 8, 17, 10, 0, tzinfo=UTC),
+        )
+
     try:
         list_response = client.get("/api/v1/strategies")
         assert list_response.status_code == 200
@@ -219,6 +236,10 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         # this endpoint's own _run_backtest_job now threads outcome.data_adjusted onto the
         # persisted row -- a real backtest through the real trigger endpoint must report it.
         assert backtest_summary["data_adjusted"] is True
+        # REL-073: real reproducibility provenance -- the known provenance row seeded above must
+        # be looked up and threaded through the real trigger endpoint, not silently dropped.
+        assert backtest_summary["provider_used"] == "upstox_v3"
+        assert backtest_summary["data_retrieved_at"] is not None
 
         equity_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/equity-curve")
         assert equity_response.status_code == 200
@@ -293,6 +314,19 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         assert promote_response.status_code == 200
         assert promote_response.json()["status"] == "Live"
     finally:
+        with get_session() as session:
+            if original_tcs_provenance is not None:
+                upsert_provenance(
+                    session,
+                    symbol="TCS",
+                    provider=original_tcs_provenance.provider,
+                    retrieved_at=original_tcs_provenance.retrieved_at,
+                )
+            else:
+                session.execute(
+                    delete(MarketDataProvenance).where(MarketDataProvenance.symbol == "TCS")
+                )
+                session.commit()
         _cleanup_fixture_rows(*ids)
         cleanup_user(admin_id)
 

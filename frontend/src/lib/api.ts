@@ -330,6 +330,14 @@ export interface BacktestSummary {
   // backtest -- still null for backtests created before this release (not backfilled) or with
   // fewer than 2 usable returns either way, exposed honestly rather than hidden.
   monte_carlo_p95_max_drawdown: number | null;
+  // REL-072: real provenance -- whether the real split/bonus adjustment pipeline
+  // (src/engine/backtest/corporate_actions_adjust.py) was applied to this backtest's OHLCV
+  // data. `null` for a backtest run before this release (genuinely never adjusted).
+  data_adjusted: boolean | null;
+  // REL-073: real reproducibility provenance -- which provider's data this backtest actually
+  // ran against, and when that data was last fetched. Both `null` when unknown (never guessed).
+  provider_used: string | null;
+  data_retrieved_at: string | null;
   created_at: string;
   // REL-040: the real Evaluator/Optimization/RiskManager/Deployment agent-pipeline outcome for
   // this backtest run (src/api/routers/agents.py::_persist_strategy_progress) -- previously
@@ -851,6 +859,19 @@ export interface InstrumentSearchResponse {
   page_size: number;
 }
 
+// REL-073: src/api/routers/market_data.py's GET /market/providers/status -- a config-only
+// check (no live network call), same shape/spirit as the existing broker /status endpoint.
+export interface ProviderStatus {
+  name: string;
+  configured: boolean;
+  detail: string | null;
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatus[];
+  active_provider: string;
+}
+
 // REL-013 -- src/api/routers/paper_trading.py's real response models. Every row is a real
 // depth-walked simulated fill against a real live broker quote; nothing here ever calls
 // place_order (src/engine/paper_trading/execution_service.py).
@@ -1115,6 +1136,7 @@ export const api = {
     page?: number;
     page_size?: number;
   }) => get<InstrumentSearchResponse>(`/api/v1/market/instruments/search${toQuery(params)}`),
+  providerStatus: () => get<ProviderStatusResponse>("/api/v1/market/providers/status"),
 
   paperTrades: (strategyId?: string) =>
     get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),

@@ -1,22 +1,29 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, CircleDashed, XCircle } from "lucide-react";
+import { CheckCircle2, CircleDashed, Database, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BacktestSummary } from "@/lib/api";
 
-type ChipTone = "pass" | "fail" | "pending";
+type ChipTone = "pass" | "fail" | "pending" | "neutral";
 
 const CHIP_CLASS: Record<ChipTone, string> = {
   pass: "bg-up/10 text-up",
   fail: "bg-down/10 text-down",
   pending: "bg-bg text-text-faint",
+  neutral: "bg-bg text-text-dim",
 };
 
 const CHIP_ICON: Record<ChipTone, typeof CheckCircle2> = {
   pass: CheckCircle2,
   fail: XCircle,
   pending: CircleDashed,
+  neutral: Database,
+};
+
+const PROVIDER_LABELS: Record<string, string> = {
+  upstox_v3: "Upstox V3",
+  yfinance: "Yahoo Finance",
 };
 
 function Chip({ tone, label }: { tone: ChipTone; label: string }) {
@@ -84,6 +91,24 @@ export function VerdictPanel({ backtest }: { backtest: BacktestSummary }) {
         <Chip
           tone={deploymentTone}
           label={`Deployment: ${backtest.deployment_recommendation ?? "Not yet evaluated"}`}
+        />
+        {/* REL-072/073: real data provenance -- whether real corporate-action adjustment was
+          * applied, and which real provider the OHLCV data came from. Both honestly "Unknown"
+          * (not fabricated) for a backtest run before these fields existed, or for a symbol
+          * that has never gone through the managed/scheduled ingestion path. */}
+        <Chip
+          tone="neutral"
+          label={`Data: ${
+            backtest.data_adjusted === true
+              ? "Split/Bonus-Adjusted"
+              : backtest.data_adjusted === false
+                ? "Raw"
+                : "Unknown"
+          }`}
+        />
+        <Chip
+          tone="neutral"
+          label={`Source: ${PROVIDER_LABELS[backtest.provider_used ?? ""] ?? "Unknown"}`}
         />
         {backtest.optimization_robustness_score !== null && (
           <span className="ml-auto text-[10px] text-text-faint">

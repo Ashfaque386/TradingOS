@@ -121,6 +121,10 @@ class BacktestMetrics(StrictModel):
     # to the OHLCV data these metrics were computed from (backtesting_node sets this from
     # run_real_backtest()'s own RealBacktestOutcome.data_adjusted).
     data_adjusted: bool | None = None
+    # REL-073: real reproducibility provenance -- which provider's data this backtest actually
+    # ran against, and when that data was last fetched (both None when unknown, never guessed).
+    provider_used: str | None = None
+    data_retrieved_at: datetime | None = None
 
 
 class EvaluationVerdict(StrictModel):

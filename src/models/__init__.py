@@ -9,6 +9,7 @@ from src.models.audit import AuditLog
 from src.models.base import Base
 from src.models.chat import ChatMessage
 from src.models.instrument import Instrument
+from src.models.market_data_provenance import MarketDataProvenance
 from src.models.ml import MLModel
 from src.models.paper_trading import PaperTrade
 from src.models.refresh_token import RefreshToken
@@ -49,4 +50,5 @@ __all__ = [
     "ShadowModeAttempt",
     "Tenant",
     "Instrument",
+    "MarketDataProvenance",
 ]

@@ -4,6 +4,8 @@
 // GET /market/datalake/status. No mocking.
 // REL-071 (Phase 2): the 4th "Instruments" tab, against the real, locally-synced Upstox
 // instrument master (GET /market/instruments/search).
+// REL-073 (Phase 4, final): the Data Freshness tab also shows a real Provider Status panel
+// (GET /market/providers/status).
 
 export {};
 
@@ -72,12 +74,27 @@ describe("Market Analysis", () => {
     });
   });
 
-  it("Data Freshness tab shows the real datalake status", () => {
-    login();
-    cy.visit("/market-analysis");
-    cy.get('[role="tab"]').contains("Data Freshness").click();
-    cy.contains(/^(Fresh|Stale)$/).should("be.visible");
-    cy.contains(/\d+ symbols tracked/).should("be.visible");
+  it("Data Freshness tab shows the real datalake status and provider status", () => {
+    cy.request(`${API_URL}/api/v1/market/providers/status`).then((response) => {
+      expect(response.status).to.eq(200);
+      const body = response.body as { providers: { name: string; configured: boolean }[] };
+      const yfinance = body.providers.find((p) => p.name === "yfinance");
+      expect(yfinance?.configured).to.eq(true);
+
+      login();
+      cy.visit("/market-analysis");
+      cy.get('[role="tab"]').contains("Data Freshness").click();
+      cy.contains(/^(Fresh|Stale)$/).should("be.visible");
+      cy.contains(/\d+ symbols tracked/).should("be.visible");
+
+      cy.contains("Provider Status").should("be.visible");
+      cy.contains("Upstox V3").should("be.visible");
+      // yfinance needs no credential -- always real and configured, a stable real assertion
+      // regardless of whether a real Upstox token happens to be configured in this environment.
+      // "Yahoo Finance" and its "Configured" text are sibling spans inside the same row div
+      // (provider-status-panel.tsx), not nested -- .eq(1) walks up to that shared row ancestor.
+      cy.contains("Yahoo Finance").parents("div").eq(1).contains("Configured").should("be.visible");
+    });
   });
 
   it("Instruments tab searches the real, locally-synced Upstox instrument master", () => {

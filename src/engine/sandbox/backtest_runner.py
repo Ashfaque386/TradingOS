@@ -33,7 +33,7 @@ real security tradeoff pooling accepts and mitigates.
 
 import tempfile
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,7 @@ import polars as pl
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.data.datalake.query import DataLake
+from src.data.provenance import get_provenance
 from src.engine.backtest.corporate_actions_adjust import (
     adjust_ohlcv_for_corporate_actions,
     load_corporate_actions,
@@ -121,6 +122,12 @@ class RealBacktestOutcome:
     # (a symbol with zero real recorded actions still gets data_adjusted=True when the flag was
     # on, since the pipeline genuinely ran and genuinely found nothing to adjust).
     data_adjusted: bool = False
+    # REL-073: real reproducibility provenance, from src/models/market_data_provenance.py's own
+    # one-row-per-symbol record of the most recent managed/scheduled ingestion. Both None (never
+    # guessed) when this symbol has no such record -- e.g. only ever ingested via the direct
+    # bhavcopy/yfinance CLI adapters, which bypass MarketDataManager entirely.
+    provider_used: str | None = None
+    data_retrieved_at: datetime | None = None
 
 
 def _extract_metrics(raw: Any) -> dict[str, float | int | None]:
@@ -262,15 +269,25 @@ def run_real_backtest(
             symbol_used=symbol,
         )
 
-    if adjust_for_corporate_actions:
-        # REL-072: closes the real gap this codebase's own corporate_actions_adjust.py stated --
-        # a real, tested adjustment pipeline already used correctly by data_feed.py's own
-        # _maybe_adjust, but with zero real callers on this actual backtest execution path until
-        # now. Same pandas conversion _maybe_adjust already performs, reused verbatim rather than
-        # duplicated; cast back to the exact original Polars schema/dtypes so nothing downstream
-        # (the sandbox, write_parquet, _close_curve_from_data below) sees a different shape.
-        with get_session() as session:
+    # REL-073: real reproducibility provenance -- the most recent managed/scheduled ingestion's
+    # provider/fetch-time for this symbol, if any (None, never guessed, when this symbol has only
+    # ever been touched by the direct bhavcopy/yfinance CLI adapters, which bypass
+    # MarketDataManager entirely and so never write a provenance row).
+    with get_session() as session:
+        provenance = get_provenance(session, symbol)
+        if adjust_for_corporate_actions:
+            # REL-072: closes the real gap this codebase's own corporate_actions_adjust.py
+            # stated -- a real, tested adjustment pipeline already used correctly by
+            # data_feed.py's own _maybe_adjust, but with zero real callers on this actual
+            # backtest execution path until now. Same pandas conversion _maybe_adjust already
+            # performs, reused verbatim rather than duplicated.
             actions = load_corporate_actions(session, symbol)
+    provider_used = provenance.provider if provenance else None
+    data_retrieved_at = provenance.retrieved_at if provenance else None
+
+    if adjust_for_corporate_actions:
+        # Cast back to the exact original Polars schema/dtypes so nothing downstream (the
+        # sandbox, write_parquet, _close_curve_from_data below) sees a different shape.
         pandas_df = data.to_pandas().set_index("date").sort_index()
         pandas_df = adjust_ohlcv_for_corporate_actions(pandas_df, actions)
         data = (
@@ -301,6 +318,8 @@ def run_real_backtest(
             symbol_used=symbol,
             duration_seconds=result.duration_seconds,
             data_adjusted=adjust_for_corporate_actions,
+            provider_used=provider_used,
+            data_retrieved_at=data_retrieved_at,
         )
 
     summary = result.portfolio_summary or {}
@@ -315,6 +334,8 @@ def run_real_backtest(
         close_curve=_close_curve_from_data(data),
         duration_seconds=result.duration_seconds,
         data_adjusted=adjust_for_corporate_actions,
+        provider_used=provider_used,
+        data_retrieved_at=data_retrieved_at,
     )
 
 

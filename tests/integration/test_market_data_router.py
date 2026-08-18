@@ -454,3 +454,47 @@ def test_instrument_search_respects_page_size():
 def test_instrument_search_rejects_an_out_of_range_page_size():
     response = client.get("/api/v1/market/instruments/search", params={"page_size": 1000})
     assert response.status_code == 422
+
+
+# REL-073: GET /market/providers/status -- a config-only check (no live network call), mirroring
+# broker_config.py's own broker_status() shape.
+
+
+def test_provider_status_reflects_the_real_current_configuration():
+    response = client.get("/api/v1/market/providers/status")
+    assert response.status_code == 200
+    body = response.json()
+    names = {p["name"] for p in body["providers"]}
+    assert names == {"upstox_v3", "yfinance"}
+    # yfinance needs no credential -- always real and configured.
+    yfinance_entry = next(p for p in body["providers"] if p["name"] == "yfinance")
+    assert yfinance_entry["configured"] is True
+    assert yfinance_entry["detail"] is None
+    # active_provider must be one of the two real, currently-configured providers.
+    assert body["active_provider"] in names
+
+
+def test_provider_status_never_exposes_a_token_value():
+    response = client.get("/api/v1/market/providers/status")
+    body_text = response.text
+    # A real Upstox Analytics Token, if configured in this environment, must never appear
+    # verbatim in this response -- only whether one exists, never the value itself.
+    settings = get_settings()
+    if settings.upstox_analytics_token:
+        assert settings.upstox_analytics_token not in body_text
+
+
+def test_provider_status_honestly_reports_upstox_not_configured():
+    with (
+        patch("src.api.routers.market_data.vault.read_market_data_credential", return_value=None),
+        patch("src.api.routers.market_data.get_settings") as mock_settings,
+    ):
+        settings = get_settings()
+        mock_settings.return_value = settings.model_copy(update={"upstox_analytics_token": None})
+        response = client.get("/api/v1/market/providers/status")
+    assert response.status_code == 200
+    body = response.json()
+    upstox_entry = next(p for p in body["providers"] if p["name"] == "upstox_v3")
+    assert upstox_entry["configured"] is False
+    assert upstox_entry["detail"] is not None
+    assert body["active_provider"] == "yfinance"

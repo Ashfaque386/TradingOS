@@ -7,6 +7,7 @@ import { SectorPerformanceChart } from "@/components/market-analysis/sector-perf
 import { TechnicalAnalysisChart } from "@/components/market-analysis/technical-analysis-chart";
 import { DataFreshnessStrip } from "@/components/market-analysis/data-freshness-strip";
 import { InstrumentSearchPanel } from "@/components/market-analysis/instrument-search-panel";
+import { ProviderStatusPanel } from "@/components/market-analysis/provider-status-panel";
 
 /** REL-067 (Phase 1 of 3 -- Market Analysis): 3 real aspects of current market state, tabbed
  * rather than 3 separate nav entries -- switching between genuinely different data views, unlike
@@ -18,7 +19,11 @@ import { InstrumentSearchPanel } from "@/components/market-analysis/instrument-s
  * its first frontend consumer).
  * REL-071 (Phase 2 of the Upstox V3 + yfinance dual market-data system): 4th tab, "Instruments"
  * -- browse/search the real, locally-synced Upstox NSE/BSE instrument master, a genuinely
- * separate concern from the other 3 tabs' already-ingested-data views. */
+ * separate concern from the other 3 tabs' already-ingested-data views.
+ * REL-073 (Phase 4, final): the Data Freshness tab gains a Provider Status panel alongside the
+ * existing lake-freshness strip -- both answer the same "is our data infrastructure healthy"
+ * question, one for the Parquet lake, the other for the upstream Upstox V3/yfinance providers
+ * themselves, so grouped together rather than a 5th tab. */
 export default function MarketAnalysisPage() {
   usePageStatus("Market Analysis", false);
 
@@ -44,7 +49,10 @@ export default function MarketAnalysisPage() {
         </TabsContent>
 
         <TabsContent value="freshness" className="mt-4">
-          <DataFreshnessStrip />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <DataFreshnessStrip />
+            <ProviderStatusPanel />
+          </div>
         </TabsContent>
 
         <TabsContent value="instruments" className="mt-4">

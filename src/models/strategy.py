@@ -4,6 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Integer,
     Numeric,
@@ -173,6 +174,15 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     # honest value, not a fabricated `true`/`false`. Every row created after this ships gets a
     # real value from `run_real_backtest`'s own new `adjust_for_corporate_actions` default.
     data_adjusted: Mapped[bool | None] = mapped_column(Boolean)
+    # REL-073: real reproducibility provenance -- which provider's data this backtest actually
+    # ran against, and when that data was last fetched, sourced from
+    # src/models/market_data_provenance.py's own one-row-per-symbol record (a real, honest
+    # "last managed ingestion for this symbol," not a full per-row audit trail). Nullable, NOT
+    # backfilled -- same convention as data_adjusted above; also NULL (not fabricated) for a
+    # symbol whose only real data ever came from the direct bhavcopy/yfinance CLI adapters,
+    # which bypass MarketDataManager entirely and so never write a provenance row.
+    provider_used: Mapped[str | None] = mapped_column(String(20))
+    data_retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class StrategySuggestion(Base, UUIDPKMixin, TimestampMixin):

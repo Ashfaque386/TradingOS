@@ -29,6 +29,7 @@ from sqlalchemy import select
 from src.api.deps import require_role
 from src.brokers.base import OptionChain, Quote
 from src.brokers.factory import NoBrokerConfigured, build_broker
+from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
@@ -471,3 +472,51 @@ def search_instruments_endpoint(
             for row in rows
         ]
     return InstrumentSearchResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+class ProviderStatus(BaseModel):
+    name: str
+    configured: bool
+    detail: str | None = None
+
+
+class ProviderStatusResponse(BaseModel):
+    providers: list[ProviderStatus]
+    active_provider: str
+
+
+@router.get("/providers/status", response_model=ProviderStatusResponse)
+def get_provider_status() -> ProviderStatusResponse:
+    """REL-073 (Phase 4). A config-only check -- NOT a live connectivity ping, mirroring
+    src/api/routers/broker_config.py's own broker_status() shape (see that endpoint's own
+    docstring for why: MarketDataProvider.health_check() makes a real outbound HTTP call for
+    both providers, wrong to fire on every status-panel page load). Whether a real credential
+    is present, sourced via the same Vault-first/`.env`-fallback resolution
+    build_market_data_manager() (src/data/providers/manager.py) already performs -- never
+    returns the token value itself. yfinance needs no credential, always real and configured."""
+    settings = get_settings()
+    token = vault.read_market_data_credential("upstox", settings=settings) or (
+        settings.upstox_analytics_token
+    )
+    upstox_configured = bool(token)
+    providers = [
+        ProviderStatus(
+            name="upstox_v3",
+            configured=upstox_configured,
+            detail=(
+                None
+                if upstox_configured
+                else "No UPSTOX_ANALYTICS_TOKEN configured (Vault or .env)"
+            ),
+        ),
+        ProviderStatus(name="yfinance", configured=True, detail=None),
+    ]
+    configured_names = {p.name for p in providers if p.configured}
+    active_provider = settings.primary_market_data_provider
+    if active_provider not in configured_names:
+        active_provider = (
+            settings.fallback_market_data_provider
+            if settings.fallback_market_data_provider in configured_names
+            else "yfinance"
+        )
+    return ProviderStatusResponse(providers=providers, active_provider=active_provider)

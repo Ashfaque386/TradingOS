@@ -182,6 +182,12 @@ class BacktestSummary(BaseModel):
     # (src/engine/backtest/corporate_actions_adjust.py) was applied to this row's OHLCV data.
     # `None` for a row created before this migration (genuinely never adjusted, not fabricated).
     data_adjusted: bool | None = None
+    # REL-073: real reproducibility provenance -- which provider's data this backtest actually
+    # ran against, and when that data was last fetched (src/models/market_data_provenance.py).
+    # Both `None` when unknown (never guessed) -- a row created before this migration, or a
+    # symbol only ever ingested via the direct bhavcopy/yfinance CLI adapters.
+    provider_used: str | None = None
+    data_retrieved_at: datetime | None = None
     created_at: datetime
     # REL-040: real columns on BacktestResult (src/models/strategy.py, REL-005) written by the
     # real LangGraph Evaluator/Optimization/RiskManager/Deployment agent nodes
@@ -254,6 +260,8 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         has_equity_curve=bool(result.equity_curve_path),
         monte_carlo_p95_max_drawdown=result.monte_carlo_p95_max_drawdown,
         data_adjusted=result.data_adjusted,
+        provider_used=result.provider_used,
+        data_retrieved_at=result.data_retrieved_at,
         created_at=result.created_at,
         evaluation_verdict=result.evaluation_verdict,
         evaluation_failure_reasons=result.evaluation_failure_reasons,
@@ -535,6 +543,9 @@ def _run_backtest_job(
             # REL-072: real provenance -- was the real split/bonus adjustment pipeline applied
             # to the OHLCV data this row's metrics were computed from.
             data_adjusted=outcome.data_adjusted,
+            # REL-073: real reproducibility provenance.
+            provider_used=outcome.provider_used,
+            data_retrieved_at=outcome.data_retrieved_at,
         )
         session.add(result)
         session.flush()
