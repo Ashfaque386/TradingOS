@@ -240,6 +240,10 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         # be looked up and threaded through the real trigger endpoint, not silently dropped.
         assert backtest_summary["provider_used"] == "upstox_v3"
         assert backtest_summary["data_retrieved_at"] is not None
+        # A bodyless trigger (this call passes no `json=` kwarg at all) must keep behaving exactly
+        # as before the optional BacktestTriggerRequest was added -- DEFAULT_INITIAL_CAPITAL, now
+        # actually surfaced on the response for the first time.
+        assert backtest_summary["initial_capital"] == 100_000.0
 
         equity_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/equity-curve")
         assert equity_response.status_code == 200
@@ -397,6 +401,133 @@ def test_backtest_rejects_a_strategy_with_no_universe_recorded():
         assert promote_response.status_code == 409  # Ideation strategies have nothing to promote
     finally:
         _cleanup_fixture_rows(user_id, account_id, strategy_id, version_id)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_accepts_custom_date_range_and_capital():
+    """A caller-supplied date_from/date_to/initial_capital round-trips into the persisted
+    BacktestResult and the response, replacing the endpoint's own defaults rather than being
+    ignored -- the direct fix for "no way to configure or see what a backtest used." Real
+    backtest, real sandbox, real TCS data, polled to completion (~60-90s), same pattern as
+    test_strategy_list_detail_version_backtest_and_promote_end_to_end above."""
+    from src.core.config import get_settings
+    from src.data.datalake.query import DataLake
+
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+    lake_latest = lake.latest_date("TCS")
+    assert lake_latest is not None
+    custom_date_to = lake_latest
+    custom_date_from = custom_date_to.fromordinal(custom_date_to.toordinal() - 200)
+    custom_capital = 250_000.0
+
+    try:
+        trigger_response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={
+                "date_from": custom_date_from.isoformat(),
+                "date_to": custom_date_to.isoformat(),
+                "initial_capital": custom_capital,
+            },
+        )
+        assert trigger_response.status_code == 202
+        job_id = trigger_response.json()["job_id"]
+
+        deadline = time.monotonic() + 150
+        job_status = None
+        while time.monotonic() < deadline:
+            job_response = client.get(f"/api/v1/strategies/backtests/jobs/{job_id}/status")
+            job_status = job_response.json()
+            if job_status["status"] != "Running":
+                break
+            time.sleep(3)
+        assert job_status is not None and job_status["status"] == "Completed", job_status
+        backtest_id = job_status["backtest_result_id"]
+
+        detail = client.get(f"/api/v1/strategies/{strategy_id}").json()
+        summary = next(b for b in detail["backtests"] if b["id"] == backtest_id)
+        assert summary["date_from"] == custom_date_from.isoformat()
+        assert summary["date_to"] == custom_date_to.isoformat()
+        assert summary["initial_capital"] == custom_capital
+
+        with get_session() as session:
+            result_row = session.get(BacktestResult, uuid.UUID(backtest_id))
+            assert result_row is not None
+            assert result_row.date_from == custom_date_from
+            assert result_row.date_to == custom_date_to
+            assert float(result_row.initial_capital) == custom_capital
+    finally:
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_rejects_date_to_beyond_lake_coverage():
+    from src.core.config import get_settings
+    from src.data.datalake.query import DataLake
+
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+    lake_latest = lake.latest_date("TCS")
+    assert lake_latest is not None
+    beyond = lake_latest.fromordinal(lake_latest.toordinal() + 1)
+
+    try:
+        response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={"date_to": beyond.isoformat()},
+        )
+        assert response.status_code == 409
+        assert "beyond the last ingested date" in response.json()["detail"]
+    finally:
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_rejects_date_from_not_before_date_to():
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    try:
+        response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={"date_from": "2024-06-01", "date_to": "2024-01-01"},
+        )
+        assert response.status_code == 400
+        assert "must be before" in response.json()["detail"]
+    finally:
+        _cleanup_fixture_rows(*ids)
+        cleanup_user(admin_id)
+
+
+def test_backtest_trigger_rejects_non_positive_initial_capital():
+    ids = _create_fixture_rows()
+    user_id, account_id, strategy_id, version_id = ids
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    try:
+        response = client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            headers=headers,
+            json={"initial_capital": 0},
+        )
+        # Pydantic's own gt=0 validation, before any DB/lake work.
+        assert response.status_code == 422
+    finally:
+        _cleanup_fixture_rows(*ids)
         cleanup_user(admin_id)
 
 

@@ -99,6 +99,46 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
     });
   });
 
+  // Bug fix: a strategy with no current_version_id (e.g. the real, intentionally-uncleaned
+  // cypress-rel044-premigration-fixture-strategy dev-DB fixture, seeded Ideation/no-version by
+  // scripts/seed_strategies_cypress_fixtures.py) can never be backtested -- trigger_backtest
+  // always 409s for it server-side. It must never appear in this picker, which previously showed
+  // every strategy indiscriminately and could even default-select it.
+  it("never lists a strategy with no code version as a selectable option", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/backtests");
+    cy.get("main select")
+      .first()
+      .find("option")
+      .should("not.contain.text", "cypress-rel044-premigration-fixture-strategy");
+  });
+
+  // Bug fix: date_from/date_to/initial_capital were previously neither configurable nor visible
+  // anywhere -- both the trigger controls and, once a run exists, the VerdictPanel's summary
+  // line must be present.
+  it("shows date/capital trigger inputs and, for a real completed run, the Window/Capital summary", () => {
+    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+    cy.visit("/backtests");
+
+    cy.contains("Run New Backtest")
+      .parent()
+      .within(() => {
+        cy.get('input[type="date"]').should("have.length", 2);
+        cy.get('input[type="number"]').should("have.length", 1);
+      });
+
+    cy.get("main").then(($main) => {
+      if ($main.text().includes("Go / No-Go Verdict")) {
+        cy.contains("Go / No-Go Verdict")
+          .parents(".rounded-card")
+          .contains(/Window: .+ → .+ · Capital: ₹/)
+          .should("be.visible");
+      } else {
+        cy.log("Selected default strategy has no backtests yet -- nothing to check here.");
+      }
+    });
+  });
+
   it("deep-links ?strategy=&run= to the exact real backtest the API itself returns", () => {
     loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) => {
       cy.request({

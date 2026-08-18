@@ -49,7 +49,7 @@ from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from src.api.deps import get_current_user, require_role
@@ -170,6 +170,11 @@ class BacktestSummary(BaseModel):
     profit_factor: float | None
     expectancy: float | None
     total_trades: int | None
+    # Real column, always set (never null) -- the actual starting capital this run used, whether
+    # the caller supplied one (BacktestTriggerRequest.initial_capital) or it fell back to
+    # DEFAULT_INITIAL_CAPITAL. Previously computed and persisted but never returned by this
+    # endpoint.
+    initial_capital: float
     has_equity_curve: bool
     # REL-017 E17.4 (DB-007): real column, real since Phase 3, exposed here since that release.
     # UPDATE 2026-08-05 (REL-023 E23.1): _run_backtest_job now calls run_monte_carlo_simulation()
@@ -257,6 +262,7 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         profit_factor=result.profit_factor,
         expectancy=result.expectancy,
         total_trades=result.total_trades,
+        initial_capital=result.initial_capital,
         has_equity_curve=bool(result.equity_curve_path),
         monte_carlo_p95_max_drawdown=result.monte_carlo_p95_max_drawdown,
         data_adjusted=result.data_adjusted,
@@ -460,6 +466,16 @@ _backtest_jobs: dict[str, _BacktestJob] = {}
 _backtest_jobs_lock = threading.Lock()
 
 
+class BacktestTriggerRequest(BaseModel):
+    """Optional -- every field defaults to `trigger_backtest`'s existing lake-latest-date/365-day-
+    lookback/DEFAULT_INITIAL_CAPITAL behavior when omitted, so a bodyless POST (every caller
+    before this) behaves identically to before."""
+
+    date_from: date | None = None
+    date_to: date | None = None
+    initial_capital: float | None = Field(default=None, gt=0)
+
+
 class BacktestTriggerResponse(BaseModel):
     job_id: str
     status: str
@@ -491,6 +507,7 @@ def _run_backtest_job(
     universe: list[str],
     date_from: date,
     date_to: date,
+    initial_capital: float,
 ) -> None:
     outcome: RealBacktestOutcome = run_real_backtest(
         # python_code isn't on StrategyVersionSummary; re-fetched by id below to keep this
@@ -500,7 +517,7 @@ def _run_backtest_job(
         universe=universe,
         date_from=date_from,
         date_to=date_to,
-        config={"init_cash": DEFAULT_INITIAL_CAPITAL},
+        config={"init_cash": initial_capital},
     )
 
     if not outcome.passed:
@@ -513,7 +530,7 @@ def _run_backtest_job(
             strategy_version_id=version.id,
             date_from=date_from,
             date_to=date_to,
-            initial_capital=DEFAULT_INITIAL_CAPITAL,
+            initial_capital=initial_capital,
             sharpe_ratio=outcome.metrics.get("sharpe_ratio"),
             sortino_ratio=outcome.metrics.get("sortino_ratio"),
             calmar_ratio=outcome.metrics.get("calmar_ratio"),
@@ -584,7 +601,9 @@ def _fetch_code(version_id: uuid.UUID) -> str:
 
 @router.post("/{strategy_id}/backtest", response_model=BacktestTriggerResponse, status_code=202)
 def trigger_backtest(
-    strategy_id: uuid.UUID, _user: User = Depends(_can_trigger_backtest)
+    strategy_id: uuid.UUID,
+    payload: BacktestTriggerRequest | None = None,
+    _user: User = Depends(_can_trigger_backtest),
 ) -> BacktestTriggerResponse:
     with get_session() as session:
         strategy = session.get(Strategy, strategy_id)
@@ -608,18 +627,40 @@ def trigger_backtest(
         )
         universe = list(strategy.universe)
 
+    req = payload or BacktestTriggerRequest()
+
     # A trailing window ending at the *data lake's* latest ingested bar for this symbol, not
     # wall-clock "now": this system does a one-time historical backfill (Phase 1), it doesn't
     # continuously ingest daily bars, so "the last 365 days from today" would almost always miss
     # every real symbol's actual coverage and fail with a false "no historical data" error.
     lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
-    date_to = lake.latest_date(universe[0])
-    if date_to is None:
+    lake_latest = lake.latest_date(universe[0])
+    if lake_latest is None:
         raise HTTPException(
             status_code=409,
             detail=f"No historical data ingested for {universe[0]} -- nothing to backtest against",
         )
-    date_from = date_to.fromordinal(date_to.toordinal() - DEFAULT_BACKTEST_LOOKBACK_DAYS)
+    # A caller-supplied date_to is honored as-is (never silently clamped) unless it's beyond what
+    # the lake actually has -- clamping would silently run a different backtest than the one the
+    # caller asked for.
+    if req.date_to is not None and req.date_to > lake_latest:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"date_to ({req.date_to}) is beyond the last ingested date for "
+                f"{universe[0]} ({lake_latest})"
+            ),
+        )
+    date_to = req.date_to or lake_latest
+    date_from = req.date_from or date_to.fromordinal(
+        date_to.toordinal() - DEFAULT_BACKTEST_LOOKBACK_DAYS
+    )
+    if date_from >= date_to:
+        raise HTTPException(
+            status_code=400,
+            detail=f"date_from ({date_from}) must be before date_to ({date_to})",
+        )
+    initial_capital = req.initial_capital or DEFAULT_INITIAL_CAPITAL
 
     job_id = str(uuid.uuid4())
     with _backtest_jobs_lock:
@@ -634,6 +675,7 @@ def trigger_backtest(
             "universe": universe,
             "date_from": date_from,
             "date_to": date_to,
+            "initial_capital": initial_capital,
         },
         daemon=True,
     ).start()

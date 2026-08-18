@@ -1,16 +1,13 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Play } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useBacktestJob } from "@/hooks/useBacktestJob";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Gated } from "@/components/ui/gated";
 import { VerdictPanel } from "@/components/backtests/verdict-panel";
 import { FullMetricGrid } from "@/components/backtests/metric-grid";
+import { RunBacktestButton } from "@/components/backtests/run-backtest-button";
 import { CodeDiff } from "./code-diff";
 import { EquityCurveChart, buildBenchmarkOverlay } from "./equity-curve-chart";
 import { DrawdownChart } from "./drawdown-chart";
@@ -24,29 +21,13 @@ import { VALIDATION_COLOR } from "./strategy-card";
 const BENCHMARK_SYMBOL = "^NSEI";
 
 export function ReviewPanel({ strategyId }: { strategyId: string }) {
-  const [jobId, setJobId] = useState<string | null>(null);
   const [selectedBacktestId, setSelectedBacktestId] = useState<string | null>(null);
   const [diffA, setDiffA] = useState<number | null>(null);
   const [diffB, setDiffB] = useState<number | null>(null);
 
-  const jobQuery = useBacktestJob(jobId);
-  const jobRunning = jobQuery.data?.status === "Running";
-
   const detailQuery = useQuery({
     queryKey: ["strategy", strategyId],
     queryFn: () => api.strategy(strategyId),
-    // Keeps polling the strategy while a backtest job is in flight so the new BacktestResult
-    // row shows up as soon as the job finishes -- no effect-driven "did the job just complete"
-    // logic needed, this just naturally converges once the row exists.
-    refetchInterval: jobRunning ? 3_000 : false,
-  });
-
-  const trigger = useMutation({
-    mutationFn: () => api.triggerBacktest(strategyId),
-    onSuccess: (res) => {
-      setJobId(res.job_id);
-      setSelectedBacktestId(null); // fall back to "most recent" once the new one lands
-    },
   });
 
   const codeAQuery = useQuery({
@@ -199,31 +180,14 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
         eyebrow="Sandbox"
         title="Backtest"
         action={
-          <Gated permission="triggerBacktest">
-            <Button
-              onClick={() => trigger.mutate()}
-              disabled={trigger.isPending || jobRunning || !strategy.current_version_id}
-              className="px-3 py-1.5 text-[11px]"
-            >
-              <Play className="h-3 w-3" />
-              {jobRunning ? "Running…" : "Run Backtest"}
-            </Button>
-          </Gated>
+          <RunBacktestButton
+            strategyId={strategyId}
+            label="Run Backtest"
+            disabled={!strategy.current_version_id}
+            onCompleted={(id) => setSelectedBacktestId(id)}
+          />
         }
       >
-        {jobRunning && (
-          <p className="mb-3 text-[11px] text-brand-via">
-            Executing real vectorbt backtest in the sandbox against real historical data — cold
-            runs take ~60-90s (numba JIT compiles fresh each time).
-          </p>
-        )}
-        {jobQuery.data?.status === "Failed" && (
-          <p className="mb-3 text-[11px] text-down">Backtest failed: {jobQuery.data.error}</p>
-        )}
-        {trigger.isError && (
-          <p className="mb-3 text-[11px] text-down">Couldn&apos;t start: {trigger.error.message}</p>
-        )}
-
         {strategy.backtests.length === 0 ? (
           <p className="text-xs text-text-faint">No backtests run yet.</p>
         ) : (

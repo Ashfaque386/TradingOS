@@ -77,7 +77,13 @@ function BacktestsPageInner() {
   }
 
   const strategiesQuery = useQuery({ queryKey: ["strategies"], queryFn: api.strategies });
-  const strategies = strategiesQuery.data ?? [];
+  // A strategy with no current_version_id can never be backtested (matches the backend's own
+  // 409 in trigger_backtest, src/api/routers/strategies.py) -- excluded from the default-
+  // selection pool and the picker itself, a general rule rather than a fixture-name special-case.
+  const strategies = useMemo(
+    () => (strategiesQuery.data ?? []).filter((s) => s.current_version_id !== null),
+    [strategiesQuery.data],
+  );
   const effectiveStrategyId = urlStrategyId ?? strategies[0]?.id ?? null;
 
   const detailQuery = useQuery({

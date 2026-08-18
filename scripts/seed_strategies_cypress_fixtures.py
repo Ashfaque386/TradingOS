@@ -1,7 +1,11 @@
-"""Seeds the two real fixture strategies frontend/cypress/e2e/strategies_review_panel.cy.ts
-depends on (REL-044/045/046): a real F&O strategy with every new logic/research-context/option
-field populated, plus a real BacktestResult with the AI-pipeline verdict fields set, and a
-separate, uniquely-named real pre-migration-shaped strategy (every new field left honestly None).
+"""Seeds the three real fixture strategies frontend/cypress/e2e/strategies_review_panel.cy.ts
+depends on (REL-044/045/046, and a later bugfix pass): a real F&O strategy with every new
+logic/research-context/option field populated, plus a real BacktestResult with the AI-pipeline
+verdict fields set; a separate, uniquely-named real pre-migration-shaped strategy (every new
+field left honestly None); and a third, uniquely-named, zero-backtest strategy with real working
+code, dedicated to the one spec test that genuinely triggers a live backtest through the UI (kept
+separate from the F&O fixture above so that test's own real, verdict-less new backtest row never
+becomes the "most recent" one other tests assert Pass/Approve against).
 
 Both are uniquely named specifically so the Cypress spec's `cy.contains(name)` can never
 accidentally land on a different row than the one it verified via a direct API call first --
@@ -38,6 +42,78 @@ from src.models.user import User
 
 STRATEGY_NAME = "cypress-rel044-fno-fixture-strategy"
 PREMIGRATION_STRATEGY_NAME = "cypress-rel044-premigration-fixture-strategy"
+# Bug fix (real Strategy Detail page refresh-after-completion test): a dedicated, uniquely-named,
+# zero-backtest fixture with REAL working strategy code (the same TCS 5/20 SMA crossover
+# tests/integration/test_strategies_api.py's own _STRATEGY_CODE uses) for the one Cypress test
+# that genuinely triggers a live ~60-90s backtest through the real UI button. Deliberately
+# separate from STRATEGY_NAME above -- that fixture's own "most recent backtest" is depended on
+# by several other tests to always carry the real agent-pipeline verdict fields (Pass/Approve);
+# triggering a direct (non-pipeline) backtest against it would add a newer, verdict-less row and
+# silently break those tests on every future run of this spec.
+LIVE_TRIGGER_STRATEGY_NAME = "cypress-bugfix-live-trigger-fixture-strategy"
+_LIVE_TRIGGER_STRATEGY_CODE = """
+import polars as pl
+import vectorbt as vbt
+
+
+def run_backtest(data: pl.DataFrame, config: dict) -> dict:
+    close = data["close"].to_pandas()
+    close.index = data["date"].to_pandas()
+    fast = close.rolling(5).mean()
+    slow = close.rolling(20).mean()
+    entries = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+    exits = (fast < slow) & (fast.shift(1) >= slow.shift(1))
+    pf = vbt.Portfolio.from_signals(
+        close, entries, exits, init_cash=config.get("init_cash", 100000), freq="1D"
+    )
+
+    def clean(x):
+        try:
+            x = float(x)
+            return x if x == x and abs(x) != float("inf") else None
+        except Exception:
+            return None
+
+    metrics = {
+        "sharpe_ratio": clean(pf.sharpe_ratio()),
+        "sortino_ratio": clean(pf.sortino_ratio()),
+        "calmar_ratio": clean(pf.calmar_ratio()),
+        "max_drawdown": clean(pf.max_drawdown()),
+        "cagr": clean(pf.annualized_return()),
+        "win_rate": clean(pf.trades.win_rate()),
+        "profit_factor": clean(pf.trades.profit_factor()),
+        "expectancy": clean(pf.trades.expectancy()),
+        "total_trades": int(pf.trades.count()),
+    }
+    equity_curve = [{"date": str(d.date()), "equity": float(v)} for d, v in pf.value().items()]
+
+    trades = []
+    for _, row in pf.trades.records_readable.iterrows():
+        trades.append(
+            {
+                "entry_date": str(row["Entry Timestamp"].date()),
+                "exit_date": str(row["Exit Timestamp"].date()),
+                "side": "long" if str(row["Direction"]).lower() == "long" else "short",
+                "size": float(row["Size"]),
+                "entry_price": float(row["Avg Entry Price"]),
+                "exit_price": float(row["Avg Exit Price"]),
+                "pnl": float(row["PnL"]),
+                "return_pct": float(row["Return"]),
+            }
+        )
+
+    entries_exits = [
+        {"date": str(d.date()), "entry": bool(en), "exit": bool(ex)}
+        for d, en, ex in zip(entries.index, entries.values, exits.values, strict=True)
+    ]
+
+    return {
+        "metrics": metrics,
+        "equity_curve": equity_curve,
+        "trades": trades,
+        "entries_exits": entries_exits,
+    }
+"""
 
 
 # REL-044: `total_trades` (BacktestResult's own persisted metrics column) and the real per-trade
@@ -275,6 +351,62 @@ def _seed_premigration_fixture() -> None:
         session.commit()
 
 
+def _seed_live_trigger_fixture() -> None:
+    user_id, account_id, strategy_id, version_id = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    with get_session() as session:
+        session.add(
+            User(
+                id=user_id,
+                email=f"cypress-bugfix-live-trigger-{user_id}@example.invalid",
+                hashed_password="x",
+                role="Trader",
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        session.add(
+            Account(
+                id=account_id,
+                user_id=user_id,
+                broker="Zerodha",
+                account_type="Paper",
+                capital_allocated=Decimal("100000.00"),
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        strategy = Strategy(
+            id=strategy_id,
+            account_id=account_id,
+            name=LIVE_TRIGGER_STRATEGY_NAME,
+            hypothesis="5/20 SMA crossover on TCS -- real, working code, seeded with zero "
+            "backtests so a real UI-triggered run has something to actually prove.",
+            asset_class="Equity",
+            style="Intraday",
+            status="Backtesting",
+            max_drawdown_limit=Decimal("15.00"),
+            universe=["TCS"],
+        )
+        session.add(strategy)
+        session.flush()
+        session.add(
+            StrategyVersion(
+                id=version_id,
+                strategy_id=strategy_id,
+                version_no=1,
+                python_code=_LIVE_TRIGGER_STRATEGY_CODE,
+                validation_status="Passed",
+            )
+        )
+        strategy.current_version_id = version_id
+        session.commit()
+
+
 def _exists(name: str) -> bool:
     with get_session() as session:
         return session.query(Strategy).filter(Strategy.name == name).first() is not None
@@ -286,6 +418,7 @@ def main() -> None:
     if reset:
         _delete_existing(STRATEGY_NAME)
         _delete_existing(PREMIGRATION_STRATEGY_NAME)
+        _delete_existing(LIVE_TRIGGER_STRATEGY_NAME)
 
     if _exists(STRATEGY_NAME):
         print(
@@ -304,6 +437,15 @@ def main() -> None:
     else:
         _seed_premigration_fixture()
         print(f"{PREMIGRATION_STRATEGY_NAME}: created fresh.")
+
+    if _exists(LIVE_TRIGGER_STRATEGY_NAME):
+        print(
+            f"{LIVE_TRIGGER_STRATEGY_NAME}: already exists, reusing (it's expected to "
+            f"accumulate real backtests each spec run -- pass --reset to force a clean recreate)."
+        )
+    else:
+        _seed_live_trigger_fixture()
+        print(f"{LIVE_TRIGGER_STRATEGY_NAME}: created fresh.")
 
 
 if __name__ == "__main__":

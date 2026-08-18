@@ -25,6 +25,11 @@ export {};
 
 const FIXTURE_NAME = "cypress-rel044-fno-fixture-strategy";
 const PREMIGRATION_FIXTURE_NAME = "cypress-rel044-premigration-fixture-strategy";
+// Bug fix: a dedicated, zero-backtest, real-working-code fixture for the one test that genuinely
+// triggers a live backtest -- kept separate from FIXTURE_NAME so that test's own real, verdict-
+// less new backtest row never becomes "most recent" and breaks the Pass/Approve assertions other
+// tests make against FIXTURE_NAME. Seeded by scripts/seed_strategies_cypress_fixtures.py.
+const LIVE_TRIGGER_FIXTURE_NAME = "cypress-bugfix-live-trigger-fixture-strategy";
 const API_URL = Cypress.env("apiUrl");
 
 function loginViaUi(email: string, password: string) {
@@ -54,10 +59,10 @@ type FixtureStrategy = {
   backtest_count: number;
 };
 
-/** Reads the F&O fixture's real current state directly from the API -- never assumes it still
- * has its original seed values, since a real suggestion regeneration may have legitimately
- * changed them since it was last (re)seeded. */
-function fetchFixtureStrategy(): Cypress.Chainable<FixtureStrategy> {
+/** Reads a fixture's real current state directly from the API -- never assumes it still has its
+ * original seed values, since a real suggestion regeneration may have legitimately changed them
+ * since it was last (re)seeded. Defaults to the F&O fixture (every existing call site). */
+function fetchFixtureStrategy(name: string = FIXTURE_NAME): Cypress.Chainable<FixtureStrategy> {
   return loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) =>
     cy
       .request({
@@ -66,8 +71,8 @@ function fetchFixtureStrategy(): Cypress.Chainable<FixtureStrategy> {
       })
       .its("body")
       .then((rows: FixtureStrategy[]) => {
-        const fixture = rows.find((r) => r.name === FIXTURE_NAME);
-        expect(fixture, `${FIXTURE_NAME} to exist in the real DB`).to.exist;
+        const fixture = rows.find((r) => r.name === name);
+        expect(fixture, `${name} to exist in the real DB`).to.exist;
         return fixture!;
       }),
   );
@@ -147,6 +152,8 @@ describe("Strategies page (REL-044/045/046)", () => {
       cy.contains(/Deployment: Approve/).should("be.visible");
       cy.contains("Sortino").should("be.visible");
       cy.contains("MC p95 DD").should("be.visible");
+      // Bug fix: date_from/date_to/initial_capital previously weren't shown anywhere.
+      cy.contains(/Window: .+ → .+ · Capital: ₹/).should("be.visible");
     });
   });
 
@@ -167,6 +174,44 @@ describe("Strategies page (REL-044/045/046)", () => {
     cy.visit("/strategies");
     cy.contains(FIXTURE_NAME).click();
     cy.contains("button", "Run Backtest").should("be.visible");
+  });
+
+  // Bug fix: this page used to poll `detailQuery` gated on `jobRunning`, which flipped false
+  // (cancelling the next poll) on the exact render where the job was first observed Completed --
+  // the new BacktestResult row never got fetched until a manual reload. Proves the fix end-to-end
+  // by triggering a REAL backtest through the real UI button (not `cy.request`, since the bug was
+  // specifically about the mounted page's own query cache, not the API) and asserting a new
+  // backtest pill appears WITHOUT any `cy.visit`/reload in between. Slow (~60-90s cold sandbox
+  // run, same real timing as every other real-backtest test in this codebase).
+  it("a real completed backtest appears on this page without a manual reload", () => {
+    fetchFixtureStrategy(LIVE_TRIGGER_FIXTURE_NAME).then((fixture) => {
+      const countBefore = fixture.backtest_count;
+
+      loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+      cy.visit("/strategies");
+      cy.contains(LIVE_TRIGGER_FIXTURE_NAME).click();
+      cy.contains("Sandbox").parents(".rounded-card").within(() => {
+        // countBefore can genuinely be 0 on this fixture's first-ever run (no pill row renders
+        // at all yet, just the honest "No backtests run yet" text) -- the pill selector below
+        // would error finding zero elements in that case, so branch on the real starting state
+        // rather than assuming a pill row already exists.
+        if (countBefore === 0) {
+          cy.contains("No backtests run yet.").should("be.visible");
+        } else {
+          cy.get(".flex.flex-wrap.gap-1\\.5 > button").should("have.length", countBefore);
+        }
+        cy.contains("button", "Run Backtest").click();
+        cy.contains("button", "Running…", { timeout: 15_000 }).should("be.visible");
+        // Cold vectorbt sandbox runs take ~60-90s (numba JIT compiles fresh every time) --
+        // generous headroom above that real budget for load variance (confirmed empirically:
+        // a real run under concurrent test-suite load took ~5 min end-to-end for this job).
+        cy.contains("button", "Running…", { timeout: 240_000 }).should("not.exist");
+        cy.get(".flex.flex-wrap.gap-1\\.5 > button", { timeout: 15_000 }).should(
+          "have.length",
+          countBefore + 1,
+        );
+      });
+    });
   });
 
   // REL-047: the Asset/Style/Stage filter bar added to fix an always-growing, unfilterable

@@ -324,6 +324,8 @@ export interface BacktestSummary {
   profit_factor: number | null;
   expectancy: number | null;
   total_trades: number | null;
+  // Real column, always set -- the actual starting capital this run used.
+  initial_capital: number;
   has_equity_curve: boolean;
   // REL-017 E17.4 (DB-007): real column. UPDATE 2026-08-05 (REL-023): a real Monte Carlo
   // simulation now runs against real per-trade returns (REL-022) for every newly-triggered
@@ -392,6 +394,14 @@ export interface CorrelationMatrixResponse {
 export interface VersionCode {
   version_no: number;
   python_code: string;
+}
+
+// All fields optional -- omitted ones fall back to the backend's existing lake-latest-date/
+// 365-day-lookback/default-capital behavior.
+export interface BacktestTriggerRequest {
+  date_from?: string;
+  date_to?: string;
+  initial_capital?: number;
 }
 
 export interface BacktestTriggerResponse {
@@ -1041,8 +1051,8 @@ export const api = {
   strategy: (id: string) => get<StrategyDetail>(`/api/v1/strategies/${id}`),
   strategyVersionCode: (id: string, versionNo: number) =>
     get<VersionCode>(`/api/v1/strategies/${id}/versions/${versionNo}`),
-  triggerBacktest: (id: string) =>
-    post<BacktestTriggerResponse>(`/api/v1/strategies/${id}/backtest`),
+  triggerBacktest: (id: string, config?: BacktestTriggerRequest) =>
+    post<BacktestTriggerResponse>(`/api/v1/strategies/${id}/backtest`, config),
   backtestJobStatus: (jobId: string) =>
     get<BacktestJobStatus>(`/api/v1/strategies/backtests/jobs/${jobId}/status`),
   equityCurve: (backtestId: string) =>

@@ -74,8 +74,17 @@ export function VerdictPanel({ backtest }: { backtest: BacktestSummary }) {
     !!backtest.deployment_rationale ||
     !!backtest.optimization_best_params;
 
+  const windowFrom = new Date(backtest.date_from).toLocaleDateString("en-IN");
+  const windowTo = new Date(backtest.date_to).toLocaleDateString("en-IN");
+  const capital = backtest.initial_capital.toLocaleString("en-IN");
+
   return (
     <div className="rounded-xl border border-card-edge bg-bg/50 p-3">
+      {/* What this run was actually configured with -- the direct fix for "no way to see what
+        * date range/capital a backtest used." */}
+      <div className="mb-2 text-[10px] text-text-faint">
+        Window: {windowFrom} → {windowTo} · Capital: ₹{capital}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={evaluationTone} label={`Evaluation: ${backtest.evaluation_verdict ?? "Not yet evaluated"}`} />
         <Chip
