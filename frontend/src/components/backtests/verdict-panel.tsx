@@ -74,17 +74,27 @@ export function VerdictPanel({ backtest }: { backtest: BacktestSummary }) {
     !!backtest.deployment_rationale ||
     !!backtest.optimization_best_params;
 
-  const windowFrom = new Date(backtest.date_from).toLocaleDateString("en-IN");
-  const windowTo = new Date(backtest.date_to).toLocaleDateString("en-IN");
-  const capital = backtest.initial_capital.toLocaleString("en-IN");
+  // REL-074 UPDATE: a browser tab left open across the deploy that added `initial_capital` to
+  // this response can still hold a pre-existing React Query cache entry shaped like the old
+  // response (the field simply absent, not null) until its next real refetch -- guarded rather
+  // than assumed present, matching this panel's own established "honest missing state" style
+  // for every other optional field below.
+  const windowFrom = backtest.date_from ? new Date(backtest.date_from).toLocaleDateString("en-IN") : null;
+  const windowTo = backtest.date_to ? new Date(backtest.date_to).toLocaleDateString("en-IN") : null;
+  const capital =
+    typeof backtest.initial_capital === "number" ? backtest.initial_capital.toLocaleString("en-IN") : null;
 
   return (
     <div className="rounded-xl border border-card-edge bg-bg/50 p-3">
       {/* What this run was actually configured with -- the direct fix for "no way to see what
         * date range/capital a backtest used." */}
-      <div className="mb-2 text-[10px] text-text-faint">
-        Window: {windowFrom} → {windowTo} · Capital: ₹{capital}
-      </div>
+      {(windowFrom || capital) && (
+        <div className="mb-2 text-[10px] text-text-faint">
+          {windowFrom && windowTo ? `Window: ${windowFrom} → ${windowTo}` : null}
+          {windowFrom && capital ? " · " : null}
+          {capital ? `Capital: ₹${capital}` : null}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={evaluationTone} label={`Evaluation: ${backtest.evaluation_verdict ?? "Not yet evaluated"}`} />
         <Chip
