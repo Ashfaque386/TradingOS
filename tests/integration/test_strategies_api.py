@@ -215,6 +215,10 @@ def test_strategy_list_detail_version_backtest_and_promote_end_to_end():
         backtest_summary = detail_after["backtests"][0]
         assert backtest_summary["id"] == backtest_id
         assert backtest_summary["sharpe_ratio"] is not None or backtest_summary["total_trades"] == 0
+        # REL-072: run_real_backtest's new adjust_for_corporate_actions defaults to True, and
+        # this endpoint's own _run_backtest_job now threads outcome.data_adjusted onto the
+        # persisted row -- a real backtest through the real trigger endpoint must report it.
+        assert backtest_summary["data_adjusted"] is True
 
         equity_response = client.get(f"/api/v1/strategies/backtests/{backtest_id}/equity-curve")
         assert equity_response.status_code == 200

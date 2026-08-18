@@ -37,7 +37,7 @@ ADAPTERS: dict[str, type[EODDataSourceAdapter]] = {
 MANAGED_SOURCE = "managed"
 
 
-def _candles_to_eod_dataframe(symbol: str, candles: list[Candle]) -> pl.DataFrame:
+def candles_to_eod_dataframe(symbol: str, candles: list[Candle]) -> pl.DataFrame:
     if not candles:
         return pl.DataFrame(
             schema={
@@ -85,10 +85,10 @@ def _fetch_managed(symbols: list[str], start: date, end: date) -> pl.DataFrame:
             provider_used=result.provider_used,
             rows=len(result.candles),
         )
-        frames.append(_candles_to_eod_dataframe(symbol, result.candles))
+        frames.append(candles_to_eod_dataframe(symbol, result.candles))
 
     if not frames:
-        return _candles_to_eod_dataframe("", [])
+        return candles_to_eod_dataframe("", [])
     return pl.concat(frames).sort(["symbol", "date"])
 
 

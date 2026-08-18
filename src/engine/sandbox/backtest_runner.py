@@ -40,7 +40,12 @@ from typing import Any
 import polars as pl
 
 from src.core.config import get_settings
+from src.core.db import get_session
 from src.data.datalake.query import DataLake
+from src.engine.backtest.corporate_actions_adjust import (
+    adjust_ohlcv_for_corporate_actions,
+    load_corporate_actions,
+)
 from src.engine.sandbox.pool import execute_in_pool
 from src.engine.sandbox.runner import DEFAULT_TIMEOUT_SECONDS
 
@@ -110,6 +115,12 @@ class RealBacktestOutcome:
     entries_exits: list[EntryExitPoint] = field(default_factory=list)
     close_curve: list[ClosePricePoint] = field(default_factory=list)
     duration_seconds: float = 0.0
+    # REL-072: whether the real split/bonus adjustment pipeline (corporate_actions_adjust.py)
+    # was applied to the OHLCV data this outcome is based on -- an honest "was real
+    # corporate-action data considered" provenance signal, not "did anything actually change"
+    # (a symbol with zero real recorded actions still gets data_adjusted=True when the flag was
+    # on, since the pipeline genuinely ran and genuinely found nothing to adjust).
+    data_adjusted: bool = False
 
 
 def _extract_metrics(raw: Any) -> dict[str, float | int | None]:
@@ -223,11 +234,17 @@ def run_real_backtest(
     date_from: date,
     date_to: date,
     config: dict[str, Any] | None = None,
+    adjust_for_corporate_actions: bool = True,
 ) -> RealBacktestOutcome:
     """Runs `code` (a persisted StrategyVersion's `run_backtest(data, config)`) against real
     OHLCV for the first symbol in `universe` -- multi-symbol portfolio aggregation isn't
     implemented anywhere else in the codebase either (the backtest engine and the sandbox
-    contract both take a single price series), so this deliberately doesn't invent it here."""
+    contract both take a single price series), so this deliberately doesn't invent it here.
+
+    REL-072: `adjust_for_corporate_actions` defaults to `True`, matching
+    `src/engine/backtest/data_feed.py`'s own already-documented rationale -- an un-adjusted
+    backtest over a symbol with a real historical split/bonus is the wrong number by default,
+    not a valid alternative mode a caller would deliberately choose."""
     if not universe:
         return RealBacktestOutcome(
             passed=False,
@@ -243,6 +260,23 @@ def run_real_backtest(
             passed=False,
             error=f"no historical data ingested for {symbol} in [{date_from}, {date_to}]",
             symbol_used=symbol,
+        )
+
+    if adjust_for_corporate_actions:
+        # REL-072: closes the real gap this codebase's own corporate_actions_adjust.py stated --
+        # a real, tested adjustment pipeline already used correctly by data_feed.py's own
+        # _maybe_adjust, but with zero real callers on this actual backtest execution path until
+        # now. Same pandas conversion _maybe_adjust already performs, reused verbatim rather than
+        # duplicated; cast back to the exact original Polars schema/dtypes so nothing downstream
+        # (the sandbox, write_parquet, _close_curve_from_data below) sees a different shape.
+        with get_session() as session:
+            actions = load_corporate_actions(session, symbol)
+        pandas_df = data.to_pandas().set_index("date").sort_index()
+        pandas_df = adjust_ohlcv_for_corporate_actions(pandas_df, actions)
+        data = (
+            pl.from_pandas(pandas_df.reset_index())
+            .with_columns(pl.col("date").cast(pl.Date))
+            .select(["symbol", "date", "open", "high", "low", "close", "volume"])
         )
 
     with tempfile.TemporaryDirectory() as tmpdir_str:
@@ -266,6 +300,7 @@ def run_real_backtest(
             error=result.error,
             symbol_used=symbol,
             duration_seconds=result.duration_seconds,
+            data_adjusted=adjust_for_corporate_actions,
         )
 
     summary = result.portfolio_summary or {}
@@ -279,6 +314,7 @@ def run_real_backtest(
         entries_exits=_extract_entries_exits(summary.get("entries_exits")),
         close_curve=_close_curve_from_data(data),
         duration_seconds=result.duration_seconds,
+        data_adjusted=adjust_for_corporate_actions,
     )
 
 

@@ -34,6 +34,8 @@ from src.core.db import get_session
 from src.data.datalake.freshness import DataFreshnessError, require_fresh
 from src.data.datalake.query import DataLake
 from src.data.ingest.corporate_actions import CorporateActionsAdapter, CorporateActionsWriter
+from src.data.ingest.scheduled_sync import run_incremental_ingestion
+from src.data.reference.nse_holiday_calendar import is_trading_holiday
 from src.engine.paper_trading.daily_signal_job import run_daily_paper_trading_cycle
 from src.engine.paper_trading.equity_snapshot import take_daily_snapshot
 from src.engine.paper_trading.paper_account import get_paper_account
@@ -47,6 +49,7 @@ CORPORATE_ACTIONS_JOB_ID = "scheduler_corporate_actions_ingestion"
 NEWS_SENTIMENT_JOB_ID = "scheduler_news_sentiment_cycle"
 PAPER_TRADING_DAILY_CYCLE_JOB_ID = "scheduler_paper_trading_daily_cycle"
 PAPER_TRADING_EQUITY_SNAPSHOT_JOB_ID = "scheduler_paper_trading_equity_snapshot"
+MARKET_DATA_INGESTION_JOB_ID = "scheduler_market_data_ingestion"
 # REL-010 E10.7: no intraday-ingestion job is wired here -- Upstox's real historical-candle
 # endpoint 404s in sandbox mode (confirmed empirically, see
 # src/brokers/upstox_adapter.py::get_historical_candles's own docstring) and this dev
@@ -104,6 +107,35 @@ def run_corporate_actions_ingestion() -> None:
         logger.info("scheduler_corporate_actions_ingestion_completed", rows_written=written)
     except Exception as exc:  # noqa: BLE001 - a failed ingestion run must not crash the app
         logger.warning("scheduler_corporate_actions_ingestion_failed", error=str(exc))
+
+
+def run_market_data_ingestion() -> None:
+    """REL-072: real scheduled incremental ingestion (src/data/ingest/scheduled_sync.py) --
+    closes the last manual-step gap Phase 1 (REL-070)/Phase 2 (REL-071) left open. Runs before
+    `run_corporate_actions_ingestion`/`run_daily_research_cycle` so the lake is fresh before the
+    06:00 freshness gate checks it. Skipped honestly on a real NSE non-trading day (same
+    `is_trading_holiday` check `run_paper_trading_equity_snapshot` already makes) -- there's
+    nothing new to fetch.
+
+    REL-019 E19.2 (ADR 11): reuses the Data Ingestion Agent's real control state, same as
+    `run_corporate_actions_ingestion` above."""
+    if is_trading_holiday(date.today()):
+        logger.info("scheduler_market_data_ingestion_skipped", reason="not a trading day")
+        return
+    try:
+        with get_session() as session:
+            if not is_agent_enabled(session, "data_ingestion_agent"):
+                logger.info("scheduler_market_data_ingestion_skipped_disabled")
+                return
+        summary = run_incremental_ingestion()
+        logger.info(
+            "scheduler_market_data_ingestion_completed",
+            backfilled=len(summary.symbols_backfilled),
+            topped_up=len(summary.symbols_topped_up),
+            failed=len(summary.symbols_failed),
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed ingestion run must not crash the app
+        logger.warning("scheduler_market_data_ingestion_failed", error=str(exc))
 
 
 def run_news_sentiment_cycle() -> None:
@@ -204,6 +236,14 @@ def run_weekend_memory_consolidation() -> None:
 
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=IST_TIMEZONE)
+    scheduler.add_job(
+        run_market_data_ingestion,
+        # Before run_corporate_actions_ingestion (05:30) and run_daily_research_cycle (06:00) --
+        # the lake must be fresh before that 06:00 freshness gate checks it.
+        CronTrigger(hour=5, minute=0, timezone=IST_TIMEZONE),
+        id=MARKET_DATA_INGESTION_JOB_ID,
+        replace_existing=True,
+    )
     scheduler.add_job(
         run_corporate_actions_ingestion,
         CronTrigger(hour=5, minute=30, timezone=IST_TIMEZONE),

@@ -165,6 +165,14 @@ class BacktestResult(Base, UUIDPKMixin, TimestampMixin):
     risk_assessment_notes: Mapped[str | None] = mapped_column(Text)
     deployment_recommendation: Mapped[str | None] = mapped_column(String(20))
     deployment_rationale: Mapped[str | None] = mapped_column(Text)
+    # REL-072: whether this row's real OHLCV data went through the real split/bonus adjustment
+    # pipeline (src/engine/backtest/corporate_actions_adjust.py) before the backtest ran.
+    # Nullable, NOT backfilled -- same convention as every other REL-0xx addition on this model
+    # (evaluation_verdict, walk_forward_results, etc.): a row created before this migration
+    # genuinely never had real adjustment applied (the bug this release fixes), so `NULL` is the
+    # honest value, not a fabricated `true`/`false`. Every row created after this ships gets a
+    # real value from `run_real_backtest`'s own new `adjust_for_corporate_actions` default.
+    data_adjusted: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class StrategySuggestion(Base, UUIDPKMixin, TimestampMixin):

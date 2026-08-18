@@ -178,6 +178,10 @@ class BacktestSummary(BaseModel):
     # in this pipeline ever calls" it) is closed. Still `None` for backtests created before this
     # release (not backfilled) or ones with fewer than 2 usable returns either way.
     monte_carlo_p95_max_drawdown: float | None
+    # REL-072: real provenance -- whether the real split/bonus adjustment pipeline
+    # (src/engine/backtest/corporate_actions_adjust.py) was applied to this row's OHLCV data.
+    # `None` for a row created before this migration (genuinely never adjusted, not fabricated).
+    data_adjusted: bool | None = None
     created_at: datetime
     # REL-040: real columns on BacktestResult (src/models/strategy.py, REL-005) written by the
     # real LangGraph Evaluator/Optimization/RiskManager/Deployment agent nodes
@@ -249,6 +253,7 @@ def _to_backtest_summary(result: BacktestResult) -> BacktestSummary:
         total_trades=result.total_trades,
         has_equity_curve=bool(result.equity_curve_path),
         monte_carlo_p95_max_drawdown=result.monte_carlo_p95_max_drawdown,
+        data_adjusted=result.data_adjusted,
         created_at=result.created_at,
         evaluation_verdict=result.evaluation_verdict,
         evaluation_failure_reasons=result.evaluation_failure_reasons,
@@ -527,6 +532,9 @@ def _run_backtest_job(
                 )
             ]
             or None,
+            # REL-072: real provenance -- was the real split/bonus adjustment pipeline applied
+            # to the OHLCV data this row's metrics were computed from.
+            data_adjusted=outcome.data_adjusted,
         )
         session.add(result)
         session.flush()

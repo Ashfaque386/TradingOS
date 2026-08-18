@@ -500,6 +500,7 @@ def _persist_strategy_progress(
             profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy,
             total_trades=metrics.total_trades,
+            data_adjusted=metrics.data_adjusted,
         )
         session.add(result)
         session.flush()
@@ -968,6 +969,7 @@ def _persist_suggestion_regeneration(
             profit_factor=metrics.profit_factor,
             expectancy=metrics.expectancy,
             total_trades=metrics.total_trades,
+            data_adjusted=metrics.data_adjusted,
         )
         session.add(result)
         session.flush()

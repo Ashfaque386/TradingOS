@@ -71,6 +71,7 @@ def backtesting_node(state: TradingOSGraphState) -> dict[str, object]:
         profit_factor=outcome.metrics.get("profit_factor"),
         expectancy=outcome.metrics.get("expectancy"),
         total_trades=int(total_trades) if total_trades is not None else None,
+        data_adjusted=outcome.data_adjusted,
     )
     equity_curve = [EquityCurvePoint(date=p.date, equity=p.equity) for p in outcome.equity_curve]
     # REL-024: real per-window Walk-Forward input for the Optimization Agent, from this same

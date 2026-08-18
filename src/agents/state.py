@@ -117,6 +117,10 @@ class BacktestMetrics(StrictModel):
     profit_factor: float | None = None
     expectancy: float | None = None
     total_trades: int | None = None
+    # REL-072: real provenance -- whether the real split/bonus adjustment pipeline was applied
+    # to the OHLCV data these metrics were computed from (backtesting_node sets this from
+    # run_real_backtest()'s own RealBacktestOutcome.data_adjusted).
+    data_adjusted: bool | None = None
 
 
 class EvaluationVerdict(StrictModel):
