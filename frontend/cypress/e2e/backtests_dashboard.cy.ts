@@ -136,8 +136,9 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
       .within(() => {
         cy.get('input[type="date"]').should("have.length", 2);
         cy.get('input[type="number"]').should("have.length", 1);
-        // REL-075: a real symbol override select, sourced from GET /market/symbols.
-        cy.get("select").should("have.length.at.least", 1);
+        // REL-076: the symbol override is now a real search-and-select combobox (over the full
+        // instrument universe, not just GET /market/symbols), not a plain <select>.
+        cy.get('input[placeholder="Strategy\'s own symbol"]').should("have.length", 1);
       });
 
     cy.get("main").then(($main) => {
@@ -152,30 +153,45 @@ describe("Backtests dashboard (REL-040/041/042)", () => {
     });
   });
 
-  // REL-075: the symbol override select's options must be the real, currently-ingested lake
-  // symbols -- never a fabricated or hardcoded list.
-  it("the symbol override select lists the real symbols GET /market/symbols returns", () => {
+  // REL-076: the symbol override combobox searches the full, locally-synced real NSE/BSE
+  // instrument universe (GET /market/instruments/search) -- not merely GET /market/symbols --
+  // and selecting a real not-yet-cached instrument fetches it on demand before it can be used.
+  it("the symbol override combobox searches real instruments and ingests an uncached one on demand", () => {
     loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) => {
       cy.request({
         url: `${API_URL}/api/v1/market/symbols`,
         headers: { Authorization: `Bearer ${token}` },
       }).then((symbolsRes) => {
-        const realSymbols = symbolsRes.body as string[];
-        loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
-        cy.visit("/backtests");
-        cy.contains("Run New Backtest")
-          .parent()
-          .within(() => {
-            // .should() (not .then()) so this retries until the symbols query -- a real async
-            // fetch -- has actually resolved and populated the select's options.
-            cy.get("select")
-              .first()
-              .find("option")
-              .should(($options) => {
-                const optionValues = [...$options].map((o) => o.getAttribute("value"));
-                realSymbols.forEach((symbol) => expect(optionValues).to.include(symbol));
-              });
-          });
+        const cached = new Set(symbolsRes.body as string[]);
+        cy.request({
+          url: `${API_URL}/api/v1/market/instruments/search?q=A&instrument_type=EQ&page_size=100`,
+          headers: { Authorization: `Bearer ${token}` },
+        }).then((searchRes) => {
+          const items = searchRes.body.items as { symbol: string; name: string }[];
+          const uncached = items.find((i) => !cached.has(i.symbol));
+          expect(uncached, "a real EQ instrument not already in the data lake").to.exist;
+          const symbol = uncached!.symbol;
+
+          loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+          cy.visit("/backtests");
+
+          function symbolInput(timeout?: number) {
+            return cy.get(
+              'input[placeholder="Strategy\'s own symbol"]',
+              timeout ? { timeout } : undefined,
+            );
+          }
+          symbolInput().type(symbol);
+          cy.contains(symbol).should("be.visible");
+          cy.contains(uncached!.name).should("be.visible").click();
+
+          cy.contains(`Fetching real data for ${symbol}`, { timeout: 15_000 }).should("be.visible");
+          symbolInput().should("be.disabled");
+          // Real Upstox V3/yfinance ingestion -- generous timeout matching
+          // useEnsureSymbolIngested's own 120s poll deadline.
+          symbolInput(130_000).should("not.be.disabled");
+          symbolInput().should("have.value", symbol);
+        });
       });
     });
   });

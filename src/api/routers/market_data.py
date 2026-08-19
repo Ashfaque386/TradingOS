@@ -8,11 +8,20 @@ codebase (src/api/routers/portfolio.py's `/positions`/`/portfolio/margin`, src/a
 agents.py's `/runs`) -- these predate real JWT/RBAC (REL-007) and carry no execution authority.
 
 REL-055: `POST /ingest/trigger` is a genuine write action -- unlike everything else in this
-file, it's gated (SystemAdministrator only, an infra/ops action). Reuses
-`strategies.py`'s exact background-job pattern (`_BacktestJob`/`threading.Thread(daemon=True)`,
-`strategies.py:365-548`) because `src.data.ingest.pipeline.run()` is synchronous, blocking
-network I/O (real bhavcopy/yfinance calls) that would stall the event loop if awaited directly
-inside an `async def` handler.
+file, it's gated. Reuses `strategies.py`'s exact background-job pattern
+(`_BacktestJob`/`threading.Thread(daemon=True)`, `strategies.py:365-548`) because
+`src.data.ingest.pipeline.run()` is synchronous, blocking network I/O (real bhavcopy/yfinance
+calls) that would stall the event loop if awaited directly inside an `async def` handler.
+
+UPDATE (real symbol search-and-select, wired into the Portfolio chart/Backtests picker): this
+endpoint was SystemAdministrator-only when it was purely a manual infra/ops action, but selecting
+a not-yet-ingested symbol from an ordinary search-and-select control is now a routine part of
+browsing, not an admin action -- gating it SA-only would 403 for every other role and defeat the
+feature for most real users. Loosened to the same SA/PortfolioManager/RiskManager set already
+gated on triggering a real backtest (`strategies.py`'s own `_can_trigger_backtest`, REL-011's own
+"triggering a real backtest is an equivalent-weight operational action" reasoning applies equally
+here). ReadOnlyAuditor still can't trigger a fresh fetch (matches their view-only role
+everywhere else), but can freely search/select any already-cached symbol.
 """
 
 import threading
@@ -32,7 +41,11 @@ from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
-from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
+from src.core.security import (
+    ROLE_PORTFOLIO_MANAGER,
+    ROLE_RISK_MANAGER,
+    ROLE_SYSTEM_ADMINISTRATOR,
+)
 from src.data.datalake.freshness import check_freshness
 from src.data.datalake.query import DataLake, IntradayDataLake
 from src.data.features.indicators import with_indicators
@@ -45,7 +58,9 @@ from src.models.user import User
 
 router = APIRouter(prefix="/api/v1/market", tags=["market-data"])
 
-_can_trigger_ingest = require_role(ROLE_SYSTEM_ADMINISTRATOR, audit_denials=True)
+_can_trigger_ingest = require_role(
+    ROLE_SYSTEM_ADMINISTRATOR, ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, audit_denials=True
+)
 
 
 class OhlcvBar(BaseModel):

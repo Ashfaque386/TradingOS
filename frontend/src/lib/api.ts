@@ -874,6 +874,25 @@ export interface InstrumentSearchResponse {
   page_size: number;
 }
 
+export interface IngestTriggerRequest {
+  source: "managed";
+  symbols: string[];
+  start: string;
+  end: string;
+}
+
+export interface IngestTriggerResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface IngestJobStatus {
+  job_id: string;
+  status: string;
+  error: string | null;
+  rows_written: number | null;
+}
+
 // REL-073: src/api/routers/market_data.py's GET /market/providers/status -- a config-only
 // check (no live network call), same shape/spirit as the existing broker /status endpoint.
 export interface ProviderStatus {
@@ -1152,6 +1171,12 @@ export const api = {
     page_size?: number;
   }) => get<InstrumentSearchResponse>(`/api/v1/market/instruments/search${toQuery(params)}`),
   providerStatus: () => get<ProviderStatusResponse>("/api/v1/market/providers/status"),
+  // Real symbol search-and-select: fetches a real, not-yet-ingested symbol's historical data
+  // on demand via the existing managed provider-failover ingestion path (SA/PM/RM-gated).
+  triggerIngest: (body: IngestTriggerRequest) =>
+    post<IngestTriggerResponse>("/api/v1/market/ingest/trigger", body),
+  ingestJobStatus: (jobId: string) =>
+    get<IngestJobStatus>(`/api/v1/market/ingest/jobs/${jobId}/status`),
 
   paperTrades: (strategyId?: string) =>
     get<PaperTrade[]>(`/api/v1/paper-trading/trades${toQuery({ strategy_id: strategyId })}`),

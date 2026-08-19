@@ -215,15 +215,30 @@ describe("Strategies page (REL-044/045/046)", () => {
   });
 
   // REL-075: a one-off symbol override at trigger time -- LIVE_TRIGGER_FIXTURE_NAME's own
-  // universe is TCS, but picking RELIANCE in the new select must run the backtest against
+  // universe is TCS, but picking RELIANCE in the symbol combobox must run the backtest against
   // RELIANCE instead, and the resulting VerdictPanel's Symbol clause must say so. Slow (~60-90s
   // real cold sandbox run, same real budget as the no-reload test above).
+  // REL-076: the plain <select> this test used to drive was replaced by SymbolCombobox (a real
+  // search-and-select input) -- RELIANCE is one of the 6 symbols already in the local data lake,
+  // so selecting it is the instant, no-ingest path (the real on-demand-ingest path for an
+  // uncached symbol is covered separately in backtests_dashboard.cy.ts).
   it("a symbol override at trigger time replaces the strategy's own universe", () => {
     loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
     cy.visit("/strategies");
     cy.contains(LIVE_TRIGGER_FIXTURE_NAME).click();
     cy.contains("Sandbox").parents(".rounded-card").within(() => {
-      cy.get("select").select("RELIANCE");
+      cy.get('input[placeholder="Strategy\'s own symbol"]').type("RELIANCE");
+      // Scoped to the symbol span specifically (not the row's name/exchange line) -- several
+      // real NSE-listed companies have "Reliance" in their own name (Reliance Chemotex, Reliance
+      // Power, etc.), and a plain cy.contains("RELIANCE") can match one of those name spans
+      // instead of the actual RELIANCE row, silently selecting the wrong symbol.
+      cy.contains("span.font-medium", "RELIANCE").should("be.visible").click();
+      // Selecting a combobox result kicks off an async ensure()-then-setSymbol -- for an
+      // already-cached symbol this resolves near-instantly, but is still a real tick after the
+      // click, unlike the old synchronous <select> onChange. Waiting for the input to actually
+      // reflect "RELIANCE" avoids a real race where "Run Backtest" could fire on the strategy's
+      // still-unoverridden default symbol.
+      cy.get('input[placeholder="Strategy\'s own symbol"]').should("have.value", "RELIANCE");
       cy.contains("button", "Run Backtest").click();
       cy.contains("button", "Running…", { timeout: 15_000 }).should("be.visible");
       cy.contains("button", "Running…", { timeout: 240_000 }).should("not.exist");

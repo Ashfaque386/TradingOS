@@ -127,6 +127,8 @@ p, SystemAdministrator, /api/v1/positions/{symbol}/close, POST
 p, PortfolioManager, /api/v1/positions/{symbol}/close, POST
 p, RiskManager, /api/v1/positions/{symbol}/close, POST
 p, SystemAdministrator, /api/v1/market/ingest/trigger, POST
+p, PortfolioManager, /api/v1/market/ingest/trigger, POST
+p, RiskManager, /api/v1/market/ingest/trigger, POST
 p, SystemAdministrator, /api/v1/memory/ingest, POST
 p, PortfolioManager, /api/v1/memory/ingest, POST
 p, RiskManager, /api/v1/memory/ingest, POST

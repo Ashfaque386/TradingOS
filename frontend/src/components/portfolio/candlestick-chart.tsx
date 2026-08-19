@@ -10,8 +10,10 @@ import {
 } from "lightweight-charts";
 import { api } from "@/lib/api";
 import { useMarketStream } from "@/hooks/useMarketStream";
+import { useEnsureSymbolIngested } from "@/hooks/useEnsureSymbolIngested";
 import { useThemeStore } from "@/lib/theme-store";
 import { CHART_COLOR_DOWN, CHART_COLOR_UP, getChartColors } from "@/lib/chart-theme";
+import { SymbolCombobox } from "@/components/market/symbol-combobox";
 
 interface Bar {
   time: string;
@@ -33,6 +35,7 @@ export function CandlestickChart() {
   const currentBarRef = useRef<Bar | null>(null);
 
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const [pendingSymbol, setPendingSymbol] = useState<string | null>(null);
 
   const symbolsQuery = useQuery({ queryKey: ["market-symbols"], queryFn: api.symbols });
   // Defaults to the first real ingested symbol until the operator explicitly picks a different
@@ -48,6 +51,18 @@ export function CandlestickChart() {
 
   const { tick, connected } = useMarketStream(symbol);
   const mode = useThemeStore((s) => s.mode);
+
+  // Real symbol search-and-select: a symbol not already in the local data lake is fetched on
+  // demand (real Upstox V3/yfinance failover ingestion) before this chart tries to show it,
+  // rather than only ever offering whatever 5-6 symbols happened to be manually ingested before.
+  const { ensure, status: ingestStatus, error: ingestError } = useEnsureSymbolIngested();
+
+  async function handleSelect(newSymbol: string) {
+    setPendingSymbol(newSymbol);
+    const ok = await ensure(newSymbol);
+    setPendingSymbol(null);
+    if (ok) setSelectedSymbol(newSymbol);
+  }
 
   // Mount the chart once -- lightweight-charts is a vanilla-JS/Canvas library, not a React
   // component, so it's created imperatively into a ref'd container.
@@ -135,21 +150,23 @@ export function CandlestickChart() {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <select
-          value={symbol ?? ""}
-          onChange={(e) => setSelectedSymbol(e.target.value)}
-          className="rounded-md border border-card-edge bg-panel px-2 py-1.5 text-xs text-text"
-        >
-          {(symbolsQuery.data ?? []).map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <SymbolCombobox
+          value={symbol}
+          onSelect={handleSelect}
+          disabled={ingestStatus === "ingesting"}
+          className="w-48"
+        />
         <span className="text-[10px] uppercase tracking-wider text-text-faint">
-          {connected ? "Live" : "Reconnecting…"}
+          {ingestStatus === "ingesting"
+            ? `Fetching real data for ${pendingSymbol}…`
+            : connected
+              ? "Live"
+              : "Reconnecting…"}
         </span>
       </div>
+      {ingestStatus === "error" && ingestError && (
+        <p className="mb-2 text-[10px] text-down">{ingestError}</p>
+      )}
       <div ref={containerRef} className="h-[320px] w-full" />
     </div>
   );

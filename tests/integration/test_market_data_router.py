@@ -7,6 +7,7 @@ tests/integration/test_corporate_actions_backtest_diff.py, which relies on the s
 import time
 import uuid
 from datetime import UTC, date, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -17,7 +18,12 @@ from src.api.main import app
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.config import get_settings
 from src.core.db import get_session
-from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
+from src.core.security import (
+    ROLE_PORTFOLIO_MANAGER,
+    ROLE_READ_ONLY_AUDITOR,
+    ROLE_RISK_MANAGER,
+    ROLE_SYSTEM_ADMINISTRATOR,
+)
 from src.data.datalake.query import DataLake
 from src.models.corporate_action import CorporateAction
 from src.models.instrument import Instrument
@@ -201,6 +207,32 @@ def test_ingest_trigger_requires_the_gated_role():
         cleanup_user(user_id)
 
 
+def test_ingest_trigger_now_also_allows_portfolio_manager_and_risk_manager():
+    """Real symbol search-and-select: selecting a not-yet-ingested symbol from an ordinary
+    search-and-select control is a routine part of browsing, not an admin-only action --
+    loosened from SystemAdministrator-only to the same set already gated on triggering a real
+    backtest (strategies.py's own _can_trigger_backtest). ReadOnlyAuditor still 403s (the test
+    above, unchanged) -- confirms the gate widened deliberately, not accidentally opened to
+    everyone."""
+    for role in (ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER):
+        user_id, token = create_authenticated_user(role)
+        try:
+            with patch("src.api.routers.market_data.run_ingestion", return_value=1):
+                response = client.post(
+                    "/api/v1/market/ingest/trigger",
+                    json={
+                        "source": "yfinance",
+                        "symbols": ["RELIANCE"],
+                        "start": "2024-01-01",
+                        "end": "2024-01-02",
+                    },
+                    headers=auth_header(token),
+                )
+            assert response.status_code == 202, role
+        finally:
+            cleanup_user(user_id)
+
+
 def test_ingest_trigger_rejects_an_unknown_source():
     user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
     try:
@@ -314,6 +346,62 @@ def test_ingest_trigger_job_reports_a_real_failure_honestly():
 def test_ingest_job_status_unknown_job_is_a_404():
     response = client.get(f"/api/v1/market/ingest/jobs/{uuid.uuid4()}/status")
     assert response.status_code == 404
+
+
+def test_real_on_demand_ingest_makes_a_new_symbol_appear_in_the_symbols_list():
+    """Real symbol search-and-select: the whole point of loosening the role gate above is that
+    picking a not-yet-ingested symbol should make it real, usable data -- not mocked, since this
+    is exactly the code path the frontend's useEnsureSymbolIngested hook depends on. Uses the
+    real yfinance adapter (no credential needed, unlike Upstox) for a real, small, recent window
+    against a real NSE symbol distinct from every other symbol this test suite depends on being
+    present (RELIANCE/TCS/INFY/HDFCBANK/ICICIBANK/^NSEI) -- WIPRO, a real, large, liquid NSE
+    equity. Cleans up the real parquet file it writes so this stays a clean, no-net-effect probe
+    of the same on-demand path a real user's browser exercises, not a permanent lake addition."""
+    symbol = "WIPRO"
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    written_paths: list[Path] = []
+    try:
+        lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
+        assert symbol not in lake.list_symbols(), (
+            f"{symbol} is already in the real lake -- pick a different probe symbol so this "
+            "test actually exercises a fresh on-demand fetch."
+        )
+
+        end = date.today()
+        start = end.fromordinal(end.toordinal() - 10)
+        trigger = client.post(
+            "/api/v1/market/ingest/trigger",
+            json={
+                "source": "yfinance",
+                "symbols": [symbol],
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            },
+            headers=auth_header(token),
+        )
+        assert trigger.status_code == 202
+        job_id = trigger.json()["job_id"]
+
+        deadline = time.monotonic() + 30
+        status_body = {}
+        while time.monotonic() < deadline:
+            status_response = client.get(f"/api/v1/market/ingest/jobs/{job_id}/status")
+            status_body = status_response.json()
+            if status_body["status"] != "Running":
+                break
+            time.sleep(0.5)
+        assert status_body["status"] == "Completed", status_body
+        assert status_body["rows_written"] and status_body["rows_written"] > 0
+
+        symbols_response = client.get("/api/v1/market/symbols")
+        assert symbol in symbols_response.json()
+
+        for year_dir in (get_settings().data_lake_root / "ohlcv_daily").glob("*"):
+            written_paths.extend(year_dir.glob(f"*/{symbol}.parquet"))
+    finally:
+        for path in written_paths:
+            path.unlink(missing_ok=True)
+        cleanup_user(user_id)
 
 
 # REL-067: GET /market/ohlcv/{symbol}/indicators wires src.data.features.indicators against the
