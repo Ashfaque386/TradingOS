@@ -55,6 +55,18 @@ export function useEnsureSymbolIngested() {
         return false;
       }
 
+      // A job can genuinely finish "Completed" with rows_written: 0 -- both providers legitimately
+      // returned no historical candles for this symbol over the window (e.g. a thinly-traded
+      // small-cap with no real coverage), not an ingestion failure. Treating that as success would
+      // leave the symbol permanently missing from GET /market/symbols while the caller believes it
+      // now exists -- an honest error instead, matching every other "no real data" case elsewhere
+      // in this app rather than silently pretending the symbol loaded.
+      if (!job.rows_written) {
+        setStatus("error");
+        setError(`No historical data available for ${symbol} from any configured provider.`);
+        return false;
+      }
+
       await queryClient.invalidateQueries({ queryKey: ["market-symbols"] });
       setStatus("idle");
       return true;

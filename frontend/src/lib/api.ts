@@ -906,6 +906,34 @@ export interface ProviderStatusResponse {
   active_provider: string;
 }
 
+// REL-077 (F&O Phase 2, part 1): src/brokers/base.py's OptionInstrument/OptionChain --
+// implied_volatility is null when the broker doesn't return one directly and a local
+// Black-Scholes solve also fails to converge, never a fabricated number.
+export interface OptionInstrument {
+  symbol: string;
+  underlying: string;
+  strike: number;
+  option_type: "CE" | "PE";
+  expiry: string;
+  last_price: number | null;
+  open_interest: number | null;
+  implied_volatility: number | null;
+}
+
+export interface OptionChain {
+  underlying: string;
+  expiry: string;
+  spot_price: number;
+  instruments: OptionInstrument[];
+}
+
+// src/api/routers/market_data.py's OptionExpiriesResponse -- real, currently-listed expiry
+// dates only (BrokerAdapter.list_expiries, REL-030 E30.1), sorted ascending, today-or-later.
+export interface OptionExpiriesResponse {
+  underlying: string;
+  expiries: string[];
+}
+
 // REL-013 -- src/api/routers/paper_trading.py's real response models. Every row is a real
 // depth-walked simulated fill against a real live broker quote; nothing here ever calls
 // place_order (src/engine/paper_trading/execution_service.py).
@@ -1171,6 +1199,14 @@ export const api = {
     page_size?: number;
   }) => get<InstrumentSearchResponse>(`/api/v1/market/instruments/search${toQuery(params)}`),
   providerStatus: () => get<ProviderStatusResponse>("/api/v1/market/providers/status"),
+  optionExpiries: (underlying: string) =>
+    get<OptionExpiriesResponse>(
+      `/api/v1/market/option-chain/${encodeURIComponent(underlying)}/expiries`,
+    ),
+  optionChain: (underlying: string, expiry: string) =>
+    get<OptionChain>(
+      `/api/v1/market/option-chain/${encodeURIComponent(underlying)}${toQuery({ expiry })}`,
+    ),
   // Real symbol search-and-select: fetches a real, not-yet-ingested symbol's historical data
   // on demand via the existing managed provider-failover ingestion path (SA/PM/RM-gated).
   triggerIngest: (body: IngestTriggerRequest) =>

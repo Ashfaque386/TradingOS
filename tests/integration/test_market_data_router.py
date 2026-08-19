@@ -8,13 +8,15 @@ import time
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from src.api.main import app
+from src.brokers.base import OptionChain, OptionInstrument
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.config import get_settings
 from src.core.db import get_session
@@ -149,6 +151,91 @@ def test_option_chain_against_a_real_broker():
         )
     body = response.json()
     assert body["underlying"] == "NIFTY"
+
+
+# REL-077 (F&O Phase 2, part 1): mocked-broker tests give this router's own request/response
+# wiring real CI coverage independent of whether a live broker token happens to work today --
+# `test_option_chain_against_a_real_broker` above has none of that (it `pytest.skip()`s the
+# instant no broker is configured or a real call fails, which is this dev stack's current state).
+def test_option_chain_returns_real_shape_with_mocked_broker():
+    fake_broker = AsyncMock()
+    fake_broker.get_option_chain.return_value = OptionChain(
+        underlying="NIFTY",
+        expiry=date(2026, 8, 28),
+        spot_price=24500.0,
+        instruments=[
+            OptionInstrument(
+                symbol="NIFTY26AUG24500CE",
+                underlying="NIFTY",
+                strike=24500.0,
+                option_type="CE",
+                expiry=date(2026, 8, 28),
+                last_price=120.5,
+                open_interest=15000,
+                implied_volatility=0.14,
+            ),
+        ],
+    )
+    with patch("src.api.routers.market_data.build_broker", return_value=fake_broker):
+        response = client.get("/api/v1/market/option-chain/NIFTY", params={"expiry": "2026-08-28"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spot_price"] == 24500.0
+    assert body["instruments"][0]["option_type"] == "CE"
+    fake_broker.get_option_chain.assert_awaited_once_with("NIFTY", date(2026, 8, 28))
+
+
+def test_list_option_expiries_returns_real_shape_with_mocked_broker():
+    fake_broker = AsyncMock()
+    fake_broker.list_expiries.return_value = [date(2026, 8, 28), date(2026, 9, 25)]
+    with patch("src.api.routers.market_data.build_broker", return_value=fake_broker):
+        response = client.get("/api/v1/market/option-chain/NIFTY/expiries")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["underlying"] == "NIFTY"
+    assert body["expiries"] == ["2026-08-28", "2026-09-25"]
+    fake_broker.list_expiries.assert_awaited_once_with("NIFTY")
+
+
+def test_list_option_expiries_returns_503_when_no_broker_configured():
+    with patch(
+        "src.api.routers.market_data.build_broker",
+        side_effect=NoBrokerConfigured("no broker configured"),
+    ):
+        response = client.get("/api/v1/market/option-chain/NIFTY/expiries")
+    assert response.status_code == 503
+
+
+def test_list_option_expiries_returns_502_on_broker_http_error():
+    fake_broker = AsyncMock()
+    fake_request = httpx.Request("GET", "https://example.test")
+    fake_broker.list_expiries.side_effect = httpx.HTTPStatusError(
+        "boom", request=fake_request, response=httpx.Response(401, request=fake_request)
+    )
+    with patch("src.api.routers.market_data.build_broker", return_value=fake_broker):
+        response = client.get("/api/v1/market/option-chain/NIFTY/expiries")
+    assert response.status_code == 502
+
+
+def test_list_option_expiries_against_a_real_broker():
+    try:
+        build_broker()
+    except NoBrokerConfigured:
+        pytest.skip("No broker configured in this environment")
+
+    response = client.get("/api/v1/market/option-chain/NIFTY/expiries")
+    if response.status_code != 200:
+        pytest.skip(
+            f"Real broker call failed (status={response.status_code}, body={response.text[:200]}) "
+            "-- most likely today's expired daily access token, not a code defect."
+        )
+    body = response.json()
+    assert body["underlying"] == "NIFTY"
+    assert isinstance(body["expiries"], list)
+    # REL-030 E30.1: real, currently-listed expiries only -- every returned date must be
+    # today-or-later, never a stale/past expiry.
+    for expiry_str in body["expiries"]:
+        assert date.fromisoformat(expiry_str) >= date.today()
 
 
 # REL-058: GET /datalake/status (API-037, SRS Business Rule 4).

@@ -6,6 +6,10 @@
 // instrument master (GET /market/instruments/search).
 // REL-073 (Phase 4, final): the Data Freshness tab also shows a real Provider Status panel
 // (GET /market/providers/status).
+// REL-077 (F&O Phase 2, part 1): the 5th "Options Chain" tab, a real live broker option chain
+// (GET /market/option-chain/{underlying}, GET /market/option-chain/{underlying}/expiries) --
+// branches honestly on whatever real broker state this environment actually has, never assumes
+// live chain data will be available.
 
 export {};
 
@@ -20,7 +24,7 @@ function login() {
 }
 
 describe("Market Analysis", () => {
-  it("is reachable from the nav and shows all 4 real tabs", () => {
+  it("is reachable from the nav and shows all 5 real tabs", () => {
     login();
     cy.contains("a", "Market Analysis").click();
     cy.url().should("include", "/market-analysis");
@@ -28,6 +32,7 @@ describe("Market Analysis", () => {
     cy.get('[role="tab"]').contains("Technical Analysis").should("be.visible");
     cy.get('[role="tab"]').contains("Data Freshness").should("be.visible");
     cy.get('[role="tab"]').contains("Instruments").should("be.visible");
+    cy.get('[role="tab"]').contains("Options Chain").should("be.visible");
   });
 
   it("Market Pulse tab shows a real India VIX figure or an honest unavailable message", () => {
@@ -123,5 +128,41 @@ describe("Market Analysis", () => {
         cy.contains("INDEX").should("be.visible");
       },
     );
+  });
+
+  it("Options Chain tab browses a real underlying's real chain, or shows an honest broker-unavailable state", () => {
+    login();
+    cy.visit("/market-analysis");
+    cy.get('[role="tab"]').contains("Options Chain").click();
+
+    cy.get('input[placeholder*="underlying"]').type("RELIANCE");
+    // Scoped to the symbol span specifically, not the row's name/exchange line -- several real
+    // NSE company names can contain another real symbol's own text as a substring (e.g. several
+    // "Reliance ..." companies), so a plain text match can click the wrong row.
+    cy.contains("span.font-medium", "RELIANCE").should("be.visible").click();
+
+    // Branch honestly: this dev environment's broker connection is not guaranteed to be working
+    // at any given moment (real daily-reauth tokens) -- assert whichever real outcome actually
+    // occurs, never force one. `.should(callback)` (not `.then()`) so this retries until the
+    // real async expiries+chain queries actually reach one of their terminal states, rather than
+    // sampling the DOM once while a query is still loading.
+    cy.get("main", { timeout: 30_000 }).should(($main) => {
+      const text = $main.text();
+      const settled =
+        text.includes("Could not load expiries") ||
+        text.includes("No listed expiries found") ||
+        text.includes("Could not load the option chain") ||
+        text.includes("No option chain data") ||
+        text.includes("Strike");
+      expect(settled, "the options chain reached a real terminal state").to.be.true;
+    });
+
+    cy.get("main").then(($main) => {
+      if ($main.text().includes("Strike")) {
+        cy.contains(/Spot: ₹/).should("be.visible");
+      } else {
+        cy.log("Real broker/expiries/chain call did not return usable data right now -- an honest state, not a bug.");
+      }
+    });
   });
 });

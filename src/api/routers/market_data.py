@@ -22,6 +22,12 @@ gated on triggering a real backtest (`strategies.py`'s own `_can_trigger_backtes
 "triggering a real backtest is an equivalent-weight operational action" reasoning applies equally
 here). ReadOnlyAuditor still can't trigger a fresh fetch (matches their view-only role
 everywhere else), but can freely search/select any already-cached symbol.
+
+REL-077 (F&O Phase 2, part 1 -- options chain browsing): added `GET /option-chain/{underlying}/
+expiries`, exposing `BrokerAdapter.list_expiries` (REL-030 E30.1) over HTTP for the first time so
+a real frontend option-chain picker can offer only real, currently-listed expiry dates rather than
+guessing an NSE weekday convention. Same open, ungated read posture as `get_option_chain` and
+`get_quote` above -- no execution authority, matches this module's own stated rule.
 """
 
 import threading
@@ -334,6 +340,32 @@ async def get_option_chain(underlying: str, expiry: date) -> OptionChain:
         raise HTTPException(
             status_code=502, detail=f"Broker option-chain request failed: {exc}"
         ) from exc
+
+
+class OptionExpiriesResponse(BaseModel):
+    underlying: str
+    expiries: list[date]
+
+
+@router.get("/option-chain/{underlying}/expiries", response_model=OptionExpiriesResponse)
+async def list_option_expiries(underlying: str) -> OptionExpiriesResponse:
+    """REL-077 (F&O Phase 2, part 1 -- options chain browsing). Not tracked under its own API
+    Traceability row (no row anywhere in the sheet mentions option expiries). Real, currently-
+    listed expiry dates for `underlying` via `BrokerAdapter.list_expiries` (REL-030 E30.1),
+    sorted ascending, today-or-later only -- previously only ever called internally by the
+    Options Strategy Agent, never exposed over HTTP. Same broker-factory/error-handling shape as
+    `get_option_chain` immediately above, deliberately not inventing a new convention."""
+    try:
+        broker = build_broker()
+    except NoBrokerConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        expiries = await broker.list_expiries(underlying)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Broker expiries request failed: {exc}"
+        ) from exc
+    return OptionExpiriesResponse(underlying=underlying, expiries=expiries)
 
 
 @dataclass

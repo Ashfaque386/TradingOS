@@ -31,10 +31,31 @@ function loginViaUi(email: string, password: string) {
 
 const symbolSearchInput = () => cy.get('input[aria-label="Search symbol or name"]').first();
 
-/** Finds a real, currently-uncached NSE equity to exercise the on-demand ingest path -- picked
- * dynamically (not hardcoded) so the check keeps working on every rerun even after a prior run
- * has already ingested whichever symbol it used, exactly like the equivalent backend test's own
- * `WIPRO`-selection rationale in test_market_data_router.py. */
+// Large, liquid real NSE large-caps only -- real Upstox V3/yfinance coverage for these is not in
+// question, unlike an arbitrary alphabetically-first "q=A" instrument search result, which can
+// just as easily surface a thinly-traded small-cap with zero real historical coverage from either
+// provider (found for real this session: a dynamically-picked micro-cap completed its real ingest
+// job with `rows_written: 0`, an honest "no data" outcome useEnsureSymbolIngested now surfaces as
+// a real error rather than a false success -- exactly the outcome this list avoids exercising
+// here, since this test's own job is proving the real happy path, not that edge case).
+const REAL_LIQUID_LARGE_CAPS = [
+  "SBIN",
+  "ITC",
+  "WIPRO",
+  "TATASTEEL",
+  "AXISBANK",
+  "SUNPHARMA",
+  "BAJFINANCE",
+  "MARUTI",
+  "ONGC",
+  "NTPC",
+];
+
+/** Finds a real, currently-uncached, real liquid NSE equity to exercise the on-demand ingest
+ * path -- picked dynamically from `REAL_LIQUID_LARGE_CAPS` (not hardcoded to one symbol) so the
+ * check keeps working on every rerun even after a prior run already ingested whichever symbol it
+ * used, exactly like the equivalent backend test's own `WIPRO`-selection rationale in
+ * test_market_data_router.py. */
 function findAnUncachedRealEquitySymbol(token: string) {
   return cy
     .request({
@@ -43,17 +64,9 @@ function findAnUncachedRealEquitySymbol(token: string) {
     })
     .then((symbolsRes) => {
       const cached = new Set(symbolsRes.body as string[]);
-      return cy
-        .request({
-          url: `${API_URL}/api/v1/market/instruments/search?q=A&instrument_type=EQ&page_size=100`,
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        .then((searchRes) => {
-          const items = searchRes.body.items as { symbol: string }[];
-          const candidate = items.find((i) => !cached.has(i.symbol));
-          expect(candidate, "a real EQ instrument not already in the data lake").to.exist;
-          return candidate!.symbol;
-        });
+      const candidate = REAL_LIQUID_LARGE_CAPS.find((s) => !cached.has(s));
+      expect(candidate, "a real liquid large-cap not already in the data lake").to.exist;
+      return candidate!;
     });
 }
 
