@@ -474,6 +474,7 @@ class InstrumentSummary(BaseModel):
     name: str
     instrument_type: str
     isin: str | None
+    expiry: date | None  # REL-078: real for FUT rows, None for EQ/INDEX
 
 
 class InstrumentSearchResponse(BaseModel):
@@ -515,6 +516,7 @@ def search_instruments_endpoint(
                 name=row.name,
                 instrument_type=row.instrument_type,
                 isin=row.isin,
+                expiry=row.expiry,
             )
             for row in rows
         ]

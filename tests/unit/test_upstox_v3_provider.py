@@ -58,6 +58,38 @@ def test_get_historical_data_parses_a_valid_response():
     assert candles[0].symbol == "RELIANCE"
 
 
+def test_get_historical_data_sorts_a_descending_provider_response_ascending():
+    """REL-078: Upstox's own real API returns newest-first for a multi-day range (confirmed
+    empirically this session against a real futures instrument_key) -- the provider must
+    normalize to ascending before returning, since validate_candles() (src/data/providers/
+    base.py) deliberately never re-sorts on the caller's behalf."""
+    descending_rows = [
+        ["2026-08-03T00:00:00+05:30", 103.0, 106.0, 102.0, 105.0, 12000, None],
+        ["2026-08-02T00:00:00+05:30", 101.0, 104.0, 100.0, 103.0, 11000, None],
+        ["2026-08-01T00:00:00+05:30", 100.0, 105.0, 99.0, 103.0, 15000, None],
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "data": {"candles": descending_rows}})
+
+    provider = _provider_with_transport(handler)
+    candles = provider.get_historical_data(
+        instrument_key="NSE_FO|68797",
+        symbol="TCS FUT 29 SEP 26",
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 3),
+        timeframe="1d",
+    )
+
+    assert [c.timestamp.date() for c in candles] == [
+        date(2026, 8, 1),
+        date(2026, 8, 2),
+        date(2026, 8, 3),
+    ]
+    assert candles[0].open == 100.0
+    assert candles[-1].open == 103.0
+
+
 def test_get_historical_data_url_path_order_is_to_date_then_from_date():
     """Confirmed against the live docs: the real path order is to_date THEN from_date -- the
     opposite of this codebase's own date_from/date_to convention everywhere else, easy to get

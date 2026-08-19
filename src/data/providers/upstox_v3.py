@@ -147,6 +147,14 @@ class UpstoxV3Provider(MarketDataProvider):
             )
             for row in raw_candles
         ]
+        # REL-078: the real API responds newest-first for a multi-day range (confirmed
+        # empirically against a real futures instrument_key this session) -- validate_candles()
+        # (src/data/providers/base.py) deliberately never re-sorts ("a caller that wants sorted
+        # output does that itself"), so normalizing this provider's own known response-order
+        # convention belongs here, not there. Equity/index fetches have almost certainly been
+        # hitting the same "unsorted" rejection all along, silently masked by yfinance failover;
+        # for futures there is no failover, so this was a hard, total block until fixed.
+        candles.sort(key=lambda c: c.timestamp)
         return candles
 
     def get_latest_data(self, *, instrument_key: str, symbol: str) -> Candle | None:

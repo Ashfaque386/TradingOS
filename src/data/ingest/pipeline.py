@@ -9,6 +9,14 @@ untouched -- a real, distinct NSE bulk EOD source outside the Upstox/yfinance fa
 release adds. `yfinance` remains available too, as a direct, `MarketDataManager`-bypassing choice
 for local debugging (see src/data/providers/yahoo_finance.py's module docstring).
 
+REL-078: `_fetch_managed` now resolves each symbol to its real Upstox `instrument_key` via
+`resolve_instrument_key()` (`src/data/instruments.py`, built in REL-071) before calling the
+manager -- previously it passed the bare symbol string straight through, which is not a valid
+real Upstox instrument_key format, so Upstox V3 silently 404'd on every call and every real
+on-demand ingestion actually went through yfinance alone despite Upstox being the configured
+primary provider. REL-071's own resolver was already wired into `scheduled_sync.py`'s separate
+path; this was the one remaining caller that still needed it.
+
 Usage:
     python -m src.data.ingest.pipeline --source managed --symbols RELIANCE,TCS,INFY \\
         --start 2024-01-01 --end 2024-12-31
@@ -26,6 +34,7 @@ from src.data.ingest.base import EODDataSourceAdapter
 from src.data.ingest.bhavcopy import BhavcopyAdapter
 from src.data.ingest.writer import ParquetLakeWriter
 from src.data.ingest.yfinance_adapter import YFinanceAdapter
+from src.data.instruments import resolve_instrument_key
 from src.data.provenance import upsert_provenance
 from src.data.providers.base import Candle
 from src.data.providers.manager import MarketDataUnavailable, build_market_data_manager
@@ -66,37 +75,48 @@ def candles_to_eod_dataframe(symbol: str, candles: list[Candle]) -> pl.DataFrame
 
 
 def _fetch_managed(symbols: list[str], start: date, end: date) -> pl.DataFrame:
-    """Real per-symbol failover: a symbol Upstox can't serve (today, always -- no real
-    instrument_key resolution exists until Phase 2/REL-071) falls over to yfinance
-    honestly, per this module's own docstring; a symbol neither provider has anything for is
-    logged and skipped, never silently fabricated."""
+    """Real per-symbol failover: each symbol is resolved to its real Upstox instrument_key
+    first (REL-078), so Upstox V3 is actually attempted with a valid key rather than a bare
+    symbol string that always silently fails. A symbol that fails to resolve (rare -- every
+    real caller of this on-demand path already picked the symbol from a
+    GET /market/instruments/search result, so it's already a real active row in the
+    overwhelmingly common case) falls back to using the bare symbol as instrument_key,
+    preserving this function's own prior behavior for that edge case rather than skipping it
+    outright the way scheduled_sync.py does for its own broader, partially-unverified
+    Strategy.universe scope. A symbol neither provider has anything for is logged and skipped,
+    never silently fabricated."""
     manager = build_market_data_manager()
     frames: list[pl.DataFrame] = []
-    for symbol in symbols:
-        try:
-            result = manager.get_historical_data(
-                instrument_key=symbol, symbol=symbol, start=start, end=end, timeframe="1d"
+    with get_session() as session:
+        for symbol in symbols:
+            instrument_key = resolve_instrument_key(session, symbol, exchange="NSE") or symbol
+            try:
+                result = manager.get_historical_data(
+                    instrument_key=instrument_key,
+                    symbol=symbol,
+                    start=start,
+                    end=end,
+                    timeframe="1d",
+                )
+            except MarketDataUnavailable as exc:
+                logger.warning("managed_ingestion_symbol_failed", symbol=symbol, errors=exc.errors)
+                continue
+            logger.info(
+                "managed_ingestion_symbol_succeeded",
+                symbol=symbol,
+                provider_requested=result.provider_requested,
+                provider_used=result.provider_used,
+                rows=len(result.candles),
             )
-        except MarketDataUnavailable as exc:
-            logger.warning("managed_ingestion_symbol_failed", symbol=symbol, errors=exc.errors)
-            continue
-        logger.info(
-            "managed_ingestion_symbol_succeeded",
-            symbol=symbol,
-            provider_requested=result.provider_requested,
-            provider_used=result.provider_used,
-            rows=len(result.candles),
-        )
-        # REL-073: real provenance, closing the gap run_real_backtest() can't answer on its own
-        # (the Parquet lake carries no per-row provider/fetch-time column).
-        with get_session() as session:
+            # REL-073: real provenance, closing the gap run_real_backtest() can't answer on its
+            # own (the Parquet lake carries no per-row provider/fetch-time column).
             upsert_provenance(
                 session,
                 symbol=symbol,
                 provider=result.provider_used,
                 retrieved_at=result.retrieved_at,
             )
-        frames.append(candles_to_eod_dataframe(symbol, result.candles))
+            frames.append(candles_to_eod_dataframe(symbol, result.candles))
 
     if not frames:
         return candles_to_eod_dataframe("", [])

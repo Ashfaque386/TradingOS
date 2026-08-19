@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from datetime import date
 from typing import Any
 
 import httpx
@@ -88,14 +89,43 @@ def test_parse_record_accepts_a_real_shaped_index_record_with_no_isin_or_lot_siz
 
 
 def test_parse_record_rejects_an_unsupported_instrument_type():
+    """REL-078: FUT is now supported (see test_parse_record_accepts_a_real_shaped_futures_record
+    below) -- options (CE/PE) stay out of scope (REL-077's live broker option-chain serves them,
+    no local catalog needed), so this now proves that boundary instead."""
     record = {
-        "instrument_type": "FUT",
-        "instrument_key": "NSE_FO|12345",
-        "trading_symbol": "NIFTY24DECFUT",
-        "name": "NIFTY FUT",
+        "instrument_type": "CE",
+        "instrument_key": "NSE_FO|54321",
+        "trading_symbol": "NIFTY24DEC24000CE",
+        "name": "NIFTY",
         "segment": "NSE_FO",
     }
     assert _parse_record(record, exchange="NSE") is None
+
+
+def test_parse_record_accepts_a_real_shaped_futures_record():
+    """REL-078: real ground-truth TCS futures row (fetched live from the Upstox instrument
+    master this session) -- expiry epoch ms 1790706599000 confirmed to convert to 2026-09-29
+    with no off-by-one, and a real FUT row's own strike_price is always 0.0, never a real
+    strike, so `strike` stays None here exactly as it does for EQ/INDEX."""
+    record = {
+        "instrument_type": "FUT",
+        "instrument_key": "NSE_FO|68797",
+        "trading_symbol": "TCS FUT 29 SEP 26",
+        "name": "TATA CONSULTANCY SERV LT",
+        "segment": "NSE_FO",
+        "expiry": 1790706599000,
+        "lot_size": 225,
+        "tick_size": 10.0,
+        "strike_price": 0.0,
+        "underlying_symbol": "TCS",
+    }
+    row = _parse_record(record, exchange="NSE")
+    assert row is not None
+    assert row["instrument_type"] == "FUT"
+    assert row["expiry"] == date(2026, 9, 29)
+    assert row["strike"] is None
+    assert row["lot_size"] == 225
+    assert row["tick_size"] == 10.0
 
 
 def test_parse_record_rejects_a_record_missing_a_required_field():

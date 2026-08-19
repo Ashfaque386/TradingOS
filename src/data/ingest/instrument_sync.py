@@ -12,9 +12,19 @@ Real, confirmed per-type field schema: equities (`instrument_type="EQ"`) carry
 `segment, name, exchange, isin, instrument_type, instrument_key, lot_size, tick_size,
 trading_symbol`; indices (`instrument_type="INDEX"`) carry a minimal real set --
 `segment, name, exchange, instrument_type, instrument_key, trading_symbol` -- genuinely no
-ISIN/lot_size/tick_size, not an omission. F&O (`FUT`/`CE`/`PE`) records are real too but out of
-scope for this phase (this codebase's backtest engine doesn't consume derivatives data yet
-either, per this phase's own explicit boundary) -- skipped, not mis-parsed.
+ISIN/lot_size/tick_size, not an omission. Options (`CE`/`PE`) records are real too but out of
+scope -- this codebase's own real options-chain browsing (REL-077) is served live from the
+broker at query time (`BrokerAdapter.get_option_chain`), not from a local instrument catalog,
+so there is no need to sync them here.
+
+REL-078: futures (`instrument_type="FUT"`) are now in scope, closing this module's own prior
+"F&O out of scope" boundary for that one type. Real, confirmed field schema (fetched from the
+live file, not invented): `segment="NSE_FO", name, exchange, expiry (epoch ms),
+instrument_type="FUT", underlying_symbol, instrument_key, lot_size, tick_size, trading_symbol
+(e.g. "TCS FUT 29 SEP 26" -- a real, unique, human-readable string with the expiry already
+baked in as text), strike_price` -- `strike_price` is always `0.0` for a real FUT row, never a
+real strike, so it is not stored (`strike` stays `None`, the same honest-null convention already
+used for EQ/INDEX).
 """
 
 from __future__ import annotations
@@ -22,6 +32,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -39,7 +50,7 @@ _INSTRUMENT_MASTER_URL = (
     "https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
 )
 PROVIDER = "upstox_v3"
-_SUPPORTED_INSTRUMENT_TYPES = {"EQ", "INDEX"}
+_SUPPORTED_INSTRUMENT_TYPES = {"EQ", "INDEX", "FUT"}
 
 
 class InstrumentSyncService:
@@ -101,8 +112,9 @@ class InstrumentSyncService:
 
 
 def _parse_record(record: dict[str, Any], *, exchange: str) -> dict[str, Any] | None:
-    """Returns `None` for a real row this phase doesn't ingest (F&O) or a genuinely malformed
-    record (missing a required real field) -- never a fabricated/partial row."""
+    """Returns `None` for a real row this module doesn't ingest (options, or anything else
+    outside `_SUPPORTED_INSTRUMENT_TYPES`) or a genuinely malformed record (missing a required
+    real field) -- never a fabricated/partial row."""
     instrument_type = record.get("instrument_type")
     if instrument_type not in _SUPPORTED_INSTRUMENT_TYPES:
         return None
@@ -114,6 +126,13 @@ def _parse_record(record: dict[str, Any], *, exchange: str) -> dict[str, Any] | 
     if not (instrument_key and symbol and name and segment):
         return None
 
+    expiry_ms = record.get("expiry")
+    expiry: date | None = (
+        datetime.fromtimestamp(expiry_ms / 1000, tz=UTC).date()
+        if instrument_type == "FUT" and expiry_ms
+        else None  # unchanged for EQ/INDEX -- neither type carries a real expiry
+    )
+
     return {
         "instrument_key": instrument_key,
         "exchange": exchange,
@@ -122,8 +141,9 @@ def _parse_record(record: dict[str, Any], *, exchange: str) -> dict[str, Any] | 
         "name": name,
         "instrument_type": instrument_type,
         "isin": record.get("isin"),
-        "expiry": None,  # real for EQ/INDEX -- neither type carries a real expiry
-        "strike": None,  # real for EQ/INDEX -- neither type carries a real strike
+        "expiry": expiry,
+        "strike": None,  # real for EQ/INDEX/FUT -- none of these carry a real strike (a real
+        # FUT row's own strike_price is always 0.0, not a real value)
         "lot_size": record.get("lot_size"),
         "tick_size": record.get("tick_size"),
     }

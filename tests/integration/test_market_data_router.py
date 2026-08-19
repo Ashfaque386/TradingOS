@@ -574,6 +574,24 @@ def _seed_test_instruments() -> None:
                 is_active=True,
             )
         )
+        # REL-078: a real FUT row -- proves `expiry` is threaded through the search response
+        # (None for EQ/INDEX, a real date for FUT).
+        session.add(
+            Instrument(
+                provider=_INSTR_PROVIDER,
+                instrument_key=f"{_INSTR_EXCHANGE}_FO|ROUTERTESTFUT",
+                exchange=_INSTR_EXCHANGE,
+                segment=f"{_INSTR_EXCHANGE}_FO",
+                symbol="ROUTERTESTCO FUT 29 SEP 26",
+                name="Router Test Co Ltd",
+                instrument_type="FUT",
+                isin=None,
+                expiry=date(2026, 9, 29),
+                lot_size=225,
+                tick_size=10.0,
+                is_active=True,
+            )
+        )
         session.commit()
 
 
@@ -588,6 +606,9 @@ def _cleanup_test_instruments() -> None:
 
 
 def test_instrument_search_returns_a_real_seeded_match():
+    """Seeds both a real EQ row and a real FUT row (REL-078) sharing the same name, so this
+    query -- matching on name -- returns both. `expiry` is asserted null for EQ and real for
+    FUT in a separate, dedicated test below."""
     _seed_test_instruments()
     try:
         response = client.get(
@@ -596,14 +617,34 @@ def test_instrument_search_returns_a_real_seeded_match():
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["total"] == 1
+        assert body["total"] == 2
         assert body["page"] == 1
         assert body["page_size"] == 25
-        assert len(body["items"]) == 1
+        assert len(body["items"]) == 2
+        items_by_key = {item["instrument_key"]: item for item in body["items"]}
+        eq_item = items_by_key[f"{_INSTR_EXCHANGE}_EQ|ROUTERTEST"]
+        assert eq_item["symbol"] == "ROUTERTESTCO"
+        assert eq_item["isin"] == "INE_ROUTER_01"
+        assert eq_item["expiry"] is None
+    finally:
+        _cleanup_test_instruments()
+
+
+def test_instrument_search_returns_a_real_expiry_for_a_seeded_futures_row():
+    _seed_test_instruments()
+    try:
+        response = client.get(
+            "/api/v1/market/instruments/search",
+            params={"q": "ROUTERTESTCO FUT", "exchange": _INSTR_EXCHANGE},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
         item = body["items"][0]
-        assert item["symbol"] == "ROUTERTESTCO"
-        assert item["instrument_key"] == f"{_INSTR_EXCHANGE}_EQ|ROUTERTEST"
-        assert item["isin"] == "INE_ROUTER_01"
+        assert item["instrument_key"] == f"{_INSTR_EXCHANGE}_FO|ROUTERTESTFUT"
+        assert item["instrument_type"] == "FUT"
+        assert item["expiry"] == "2026-09-29"
+        assert item["isin"] is None
     finally:
         _cleanup_test_instruments()
 
