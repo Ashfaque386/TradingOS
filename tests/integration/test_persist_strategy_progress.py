@@ -22,6 +22,7 @@ from src.agents.state import (
     ResearchDirective,
     StrategyLogic,
     StrategyOptionLeg,
+    ValidationResult,
 )
 from src.api.routers.agents import _persist_strategy_progress, _StrategyTracking
 from src.core.db import get_session
@@ -267,6 +268,82 @@ def test_options_strategy_agent_rationale_is_persisted_onto_the_strategy_version
                 version_row.option_rationale
                 == "Bullish structure with defined risk ahead of earnings."
             )
+    finally:
+        if strategy_id is not None:
+            with get_session() as session:
+                session.query(StrategyVersion).filter(
+                    StrategyVersion.strategy_id == strategy_id
+                ).delete()
+                session.query(Strategy).filter(Strategy.id == strategy_id).delete()
+                session.commit()
+
+
+def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
+    """REL-080 (found investigating a real user-reported backtest AttributeError): before this
+    fix, a validator Fail was a silent no-op here -- the version stayed at its create-time default
+    validation_status="Pending" forever, indistinguishable from "never validated", if the retry
+    loop that's supposed to produce a corrected new version never got the chance to run (e.g.
+    every configured LLM provider failing for the next code_generator call -- the real, confirmed
+    cause for the strategy that surfaced this bug). Now the real validator_feedback lands on the
+    version that actually failed, so a caller can tell "proven broken" from "not yet tested"."""
+    strategy_id = None
+    try:
+        with get_session() as session:
+            tracking = _StrategyTracking()
+            run_id = uuid.uuid4()
+
+            _persist_strategy_progress(
+                session,
+                node_name="strategy_generator",
+                output={"strategy_logic": _STRATEGY_LOGIC},
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            strategy_id = tracking.strategy_id
+            assert strategy_id is not None
+
+            _persist_strategy_progress(
+                session,
+                node_name="python_code_generator",
+                output={
+                    "python_code": PythonCode(
+                        code="def run_backtest(): return vbt.ta.ma(close, length=50)",
+                        version_no=1,
+                    )
+                },
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            session.commit()
+
+            strategy_row = session.get(Strategy, strategy_id)
+            assert strategy_row is not None
+            version_id = strategy_row.current_version_id
+            assert version_id is not None
+
+            _persist_strategy_progress(
+                session,
+                node_name="python_validator",
+                output={
+                    "validation_result": ValidationResult(
+                        status="Fail",
+                        severity="Medium",
+                        feedback="sandbox execution failed: AttributeError: 'function' object "
+                        "has no attribute 'ma'",
+                    )
+                },
+                tracking=tracking,
+                agent_run_id=run_id,
+            )
+            session.commit()
+
+            version_row = session.get(StrategyVersion, version_id)
+            assert version_row is not None
+            assert version_row.validation_status == "Failed"
+            assert version_row.validator_feedback is not None
+            assert "AttributeError" in version_row.validator_feedback
+            # the strategy itself stays at Coding -- Backtesting is only reached on a real Pass
+            assert strategy_row.status == "Coding"
     finally:
         if strategy_id is not None:
             with get_session() as session:

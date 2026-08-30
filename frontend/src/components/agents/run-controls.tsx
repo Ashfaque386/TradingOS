@@ -15,6 +15,10 @@ const STATUS_DOT: Record<string, string> = {
   // REL-019 E19.2 (ADR 11): a halted run is a deliberate stop (a disabled agent's real logic
   // never ran), not a failure -- its own color keeps it visually distinct from Failed.
   Halted: "bg-warn",
+  // REL-080: "Paused" existed since REL-060 but was missing from this map (fell back to the
+  // generic text-faint dot, indistinguishable from an unrecognized status) -- found while wiring
+  // real pause/resume/cancel controls into this run list for the first time.
+  Paused: "bg-warn",
 };
 
 const STATUS_TEXT: Record<string, string> = {
@@ -22,6 +26,7 @@ const STATUS_TEXT: Record<string, string> = {
   Completed: "text-up",
   Failed: "text-down",
   Halted: "text-warn",
+  Paused: "text-warn",
 };
 
 function relativeTime(iso: string): string {

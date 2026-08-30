@@ -457,11 +457,23 @@ def _persist_strategy_progress(
         strategy_row = session.get(Strategy, tracking.strategy_id)
         if strategy_row is None or strategy_row.current_version_id is None:
             return
-        if output["validation_result"].status != "Pass":
-            # a retry produces a new StrategyVersion via the branch above; nothing to do here
-            return
         version_row = session.get(StrategyVersion, strategy_row.current_version_id)
         if version_row is None:
+            return
+        if output["validation_result"].status != "Pass":
+            # REL-080 (found investigating a real user-reported backtest AttributeError): a retry
+            # normally produces a new StrategyVersion via the branch above, but if the retry loop
+            # itself is interrupted (MAX_RETRIES exhausted, or -- the real case that surfaced this
+            # -- every configured LLM provider failing for the next code_generator call, ending
+            # the whole run) this version is the last one that will ever exist for this strategy.
+            # Previously left at its create-time default `validation_status="Pending"` forever --
+            # indistinguishable from "never validated" -- so a strategy already PROVEN to crash
+            # the sandbox (e.g. a hallucinated `vbt.ta.ma(...)` call, real vectorbt has no such
+            # attribute) stayed offered in the Backtests picker as if untested. Recording the real
+            # failure here means `POST /strategies/{id}/backtest` (below) can honestly refuse it.
+            result = output["validation_result"]
+            version_row.validation_status = "Failed"
+            version_row.validator_feedback = result.feedback
             return
         # Real sandbox re-validation + .py persistence via the tested Phase 3 pipeline (writes
         # {data_lake_root.parent}/strategies/{version_id}.py and updates
@@ -934,10 +946,15 @@ def _persist_suggestion_regeneration(
         strategy_row = session.get(Strategy, tracking.strategy_id)
         if strategy_row is None or strategy_row.current_version_id is None:
             return
-        if output["validation_result"].status != "Pass":
-            return  # a retry produces a new StrategyVersion via the branch above
         version_row = session.get(StrategyVersion, strategy_row.current_version_id)
         if version_row is None:
+            return
+        if output["validation_result"].status != "Pass":
+            # REL-080: same real gap as `_persist_strategy_progress`'s own identical branch --
+            # see its comment for the full explanation.
+            result = output["validation_result"]
+            version_row.validation_status = "Failed"
+            version_row.validator_feedback = result.feedback
             return
         run_strategy_factory_pipeline(
             version_row.python_code, strategy_version_id=str(version_row.id)
@@ -1403,6 +1420,61 @@ def resume_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> Tr
         daemon=True,
     ).start()
     return TriggerResponse(run_id=run_id, thread_id=thread_id, status="Running")
+
+
+@router.post("/runs/{run_id}/cancel", response_model=TriggerResponse)
+def cancel_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> TriggerResponse:
+    """REL-080 (found investigating a real user report -- "2 research cycles are Running with no
+    way to track or stop them"): `trigger_research`'s own docstring already documents the real
+    tradeoff behind this gap -- a daemon thread survives `docker compose restart`/`--reload`
+    exiting so a dev-loop reload isn't blocked for the LLM client's own multi-minute timeout, but
+    "isn't graceful if the process exits mid-run" -- confirmed for real against this project's own
+    dev DB: 7 real root runs (the oldest from 2026-07-23) are stuck at `status="Running"` with
+    `ended_at` still `NULL`, most with zero completed child nodes, because the process that was
+    driving them no longer exists. `pause_requested` only helps a thread that's still alive to
+    read it between graph steps; there was no way to un-stick a run whose thread is already gone.
+
+    Unlike pause (a cooperative signal a live thread checks), this writes the terminal state
+    directly -- correct for the common real case (the thread is already dead) and low-stakes even
+    in the rare case it isn't: a thread that's still genuinely running and reaches its own normal
+    completion moments later will just overwrite this row again on its own next `session.commit()`
+    (see `_execute_graph_run`), the same benign race pause/resume already accept. Valid from
+    "Running" or "Paused" -- not from an already-terminal status, so this can't silently relabel a
+    real Completed/Failed outcome."""
+    with get_session() as session:
+        root = _get_root_run(session, run_id)
+        if root is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if root.status not in ("Running", "Paused"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Run status is '{root.status}' -- only a Running or Paused run can be "
+                    "cancelled"
+                ),
+            )
+        cancelled_at = datetime.now(UTC)
+        root.status = "Failed"
+        root.ended_at = cancelled_at
+        root.pause_requested = False
+        session.add(
+            AgentLog(
+                agent_run_id=root.id,
+                log_level="WARNING",
+                message=f"Run cancelled by {_user.email}",
+                created_at=cancelled_at,
+            )
+        )
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=str(_user.id),
+            action="GRAPH_RUN_CANCELLED",
+            entity_type="AgentRun",
+            entity_id=root.id,
+        )
+        session.commit()
+        return TriggerResponse(run_id=root.id, thread_id=root.graph_thread_id, status=root.status)
 
 
 # --- Run history ------------------------------------------------------------------------------

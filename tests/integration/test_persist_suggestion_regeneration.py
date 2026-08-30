@@ -16,7 +16,7 @@ Also covers BUG-011 (found live-testing this exact feature): `options_strategy_a
 import uuid
 from decimal import Decimal
 
-from src.agents.state import PythonCode, StrategyLogic
+from src.agents.state import PythonCode, StrategyLogic, ValidationResult
 from src.api.routers.agents import (
     _persist_suggestion_regeneration,
     _SuggestionRegenTracking,
@@ -182,5 +182,43 @@ def test_python_code_generator_creates_a_new_version_attached_to_the_existing_st
             assert strategy_row is not None
             assert strategy_row.current_version_id == tracking.new_version_id
             assert strategy_row.status == "Coding"
+    finally:
+        _cleanup(user_id, account_id, strategy_id)
+
+
+def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
+    """REL-080: the same real gap `_persist_strategy_progress` had -- see that function's own
+    test file for the full explanation (a real user-reported backtest AttributeError traced back
+    to a validator Fail never being recorded on the StrategyVersion row)."""
+    user_id, account_id, strategy_id = _seed_strategy()
+    try:
+        with get_session() as session:
+            tracking = _SuggestionRegenTracking(strategy_id=strategy_id)
+            _persist_suggestion_regeneration(
+                session,
+                node_name="python_code_generator",
+                output={"python_code": PythonCode(code="def run_backtest(): ...", version_no=2)},
+                tracking=tracking,
+            )
+            session.commit()
+            version_id = tracking.new_version_id
+            assert version_id is not None
+
+            _persist_suggestion_regeneration(
+                session,
+                node_name="python_validator",
+                output={
+                    "validation_result": ValidationResult(
+                        status="Fail", severity="Medium", feedback="sandbox execution failed: boom"
+                    )
+                },
+                tracking=tracking,
+            )
+            session.commit()
+
+            version_row = session.get(StrategyVersion, version_id)
+            assert version_row is not None
+            assert version_row.validation_status == "Failed"
+            assert version_row.validator_feedback == "sandbox execution failed: boom"
     finally:
         _cleanup(user_id, account_id, strategy_id)

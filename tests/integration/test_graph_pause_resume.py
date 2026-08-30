@@ -228,6 +228,92 @@ def test_resume_400s_for_a_run_that_is_not_paused():
         _cleanup_run(thread_id)
 
 
+# --- Cancel (REL-080, found investigating a real "no way to stop a stuck run" report) ---------
+
+
+def test_cancel_requires_the_gated_role():
+    root_id, thread_id = _seed_root_run()
+    user_id, token = create_authenticated_user(ROLE_READ_ONLY_AUDITOR)
+    try:
+        response = client.post(f"/api/v1/agents/runs/{root_id}/cancel", headers=auth_header(token))
+        assert response.status_code == 403
+    finally:
+        cleanup_user(user_id)
+        _cleanup_run(thread_id)
+
+
+def test_cancel_404s_for_an_unknown_run():
+    user_id, token = create_authenticated_user(ROLE_RISK_MANAGER)
+    try:
+        response = client.post(
+            f"/api/v1/agents/runs/{uuid.uuid4()}/cancel", headers=auth_header(token)
+        )
+        assert response.status_code == 404
+    finally:
+        cleanup_user(user_id)
+
+
+def test_cancel_400s_for_an_already_terminal_run():
+    root_id, thread_id = _seed_root_run()
+    with get_session() as session:
+        run = session.get(AgentRun, root_id)
+        assert run is not None
+        run.status = "Completed"
+        session.commit()
+
+    user_id, token = create_authenticated_user(ROLE_RISK_MANAGER)
+    try:
+        response = client.post(f"/api/v1/agents/runs/{root_id}/cancel", headers=auth_header(token))
+        assert response.status_code == 400
+    finally:
+        cleanup_user(user_id)
+        _cleanup_run(thread_id)
+
+
+def test_cancel_marks_a_running_run_failed_with_a_real_log_and_ended_at():
+    root_id, thread_id = _seed_root_run()
+    user_id, token = create_authenticated_user(ROLE_RISK_MANAGER)
+    try:
+        response = client.post(f"/api/v1/agents/runs/{root_id}/cancel", headers=auth_header(token))
+        assert response.status_code == 200
+        assert response.json()["status"] == "Failed"
+
+        with get_session() as session:
+            run = session.get(AgentRun, root_id)
+            assert run is not None
+            assert run.status == "Failed"
+            assert run.ended_at is not None
+            assert run.pause_requested is False
+
+            logs = (
+                session.query(AgentLog)
+                .filter(AgentLog.agent_run_id == root_id, AgentLog.log_level == "WARNING")
+                .all()
+            )
+            assert any("cancelled" in log.message.lower() for log in logs)
+    finally:
+        cleanup_user(user_id)
+        _cleanup_run(thread_id)
+
+
+def test_cancel_also_accepts_a_paused_run():
+    root_id, thread_id = _seed_root_run()
+    with get_session() as session:
+        run = session.get(AgentRun, root_id)
+        assert run is not None
+        run.status = "Paused"
+        session.commit()
+
+    user_id, token = create_authenticated_user(ROLE_RISK_MANAGER)
+    try:
+        response = client.post(f"/api/v1/agents/runs/{root_id}/cancel", headers=auth_header(token))
+        assert response.status_code == 200
+        assert response.json()["status"] == "Failed"
+    finally:
+        cleanup_user(user_id)
+        _cleanup_run(thread_id)
+
+
 @patch("src.api.routers.agents.threading.Thread")
 def test_resume_dispatches_a_real_background_thread(mock_thread):
     root_id, thread_id = _seed_root_run()

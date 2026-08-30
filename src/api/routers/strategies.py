@@ -639,6 +639,23 @@ def trigger_backtest(
         version = session.get(StrategyVersion, strategy.current_version_id)
         if version is None:
             raise HTTPException(status_code=409, detail="Current version record is missing")
+        # REL-080 (found investigating a real user-reported backtest AttributeError): a version
+        # the real python_validator sandbox has already proven crashes (e.g. a hallucinated
+        # `vbt.ta.ma(...)` call -- real vectorbt has no such attribute) is now honestly recorded
+        # as validation_status="Failed" (see agents.py::_persist_strategy_progress) rather than
+        # left at the create-time "Pending" default forever. Refuse to re-run code already known
+        # to crash the sandbox, surfacing the validator's own real feedback instead of a raw
+        # traceback-shaped error the second time. A "Pending" version (never validated, or a
+        # retry loop that's still in flight) is unaffected -- this only blocks a proven failure.
+        if version.validation_status == "Failed":
+            feedback = version.validator_feedback or "no feedback recorded"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This strategy version already failed real sandbox validation -- it would "
+                    f"fail the same way here: {feedback}"
+                ),
+            )
         version_summary = StrategyVersionSummary(
             id=version.id,
             version_no=version.version_no,

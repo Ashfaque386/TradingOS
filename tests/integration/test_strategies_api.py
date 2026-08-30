@@ -406,6 +406,76 @@ def test_backtest_rejects_a_strategy_with_no_universe_recorded():
         cleanup_user(admin_id)
 
 
+def test_backtest_rejects_a_version_that_already_failed_real_validation_rel_080():
+    """REL-080 (found investigating a real user-reported backtest AttributeError): once a version
+    is honestly recorded as validation_status="Failed" (see test_persist_strategy_progress.py's
+    own REL-080 test for how that gets set), re-running it should surface the real validator
+    feedback up front instead of letting the same crash happen again inside the sandbox."""
+    user_id, account_id = uuid.uuid4(), uuid.uuid4()
+    strategy_id, version_id = uuid.uuid4(), uuid.uuid4()
+
+    with get_session() as session:
+        session.add(
+            User(
+                id=user_id,
+                email=f"strategies-api-failedver-{user_id}@example.invalid",
+                hashed_password="x",
+                role="Trader",
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        session.add(
+            Account(
+                id=account_id,
+                user_id=user_id,
+                broker="Zerodha",
+                account_type="Paper",
+                capital_allocated=Decimal("100000.00"),
+            )
+        )
+        session.commit()
+    with get_session() as session:
+        strategy = Strategy(
+            id=strategy_id,
+            account_id=account_id,
+            name="strategies-api-failedver-strategy",
+            asset_class="Equity",
+            style="Intraday",
+            status="Coding",
+            universe=["RELIANCE"],
+            max_drawdown_limit=Decimal("15.00"),
+        )
+        session.add(strategy)
+        session.flush()
+        session.add(
+            StrategyVersion(
+                id=version_id,
+                strategy_id=strategy_id,
+                version_no=1,
+                python_code="def run_backtest(): return vbt.ta.ma(close, length=50)",
+                validation_status="Failed",
+                validator_feedback=(
+                    "sandbox execution failed: AttributeError: 'function' object has no "
+                    "attribute 'ma'"
+                ),
+            )
+        )
+        strategy.current_version_id = version_id
+        session.commit()
+
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+
+    try:
+        response = client.post(f"/api/v1/strategies/{strategy_id}/backtest", headers=headers)
+        assert response.status_code == 409
+        assert "AttributeError" in response.json()["detail"]
+    finally:
+        _cleanup_fixture_rows(user_id, account_id, strategy_id, version_id)
+        cleanup_user(admin_id)
+
+
 def test_backtest_trigger_accepts_custom_date_range_and_capital():
     """A caller-supplied date_from/date_to/initial_capital round-trips into the persisted
     BacktestResult and the response, replacing the endpoint's own defaults rather than being

@@ -1182,6 +1182,15 @@ export const api = {
   rejectRun: (runId: string, reason: string) =>
     post<HitlDecisionResponse>(`/api/v1/agents/runs/${runId}/reject`, { reason }),
 
+  // REL-060 (API-020/021): real since REL-060, never wired into any UI until REL-080 found the
+  // gap while investigating a real "no way to stop a stuck research cycle" report.
+  pauseRun: (runId: string) => post<TriggerResponse>(`/api/v1/agents/runs/${runId}/pause`),
+  resumeRun: (runId: string) => post<TriggerResponse>(`/api/v1/agents/runs/${runId}/resume`),
+  // REL-080: a hard stop, unlike pause (a cooperative signal a live thread has to still be
+  // polling to see) -- see the backend endpoint's own docstring for why this is the real fix for
+  // a run whose driving thread is already gone (e.g. an app container restart mid-run).
+  cancelRun: (runId: string) => post<TriggerResponse>(`/api/v1/agents/runs/${runId}/cancel`),
+
   // encodeURIComponent: REL-017 needed this for the real "^NSEI" Nifty 50 benchmark symbol --
   // a literal "^" in a template-string URL is not itself invalid, but this is the correct fix
   // for any symbol containing a URL-meaningful character, not just this one.
