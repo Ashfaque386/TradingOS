@@ -12,7 +12,6 @@ export const NAV_LINKS: { href: string; label: string; permission?: PermissionKe
   { href: "/strategies", label: "Strategies" },
   { href: "/backtests", label: "Backtests" },
   { href: "/account", label: "Account" },
-  { href: "/paper-trading", label: "Paper Trading" },
   { href: "/orders", label: "Orders" },
   { href: "/chat", label: "Chat" },
   { href: "/audit", label: "Audit", permission: "readAudit" },

@@ -22,6 +22,14 @@ const nextConfig: NextConfig = {
   // identical interaction via `http://localhost:3000` (a real browser, not blocked) always
   // worked correctly.
   allowedDevOrigins: ["frontend", "app", "localhost"],
+  // REL-082: /account and /paper-trading were two nav tabs for the exact same single seeded
+  // paper account -- merged into one page (/account) at the user's explicit request after
+  // looking at both side by side. Permanent (308) redirect, not a client-side page, so a
+  // bookmarked /paper-trading link never flashes the old page's shell before landing on the
+  // merged one.
+  async redirects() {
+    return [{ source: "/paper-trading", destination: "/account", permanent: true }];
+  },
 };
 
 export default nextConfig;

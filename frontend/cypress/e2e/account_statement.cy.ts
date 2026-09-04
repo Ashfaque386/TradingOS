@@ -4,6 +4,13 @@
 // paper_trading.py's own documented reasoning), so this spec doesn't need an RBAC-gating case
 // the way kill_switch.cy.ts/rbac_gating.cy.ts do -- it confirms the page renders real data and
 // the statement export is a genuine, authenticated download.
+//
+// REL-082: /account and /paper-trading merged into this one page -- two nav tabs for the exact
+// same single seeded paper account, previously each independently rendering the identical
+// CapitalSummary/PaperPositionsTable output. /paper-trading now permanently redirects here
+// (next.config.ts). This spec gained a real redirect-assertion case, plus real coverage for the
+// Shadow Mode streak panel and Recent Paper Fills table -- neither had ANY Cypress coverage
+// before this merge (there was never a dedicated /paper-trading spec at all).
 
 export {};
 
@@ -13,6 +20,17 @@ describe("Account page", () => {
   it("redirects an unauthenticated visitor to /login", () => {
     cy.visit("/account");
     cy.url().should("include", "/login");
+  });
+
+  it("permanently redirects the old /paper-trading route here", () => {
+    cy.visit("/login");
+    cy.get("input[type=email]").type(Cypress.env("adminEmail"));
+    cy.get("input[type=password]").type(Cypress.env("adminPassword"));
+    cy.get("button[type=submit]").click();
+    cy.url().should("eq", Cypress.config().baseUrl + "/");
+
+    cy.visit("/paper-trading");
+    cy.url().should("eq", Cypress.config().baseUrl + "/account");
   });
 
   it("renders real account figures and a real equity curve once authenticated", () => {
@@ -26,6 +44,7 @@ describe("Account page", () => {
     cy.get("nav").contains("Account").should("be.visible");
     cy.contains("Account Equity").should("be.visible");
     cy.contains("Starting Capital").should("be.visible");
+    cy.contains("Available to Trade").should("be.visible");
 
     // The real API this page itself calls -- used here only to know what to assert against.
     cy.window()
@@ -44,6 +63,21 @@ describe("Account page", () => {
 
     cy.contains("Equity Curve").should("be.visible");
     cy.contains("Download Statement").should("be.visible");
+  });
+
+  it("renders the real Shadow Mode streak and Recent Paper Fills sections", () => {
+    cy.visit("/login");
+    cy.get("input[type=email]").type(Cypress.env("adminEmail"));
+    cy.get("input[type=password]").type(Cypress.env("adminPassword"));
+    cy.get("button[type=submit]").click();
+    cy.url().should("eq", Cypress.config().baseUrl + "/");
+
+    cy.visit("/account");
+    cy.contains("Shadow Mode — Broker Validation Streak").should("be.visible");
+    cy.contains("clean days").should("be.visible");
+    cy.contains("Positions").should("be.visible");
+    cy.contains("Recent Paper Fills").should("be.visible");
+    cy.contains("No broker paper-trading dependency").should("be.visible");
   });
 
   it("the real statement export endpoint returns a genuine authenticated CSV", () => {

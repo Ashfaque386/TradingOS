@@ -10,13 +10,20 @@ import { Card } from "@/components/ui/card";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { EquityCurveChart } from "@/components/account/equity-curve-chart";
 import { PaperPositionsTable } from "@/components/paper-trading/paper-positions-table";
-import { CapitalSummary } from "@/components/portfolio/capital-summary";
+import { PaperTradesTable } from "@/components/paper-trading/paper-trades-table";
+import { ShadowModePanel } from "@/components/paper-trading/shadow-mode-panel";
 
 /**
- * REL-034: the canonical "real, working ₹100,000 account" surface -- starting capital, cash,
- * margin blocked, realized/unrealized P&L, an equity curve over time, and a downloadable
- * statement, backed by src/api/routers/paper_trading.py's real /account/* endpoints. Kept
- * separate from /paper-trading, which stays focused on its own narrower fills/Shadow-Mode desk.
+ * REL-034/013 merged (REL-082, 2026-09-04): the real, working ₹100,000 paper account -- equity,
+ * capital, realized/unrealized P&L, a downloadable statement, the equity curve, the Shadow Mode
+ * Go-Live precursor streak, open positions, and recent fills, all in one place. Previously split
+ * across /account and /paper-trading as two separate nav tabs -- both were real slices of the
+ * exact same single seeded account, each independently fetching and rendering the identical
+ * CapitalSummary/PaperPositionsTable output, with a cross-link banner on each pointing at the
+ * other ("Looking for Shadow Mode..."/"Looking for account equity...") that was itself a tell the
+ * split created real navigation friction rather than a genuine product decision. Merged at the
+ * user's explicit request after looking at both tabs side by side. /paper-trading now
+ * permanently redirects here (next.config.ts).
  */
 export default function AccountPage() {
   usePageStatus("Account — Live Paper Trading Ledger", false);
@@ -37,10 +44,21 @@ export default function AccountPage() {
     queryFn: () => api.paperPositions(),
     refetchInterval: 15_000,
   });
+  const tradesQuery = useQuery({
+    queryKey: ["paper-trades"],
+    queryFn: () => api.paperTrades(),
+    refetchInterval: 15_000,
+  });
+  const shadowQuery = useQuery({
+    queryKey: ["shadow-mode-status"],
+    queryFn: () => api.shadowModeStatus(),
+    refetchInterval: 30_000,
+  });
 
   const summary = summaryQuery.data;
   const realizedPositive = (summary?.realized_pnl_total ?? 0) >= 0;
   const unrealizedPositive = (summary?.unrealized_pnl_total ?? 0) >= 0;
+  const availableToTrade = (summary?.cash ?? 0) - (summary?.margin_blocked ?? 0);
 
   return (
     <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-4 p-6 sm:p-8">
@@ -52,21 +70,12 @@ export default function AccountPage() {
           </Link>
         </div>
       )}
-      <p className="text-[11px] text-text-faint">
-        Looking for Shadow Mode or recent simulated fills?{" "}
-        <Link
-          href="/paper-trading"
-          className="font-medium text-text-dim underline underline-offset-2 hover:text-text"
-        >
-          Paper Trading Desk →
-        </Link>
-      </p>
 
       <Card eyebrow="Real, Working Paper Account" title="Account Equity">
         {summaryQuery.isLoading ? (
           <div className="h-20 animate-pulse rounded-xl bg-bg" />
         ) : (
-          <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-5">
             <div>
               <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">Equity</p>
               <NumberTicker
@@ -97,18 +106,15 @@ export default function AccountPage() {
                 {formatCompactINR(summary?.margin_blocked ?? 0)}
               </p>
             </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-text-faint">
+                Available to Trade
+              </p>
+              <p className="font-mono-tabular text-3xl font-semibold tracking-tight text-up">
+                {formatCompactINR(availableToTrade)}
+              </p>
+            </div>
           </div>
-        )}
-      </Card>
-
-      <Card eyebrow="Real, Working Paper Account" title="Capital">
-        {summaryQuery.isLoading ? (
-          <div className="h-16 animate-pulse rounded-xl bg-bg" />
-        ) : (
-          <CapitalSummary
-            used={summary?.margin_blocked ?? 0}
-            available={(summary?.cash ?? 0) - (summary?.margin_blocked ?? 0)}
-          />
         )}
       </Card>
 
@@ -174,6 +180,10 @@ export default function AccountPage() {
         </Card>
       </div>
 
+      <Card eyebrow="Rule 3 · Go-Live Precursor" title="Shadow Mode — Broker Validation Streak">
+        <ShadowModePanel status={shadowQuery.data} />
+      </Card>
+
       <Card eyebrow="Since Inception" title="Equity Curve">
         {equityCurveQuery.isLoading ? (
           <div className="h-[220px] animate-pulse rounded-xl bg-bg" />
@@ -182,12 +192,36 @@ export default function AccountPage() {
         )}
       </Card>
 
-      <Card eyebrow="Open Positions" title="Positions">
-        {positionsQuery.isLoading ? (
-          <div className="h-40 animate-pulse rounded-xl bg-bg" />
-        ) : (
-          <PaperPositionsTable positions={positionsQuery.data ?? []} />
-        )}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card eyebrow="Simulated Ledger" title="Positions">
+          {positionsQuery.isLoading ? (
+            <div className="h-40 animate-pulse rounded-xl bg-bg" />
+          ) : (
+            <PaperPositionsTable positions={positionsQuery.data ?? []} />
+          )}
+        </Card>
+
+        <Card eyebrow="Simulated Ledger" title="Recent Paper Fills">
+          {tradesQuery.isLoading ? (
+            <div className="h-40 animate-pulse rounded-xl bg-bg" />
+          ) : (
+            <PaperTradesTable trades={tradesQuery.data ?? []} />
+          )}
+        </Card>
+      </div>
+
+      <Card eyebrow="How this works" title="No broker paper-trading dependency">
+        <p className="text-[11px] leading-relaxed text-text-faint">
+          Neither Zerodha nor Upstox provides a native paper-trading mode, so this desk never
+          relies on one. Every fill above is computed locally: a real live Level-2 depth quote is
+          fetched from whichever broker is configured, walked by a real slippage model to produce
+          a realistic fill price and partial-fill probability, and written to a local ledger —{" "}
+          <code className="text-text-dim">place_order</code> is never called. Shadow Mode above
+          is a separate, complementary check: it validates that a real order payload is
+          syntactically correct against each broker&apos;s real API shape (a genuine sandbox call for
+          Upstox, local-only validation for Zerodha, which has no sandbox at all) without ever
+          risking capital either.
+        </p>
       </Card>
     </main>
   );
