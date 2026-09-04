@@ -20,6 +20,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from src.api.deps import require_role
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderType, ProductType, Side, Validity
@@ -30,6 +31,13 @@ from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SY
 from src.engine.shadow_mode_status import compute_daily_summary, consecutive_clean_days
 from src.models.shadow_mode import ShadowModeAttempt
 from src.models.user import User
+
+# REL-081: the real symbol used by both the interactive attempt endpoint's own real daily-cycle
+# caller and the in-process scheduler job (scheduler.py::run_shadow_mode_daily_cycle) -- Zerodha
+# wants a plain NSE tradingsymbol, Upstox wants an already-resolved instrument_key (confirmed by
+# a real 400 Bad Request the first time this ran against Upstox with a bare symbol), so
+# `resolve_daily_shadow_mode_symbols` below resolves both, once, for real.
+DAILY_SHADOW_MODE_SYMBOL = "INFY"
 
 router = APIRouter(prefix="/api/v1/shadow-mode", tags=["shadow-mode"])
 
@@ -68,15 +76,66 @@ def _build_adapter(broker: BrokerName) -> BrokerAdapter:
     return build_upstox_adapter()
 
 
+async def run_one_shadow_mode_attempt(
+    session: Session, *, broker: BrokerName, order: OrderRequest
+) -> ShadowModeAttempt:
+    """REL-081: the real order-attempt logic, shared between `POST /attempt` (below) and the
+    in-process scheduler job (`src/agents/scheduler.py::run_shadow_mode_daily_cycle`) -- both
+    paths now write the exact same real row via the exact same real broker call, closing the
+    fragility `scripts/run_daily_shadow_mode.py`'s own docstring documented (that script used to
+    be the *only* real recurring caller, and reached this logic over a self-authenticating HTTP
+    round-trip against this same running app because no in-process scheduler existed yet).
+    Raises `NoBrokerConfigured` (mapped to a 503 by the endpoint below) if `broker` has no real
+    adapter configured."""
+    broker_adapter = _build_adapter(broker)
+    shadow = ShadowModeAdapter(broker_adapter, broker_name=broker)
+    result = await shadow.attempt_order(order)
+
+    row = ShadowModeAttempt(
+        broker=result.broker,
+        symbol=order.symbol,
+        side=order.side,
+        request_payload=result.request_payload,
+        outcome=result.outcome,
+        error_detail=result.error_detail,
+        latency_ms=result.latency_ms,
+        used_real_sandbox=result.used_real_sandbox,
+        attempted_at=datetime.now(UTC),
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+async def resolve_daily_shadow_mode_symbols() -> dict[BrokerName, str | None]:
+    """REL-081: real per-broker symbol resolution for the daily scheduled cycle -- Zerodha wants
+    a plain NSE tradingsymbol, Upstox wants an already-resolved instrument_key. `None` for a
+    broker with no real adapter configured, never a fabricated symbol. Moved here (unchanged)
+    from `scripts/run_daily_shadow_mode.py::_resolve_upstox_symbol`, the script's own real logic,
+    not reimplemented."""
+    zerodha_symbol: str | None = DAILY_SHADOW_MODE_SYMBOL
+    try:
+        build_zerodha_adapter()
+    except NoBrokerConfigured:
+        zerodha_symbol = None
+
+    upstox_symbol: str | None = None
+    try:
+        adapter = build_upstox_adapter()
+    except NoBrokerConfigured:
+        adapter = None
+    if adapter is not None:
+        async with adapter:
+            upstox_symbol = await adapter.search_instrument_key(DAILY_SHADOW_MODE_SYMBOL)
+
+    return {"zerodha": zerodha_symbol, "upstox": upstox_symbol}
+
+
 @router.post("/attempt", response_model=AttemptResponse, status_code=201)
 async def attempt(
     body: AttemptRequest, _user: User = Depends(_can_attempt_shadow_order)
 ) -> AttemptResponse:
-    try:
-        broker_adapter = _build_adapter(body.broker)
-    except NoBrokerConfigured as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
     order = OrderRequest(
         symbol=body.symbol,
         side=body.side,
@@ -87,34 +146,21 @@ async def attempt(
         trigger_price=body.trigger_price,
         validity=body.validity,
     )
-    shadow = ShadowModeAdapter(broker_adapter, broker_name=body.broker)
-    result = await shadow.attempt_order(order)
+    try:
+        with get_session() as session:
+            row = await run_one_shadow_mode_attempt(session, broker=body.broker, order=order)
+    except NoBrokerConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    attempted_at = datetime.now(UTC)
-    with get_session() as session:
-        row = ShadowModeAttempt(
-            broker=result.broker,
-            symbol=body.symbol,
-            side=body.side,
-            request_payload=result.request_payload,
-            outcome=result.outcome,
-            error_detail=result.error_detail,
-            latency_ms=result.latency_ms,
-            used_real_sandbox=result.used_real_sandbox,
-            attempted_at=attempted_at,
-        )
-        session.add(row)
-        session.commit()
-        session.refresh(row)
-        return AttemptResponse(
-            id=row.id,
-            broker=row.broker,
-            outcome=row.outcome,
-            error_detail=row.error_detail,
-            latency_ms=float(row.latency_ms),
-            used_real_sandbox=row.used_real_sandbox,
-            attempted_at=row.attempted_at,
-        )
+    return AttemptResponse(
+        id=row.id,
+        broker=row.broker,
+        outcome=row.outcome,
+        error_detail=row.error_detail,
+        latency_ms=float(row.latency_ms),
+        used_real_sandbox=row.used_real_sandbox,
+        attempted_at=row.attempted_at,
+    )
 
 
 class DailySummary(BaseModel):

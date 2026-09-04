@@ -23,6 +23,7 @@ from src.api.routers.orders import router as orders_router
 from src.api.routers.paper_trading import router as paper_trading_router
 from src.api.routers.portfolio import router as portfolio_router
 from src.api.routers.risk_limits import router as risk_limits_router
+from src.api.routers.scheduled_jobs import router as scheduled_jobs_router
 from src.api.routers.settings import router as settings_router
 from src.api.routers.shadow_mode import router as shadow_mode_router
 from src.api.routers.skills import router as skills_router
@@ -142,6 +143,7 @@ app.include_router(broker_config_router)
 app.include_router(memory_router)
 app.include_router(orders_router)
 app.include_router(tenants_router)
+app.include_router(scheduled_jobs_router)
 configure_tracing(app)
 
 

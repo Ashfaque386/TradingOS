@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING, Any
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from src.core.config import Settings, get_settings
 from src.models.audit import AuditLog
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
 
 _OBJECT_PREFIX = "audit-log/"
 _RETENTION = timedelta(days=365 * 7)
+_ARCHIVE_AGE = timedelta(hours=24)
 
 
 def _client(settings: Settings) -> S3Client:
@@ -150,3 +153,42 @@ def list_archived_ids(settings: Settings | None = None) -> set[int]:
             stem = obj["Key"][len(_OBJECT_PREFIX) : -len(".json")]
             ids.add(int(stem))
     return ids
+
+
+def archive_pending_rows(session: Session, *, settings: Settings | None = None) -> tuple[int, int]:
+    """REL-081: the real nightly archive cycle -- moved here (unchanged) from
+    `scripts/archive_audit_log.py::main()`'s own inline logic, so both that script (kept as a
+    manual/CLI escape hatch) and the in-process scheduler job
+    (`src/agents/scheduler.py::run_audit_archive_job`) call the exact same real logic. Ensures
+    the WORM bucket exists, finds every real `audit_log` row older than `_ARCHIVE_AGE` not yet
+    archived (idempotent by object existence, see module docstring), and archives each --one
+    row's real failure never stops the rest. Returns `(archived_count, failure_count)`, both
+    honest counts, never fabricated."""
+    ensure_bucket(settings)
+
+    # AuditLog.created_at is TIMESTAMP WITHOUT TIME ZONE, storing naive-UTC wall-clock values
+    # (see src/core/audit.py's _canonical_payload docstring for the same convention) -- comparing
+    # against a naive-UTC cutoff, not an aware one, keeps this query correct.
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - _ARCHIVE_AGE
+    rows = list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.created_at < cutoff).order_by(AuditLog.id.asc())
+        )
+    )
+    if not rows:
+        return (0, 0)
+
+    already_archived = list_archived_ids(settings)
+    pending = [row for row in rows if row.id not in already_archived]
+    if not pending:
+        return (0, 0)
+
+    archived_count = 0
+    failure_count = 0
+    for row in pending:
+        try:
+            archive_row(row, settings=settings)
+            archived_count += 1
+        except Exception:  # noqa: BLE001 -- one row's failure must not stop the rest
+            failure_count += 1
+    return (archived_count, failure_count)

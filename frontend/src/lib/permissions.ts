@@ -45,6 +45,23 @@ export const PERMISSIONS = {
   // sandboxed backtest) -- an equivalent-weight operational action. Submitting a suggestion
   // itself needs no permission key here: it's open to any authenticated user server-side.
   reviewStrategySuggestion: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
+  // src/api/routers/scheduled_jobs.py:_can_view_scheduled_jobs -- GET /scheduled-jobs* (REL-081).
+  // Broader than readAudit's SA+Auditor-only set: this is status/history visibility, not raw
+  // audit-log content.
+  viewScheduledJobs: [
+    ROLES.SystemAdministrator,
+    ROLES.ReadOnlyAuditor,
+    ROLES.PortfolioManager,
+    ROLES.RiskManager,
+  ],
+  // src/api/routers/scheduled_jobs.py:_can_manage_scheduled_jobs -- PUT /scheduled-jobs/{job_id}
+  // (REL-081). SA/PM/RM, matching manageAgentControl's own precedent -- a schedule edit is
+  // treated as an equivalent-weight operational action, not a compliance-tier one (revised from
+  // an initial SA-only gate after the user asked for it to be broadened).
+  manageScheduledJobs: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
+  // src/api/routers/scheduled_jobs.py:_can_manage_scheduled_jobs -- POST
+  // /scheduled-jobs/{job_id}/run-now (REL-081). Same gate as manageScheduledJobs.
+  runScheduledJobNow: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

@@ -7,63 +7,31 @@ alongside the existing Postgres trigger-based protection (src/models/audit.py, s
 is tracked by object existence in the bucket, never by a marker column on the row itself (that
 would itself require an UPDATE the Postgres trigger correctly refuses).
 
-Run nightly via the "TradingOS Nightly Audit Archive" Windows Scheduled Task
-(scripts/windows/archive_audit_log.ps1), the same wrapper pattern already used for
-scripts/backup_data_lake.py (REL-015 E15.5).
+REL-081: the real cutoff-query/archive loop now lives in
+src/core/audit_archive.py::archive_pending_rows (moved, not duplicated) -- this script is now a
+thin CLI wrapper over that same function, which is also what the in-process scheduler job
+(src/agents/scheduler.py::run_audit_archive_job) calls. Kept as a manual/CLI escape hatch for
+running an on-demand archive pass without going through the API:
+    docker exec tradingos-app python scripts/archive_audit_log.py
 """
 
 import sys
-from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
-
-from src.core.audit_archive import archive_row, ensure_bucket, list_archived_ids
+from src.core.audit_archive import archive_pending_rows
 from src.core.db import get_session
-from src.models.audit import AuditLog
-
-_ARCHIVE_AGE = timedelta(hours=24)
 
 
 def main() -> int:
-    ensure_bucket()
-
-    # AuditLog.created_at is TIMESTAMP WITHOUT TIME ZONE, storing naive-UTC wall-clock values
-    # (see src/core/audit.py's _canonical_payload docstring for the same convention) -- comparing
-    # against a naive-UTC cutoff, not an aware one, keeps this query correct.
-    cutoff = datetime.now(UTC).replace(tzinfo=None) - _ARCHIVE_AGE
-
     with get_session() as session:
-        rows = list(
-            session.scalars(
-                select(AuditLog).where(AuditLog.created_at < cutoff).order_by(AuditLog.id.asc())
-            )
-        )
+        archived_count, failure_count = archive_pending_rows(session)
 
-    if not rows:
-        print("No audit_log rows older than 24h -- nothing to archive.")
+    if archived_count == 0 and failure_count == 0:
+        print("No pending audit_log rows to archive.")
         return 0
 
-    already_archived = list_archived_ids()
-    pending = [row for row in rows if row.id not in already_archived]
-
-    if not pending:
-        print(f"All {len(rows)} eligible row(s) are already archived.")
-        return 0
-
-    failures: list[str] = []
-    archived_count = 0
-    for row in pending:
-        try:
-            archive_row(row)
-            archived_count += 1
-        except Exception as exc:  # noqa: BLE001 -- one row's failure must not stop the rest
-            failures.append(f"audit_log id={row.id}: {exc}")
-
-    print(f"Archived {archived_count} of {len(pending)} pending row(s) to the WORM tier.")
-    if failures:
-        print(f"\n{len(failures)} FAILURE(S):")
-        for failure in failures:
-            print(f"  - {failure}")
+    print(f"Archived {archived_count} pending row(s) to the WORM tier.")
+    if failure_count:
+        print(f"{failure_count} row(s) FAILED to archive -- see app logs for detail.")
         return 1
 
     print("All pending rows archived successfully.")

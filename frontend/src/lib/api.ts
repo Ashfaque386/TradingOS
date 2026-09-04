@@ -215,6 +215,34 @@ export interface AgentControlEntry {
   updated_at: string | null;
 }
 
+// REL-081: in-app Scheduled Jobs (src/api/routers/scheduled_jobs.py), replacing the 4 Windows
+// Scheduled Tasks -- `is_new` marks the 4 jobs that used to run externally, `next_run_time` is
+// `null` for a disabled job (nothing scheduled) rather than a stale timestamp.
+export interface ScheduledJobRunEntry {
+  id: string;
+  trigger_source: "cron" | "manual";
+  status: "Running" | "Completed" | "Failed" | "Skipped";
+  started_at: string;
+  ended_at: string | null;
+  result_summary: string | null;
+  triggered_by: string | null;
+}
+
+export interface ScheduledJobSummary {
+  job_id: string;
+  display_name: string;
+  description: string;
+  is_new: boolean;
+  cron_expression: string;
+  human_readable: string;
+  default_cron_expression: string;
+  enabled: boolean;
+  next_run_time: string | null;
+  last_run: ScheduledJobRunEntry | null;
+}
+
+export type ScheduledJobDetail = ScheduledJobSummary;
+
 export interface PromptSummary {
   agent_slug: string;
   prompt_id: string;
@@ -1265,4 +1293,18 @@ export const api = {
     postNoContent(`/api/v1/settings/llm-provider-keys/${provider}`, { api_key: apiKey }),
   deleteLlmProviderKey: (provider: LlmProviderId) =>
     del(`/api/v1/settings/llm-provider-keys/${provider}`),
+
+  scheduledJobsList: () => get<ScheduledJobSummary[]>("/api/v1/scheduled-jobs"),
+  scheduledJobDetail: (jobId: string) =>
+    get<ScheduledJobDetail>(`/api/v1/scheduled-jobs/${jobId}`),
+  scheduledJobHistory: (jobId: string, limit: number, offset: number) =>
+    get<ScheduledJobRunEntry[]>(
+      `/api/v1/scheduled-jobs/${jobId}/history${toQuery({ limit, offset })}`,
+    ),
+  updateScheduledJobConfig: (
+    jobId: string,
+    body: { cron_expression?: string; enabled?: boolean },
+  ) => put<ScheduledJobSummary>(`/api/v1/scheduled-jobs/${jobId}`, body),
+  runScheduledJobNow: (jobId: string) =>
+    post<{ job_run_id: string; status: string }>(`/api/v1/scheduled-jobs/${jobId}/run-now`),
 };

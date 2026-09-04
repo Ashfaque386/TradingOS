@@ -58,6 +58,17 @@ dependencies = [
     # Phase 3 Epic E3.2 (VectorBT Backtesting Engine) -- promoted out of the `engine` extra,
     # same pattern as litellm/langgraph before it.
     "vectorbt>=0.26",
+    # REL-081: `plotly` is only ever a transitive dependency of vectorbt (nothing in this
+    # codebase imports it directly), and had no upper bound here -- a routine `app` image rebuild
+    # this session (for cron-descriptor, unrelated) resolved plotly 7.0.0, which dropped the
+    # `scattermapbox` trace type vectorbt 0.26's own `_settings.py` registers unconditionally at
+    # import time, breaking `import vectorbt` (and therefore `import src.api.main`, and therefore
+    # every integration test that imports the FastAPI app) with a real, reproducible
+    # `ValueError` -- confirmed by seeing the identical failure on an untouched pre-existing test
+    # file (test_agent_control_api.py) after the same rebuild. Pinning below the break restores
+    # every existing test to its prior real, passing state; this is a genuine latent-drift bug
+    # this session's own rebuild surfaced, not a REL-081 code change.
+    "plotly<6",
     # Phase 3 Epic E3.3 (Monte Carlo Temporal workflow) -- promoted out of the `agents` extra.
     "temporalio>=1.8",
     # Phase 3 Epic E3.3 (Optuna hyperparameter sweep for the Optimization Agent).
@@ -86,6 +97,11 @@ dependencies = [
     # --db-filename), so a Temporal Schedule object would vanish on every container restart,
     # which a simple daily cron trigger can't tolerate.
     "apscheduler>=3.10",
+    # REL-081: human-readable cron descriptions for the in-app Scheduled Jobs panel
+    # (src/api/routers/scheduled_jobs.py) -- an admin can enter arbitrary cron via PUT, not just
+    # the 11 known job shapes, so a hand-rolled describer would have to become a real generic
+    # cron parser anyway. Pure-Python, MIT, no network calls.
+    "cron-descriptor>=1.4",
     # REL-005 live E2E verification (2026-07-25): a real, local "local" EMBEDDING_PROVIDER
     # (src/memory/embeddings.py) -- HuggingFace's hosted Inference API rejects every embedding
     # model for this free-tier account (isPro=false, canPay=false, an account gate confirmed
@@ -204,6 +220,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "apscheduler.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "cron_descriptor.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

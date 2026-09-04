@@ -131,3 +131,19 @@ def run_divergence_check(
         archived_rows_checked=checked,
         diverged_ids=diverged_ids,
     )
+
+
+def format_divergence_alert(report: ChainDivergenceReport) -> str:
+    """REL-081: the real alert text -- moved here (unchanged) from
+    `scripts/verify_audit_chain.py::_format_alert` so both that script (kept as a manual/CLI
+    escape hatch) and the in-process scheduler job
+    (`src/agents/scheduler.py::run_audit_chain_verification_job`) send the identical real message
+    to `src.core.ops_alerts.send_ops_alert`. Only meaningful when `report.ok` is `False`."""
+    lines = ["TradingOS AUDIT CHAIN DIVERGENCE DETECTED (SEC-040)"]
+    if not report.live.valid:
+        lines.append(f"- Live table chain broken at id={report.live.first_broken_id}")
+    if not report.archive_valid:
+        lines.append(f"- WORM archive self-consistency broken at id(s)={report.archive_broken_ids}")
+    if report.diverged_ids:
+        lines.append(f"- Live/archive entry_hash divergence at id(s)={report.diverged_ids}")
+    return "\n".join(lines)

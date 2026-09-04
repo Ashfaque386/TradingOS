@@ -14,6 +14,7 @@ from src.models.ml import MLModel
 from src.models.paper_trading import PaperTrade
 from src.models.refresh_token import RefreshToken
 from src.models.risk_limit_change_request import RiskLimitChangeRequest
+from src.models.scheduled_job import ScheduledJobConfig, ScheduledJobRun
 from src.models.shadow_mode import ShadowModeAttempt
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategyVersion
@@ -51,4 +52,6 @@ __all__ = [
     "Tenant",
     "Instrument",
     "MarketDataProvenance",
+    "ScheduledJobConfig",
+    "ScheduledJobRun",
 ]

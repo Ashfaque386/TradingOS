@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Bell, Palette, Plug } from "lucide-react";
+import { Bell, CalendarClock, Palette, Plug } from "lucide-react";
 import { api } from "@/lib/api";
 import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { NotificationChannels } from "@/components/settings/notification-channel
 import { BrokerCredentialsForm } from "@/components/settings/broker-credentials-form";
 import { LlmProviderKeyForm } from "@/components/settings/llm-provider-key-form";
 import { RiskLimitsPanel } from "@/components/settings/risk-limits-panel";
+import { ScheduledJobsPanel } from "@/components/settings/scheduled-jobs-panel";
 import type { LucideIcon } from "lucide-react";
 
 function SectionHeading({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
@@ -76,6 +77,19 @@ export default function SettingsPage() {
             anywhere in this codebase that reads a stored credential back out to an API client.
           </p>
           <BrokerCredentialsForm />
+        </Card>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <SectionHeading icon={CalendarClock} label="Automation" />
+        <Card eyebrow="Automation" title="Scheduled Jobs">
+          <p className="mb-3 text-[11px] leading-relaxed text-text-faint">
+            Every recurring job this app runs, in one place — including the 4 that used to be
+            external Windows Scheduled Tasks (Shadow Mode, Nightly Audit Archive, Audit Chain
+            Verification, Nightly Backup), now running in-process with real schedule, history,
+            and status, editable without a container restart.
+          </p>
+          <ScheduledJobsPanel />
         </Card>
       </section>
 
