@@ -32,3 +32,20 @@ ui = true
 
 # The default -- real, initial storage location this data is looked up from, not overridden.
 api_addr = "http://vault:8200"
+
+# Found and fixed investigating a real, reproduced CI-only hang: Vault's default (mlock enabled)
+# requires the `mlock` syscall to succeed, which needs both the `IPC_LOCK` capability
+# (docker-compose.yml's `vault` service already grants this) AND a sufficient `RLIMIT_MEMLOCK`
+# ulimit -- GitHub-hosted `ubuntu-latest` runners default to a low one (64KB), which this local
+# dev host's own Docker Desktop VM does not. Reproduced directly: `docker run --ulimit
+# memlock=65536:65536 --cap-add=IPC_LOCK ... vault server` fails immediately with "Error
+# initializing core: Failed to lock memory: cannot allocate memory" -- exactly Vault's own
+# documented error for this condition, and exactly why every recent CI run silently hung forever
+# on "Wait for Vault" (Vault's HTTP listener never opened at all, so nothing was ever there to
+# heal or unseal). Confirmed the fix the same way: the identical constrained-ulimit repro starts
+# cleanly with this line added. Accepted tradeoff, stated plainly (same class already accepted
+# for the unseal key living in a plaintext file, see scripts/vault_auto_unseal.py's own module
+# docstring): Vault's own protection against ITS OWN memory being swapped to disk is disabled --
+# proportionate for this project's single-host, non-adversarial threat model (Phase 1 ADR 10),
+# not a new category of risk this single-operator environment doesn't already accept elsewhere.
+disable_mlock = true
