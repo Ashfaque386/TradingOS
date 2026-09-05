@@ -33,7 +33,14 @@ jobs:
         run: docker compose build app
 
       - name: Start dependencies
-        run: docker compose up -d postgres qdrant redis temporal vault
+        # vault-unsealer is required, not optional: since REL-015 `vault` runs in real server
+        # mode (file storage, docker-compose.yml's own `vault` service) and starts sealed on
+        # every fresh container -- only `vault-unsealer` (scripts/vault_auto_unseal.py) performs
+        # the real init/unseal. Omitting it here left Vault's own `/v1/sys/health` returning
+        # 501/503 (uninitialized/sealed) forever, hanging the "Wait for Vault" step below
+        # indefinitely -- confirmed as the real, reproducible root cause of every recent CI run
+        # showing `conclusion: cancelled` (REL-078 through REL-082), not a flaky runner.
+        run: docker compose up -d postgres qdrant redis temporal vault vault-unsealer
 
       - name: Wait for Postgres
         run: |
@@ -167,7 +174,10 @@ jobs:
         run: docker compose build app frontend
 
       - name: Start Vault and Postgres first
-        run: docker compose up -d postgres qdrant redis temporal vault
+        # vault-unsealer required -- see lint-type-test job's own "Start dependencies" step for
+        # the full real root-cause explanation (Vault starts sealed in real server mode since
+        # REL-015; without this, "Wait for Vault" below hangs forever).
+        run: docker compose up -d postgres qdrant redis temporal vault vault-unsealer
 
       - name: Wait for Postgres
         run: |
