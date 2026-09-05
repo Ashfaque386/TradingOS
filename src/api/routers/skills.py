@@ -23,13 +23,14 @@ instead of ever reaching `list_agent_skill_map`) -- a real bug found and fixed d
 epic's own implementation, not a hypothetical one.
 """
 
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from src.agents.tools.registry import SkillNotFoundError, get_skill_registry
@@ -191,3 +192,34 @@ def disable_skill(name: str, _user: User = Depends(_admin_only)) -> SkillSummary
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     with get_session() as session:
         return _to_summary(_get_skill_row_or_404(session, name))
+
+
+@router.delete("/{skill_id}", status_code=204)
+def delete_skill(skill_id: uuid.UUID, _user: User = Depends(_admin_only)) -> None:
+    """API-031. Implemented as a hard-disable, not a true DB-row delete: `SkillRegistry`'s
+    catalog source of truth is the hardcoded `ALL_SKILLS` list in code
+    (src/agents/tools/skills.py), re-registered unconditionally by `_bootstrap_default_skills` on
+    every process start -- an in-memory `unregister()` alone would silently un-delete itself on
+    the next restart, and the code has no mechanism to "forget" a skill exists. This instead: (1)
+    purges every real `AgentSkillMap` grant referencing this skill (a plain FK with no cascade,
+    so a raw DB delete of the `Skill` row would otherwise fail with a constraint violation), (2)
+    marks the DB row disabled (the same durable, DB-backed `is_enabled=False` state every other
+    read endpoint here -- GET /skills, GET /{name} -- already reports from), and (3) removes it
+    from the *current* process's in-memory registry via `unregister()` so it stops being
+    executable immediately, not just on the next restart. Known, pre-existing, shared limitation
+    (not introduced by this endpoint): a literal process restart re-bootstraps every skill in
+    `ALL_SKILLS` at `enabled=True` in-memory regardless of this DB state, same gap `POST
+    .../disable` already has -- the DB row (what every real read endpoint reports) stays
+    correctly disabled either way."""
+    with get_session() as session:
+        skill = session.get(Skill, skill_id)
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        session.execute(delete(AgentSkillMap).where(AgentSkillMap.skill_id == skill_id))
+        skill.is_enabled = False
+        session.commit()
+        name = skill.name
+    # The DB-side delete above already succeeded either way -- unregister() failing here
+    # (e.g. the skill was never in this process's registry) is not a real error.
+    with contextlib.suppress(Exception):
+        get_skill_registry().unregister(name)

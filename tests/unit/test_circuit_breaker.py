@@ -90,6 +90,15 @@ def _server_error(status_code: int = 503) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("server error", request=request, response=response)
 
 
+def _no_alert_transport() -> httpx.MockTransport:
+    """Every test below that trips the circuit breaker also fires a real `_alert()` call, which
+    now sends via `src.core.ops_alerts.send_ops_alert` (Phase 4 E4.4) -- this dev `.env` has real
+    Slack/Telegram/Discord webhook credentials configured, so without this mock a plain unit-test
+    run would post real messages to those real channels. Matches the `httpx.MockTransport`
+    convention already established in test_ops_alerts.py."""
+    return httpx.MockTransport(lambda request: httpx.Response(202))
+
+
 @pytest.mark.asyncio
 async def test_closed_circuit_routes_to_primary_on_success():
     primary = FakeBrokerAdapter([_dummy_response("P1")])
@@ -134,7 +143,12 @@ async def test_a_non_5xx_error_never_trips_the_circuit():
 async def test_consecutive_5xx_at_threshold_opens_circuit_and_fails_over():
     primary = FakeBrokerAdapter([_server_error(), _server_error(), _server_error()])
     fallback = FakeBrokerAdapter([_dummy_response("F1")])
-    breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback, failure_threshold=3)
+    breaker = BrokerCircuitBreaker(
+        primary=primary,
+        fallback=fallback,
+        failure_threshold=3,
+        alert_transport=_no_alert_transport(),
+    )
 
     with pytest.raises(httpx.HTTPStatusError):
         await breaker.place_order(_order())
@@ -150,7 +164,9 @@ async def test_consecutive_5xx_at_threshold_opens_circuit_and_fails_over():
 @pytest.mark.asyncio
 async def test_open_circuit_with_no_fallback_queues_the_order_and_raises_admin_alert():
     primary = FakeBrokerAdapter([_server_error()] * 3)
-    breaker = BrokerCircuitBreaker(primary=primary, fallback=None, failure_threshold=3)
+    breaker = BrokerCircuitBreaker(
+        primary=primary, fallback=None, failure_threshold=3, alert_transport=_no_alert_transport()
+    )
 
     with pytest.raises(httpx.HTTPStatusError):
         await breaker.place_order(_order())
@@ -168,7 +184,12 @@ async def test_open_circuit_with_no_fallback_queues_the_order_and_raises_admin_a
 async def test_open_circuit_routes_subsequent_orders_straight_to_fallback():
     primary = FakeBrokerAdapter([_server_error(), _server_error(), _server_error()])
     fallback = FakeBrokerAdapter([_dummy_response("F1"), _dummy_response("F2")])
-    breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback, failure_threshold=3)
+    breaker = BrokerCircuitBreaker(
+        primary=primary,
+        fallback=fallback,
+        failure_threshold=3,
+        alert_transport=_no_alert_transport(),
+    )
 
     for _ in range(3):
         with contextlib.suppress(httpx.HTTPStatusError):
@@ -187,7 +208,10 @@ async def test_half_open_after_cooldown_recovers_to_closed_on_success():
         [_server_error(), _server_error(), _server_error(), _dummy_response("RECOVERED")]
     )
     breaker = BrokerCircuitBreaker(
-        primary=primary, failure_threshold=3, cooldown=timedelta(milliseconds=10)
+        primary=primary,
+        failure_threshold=3,
+        cooldown=timedelta(milliseconds=10),
+        alert_transport=_no_alert_transport(),
     )
 
     for _ in range(3):
@@ -208,7 +232,10 @@ async def test_half_open_probe_failure_reopens_immediately_without_a_fallback():
         [_server_error(), _server_error(), _server_error(), _server_error()]
     )
     breaker = BrokerCircuitBreaker(
-        primary=primary, failure_threshold=3, cooldown=timedelta(milliseconds=10)
+        primary=primary,
+        failure_threshold=3,
+        cooldown=timedelta(milliseconds=10),
+        alert_transport=_no_alert_transport(),
     )
 
     for _ in range(3):

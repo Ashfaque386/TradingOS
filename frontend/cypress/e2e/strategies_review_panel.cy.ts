@@ -78,6 +78,36 @@ function fetchFixtureStrategy(name: string = FIXTURE_NAME): Cypress.Chainable<Fi
   );
 }
 
+type LatestBacktestVerdict = {
+  evaluation_verdict: string | null;
+  deployment_recommendation: string | null;
+};
+
+/** Bug fix (found 2026-09-05): this test used to hardcode "Evaluation: Pass"/"Deployment:
+ * Approve", assuming the fixture's most recent backtest always carries a real deployment
+ * recommendation. It doesn't -- REL-048/049's own suggestion-regeneration pipeline
+ * (build_suggestion_regeneration_graph) genuinely terminates at the evaluator and never runs the
+ * deployment node, so any time this spec's own "AI review resolves a suggestion" test has already
+ * run against this shared, non-reset fixture (in an earlier `cypress run`), the newest backtest
+ * row has evaluation_verdict set but deployment_recommendation still null -- which the real
+ * VerdictPanel correctly renders as "Not yet evaluated" (verdict-panel.tsx), not "Approve". Reads
+ * the fixture's real latest backtest verdict first, matching this file's own established
+ * read-live-state-first pattern, instead of assuming a fixed outcome. */
+function fetchFixtureLatestBacktestVerdict(id: string): Cypress.Chainable<LatestBacktestVerdict> {
+  return loginViaApi(Cypress.env("adminEmail"), Cypress.env("adminPassword")).then((token) =>
+    cy
+      .request({
+        url: `${API_URL}/api/v1/strategies/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .its("body")
+      .then((body: { backtests: LatestBacktestVerdict[] }) => {
+        expect(body.backtests, `${id} to have at least one real backtest`).to.have.length.greaterThan(0);
+        return body.backtests[0];
+      }),
+  );
+}
+
 describe("Strategies page (REL-044/045/046)", () => {
   it("unauthenticated visitors are redirected to login", () => {
     cy.visit("/strategies");
@@ -143,17 +173,25 @@ describe("Strategies page (REL-044/045/046)", () => {
   });
 
   it("the fixture's real backtest renders VerdictPanel/FullMetricGrid with real content", () => {
-    loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
-    cy.visit("/strategies");
-    cy.contains(FIXTURE_NAME).click();
+    fetchFixtureStrategy().then((fixture) => {
+      fetchFixtureLatestBacktestVerdict(fixture.id).then((verdict) => {
+        loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
+        cy.visit("/strategies");
+        cy.contains(FIXTURE_NAME).click();
 
-    cy.contains("Sandbox").parents(".rounded-card").within(() => {
-      cy.contains(/Evaluation: Pass/).should("be.visible");
-      cy.contains(/Deployment: Approve/).should("be.visible");
-      cy.contains("Sortino").should("be.visible");
-      cy.contains("MC p95 DD").should("be.visible");
-      // Bug fix: date_from/date_to/initial_capital previously weren't shown anywhere.
-      cy.contains(/Window: .+ → .+ · Capital: ₹/).should("be.visible");
+        cy.contains("Sandbox").parents(".rounded-card").within(() => {
+          cy.contains(`Evaluation: ${verdict.evaluation_verdict ?? "Not yet evaluated"}`).should(
+            "be.visible",
+          );
+          cy.contains(
+            `Deployment: ${verdict.deployment_recommendation ?? "Not yet evaluated"}`,
+          ).should("be.visible");
+          cy.contains("Sortino").should("be.visible");
+          cy.contains("MC p95 DD").should("be.visible");
+          // Bug fix: date_from/date_to/initial_capital previously weren't shown anywhere.
+          cy.contains(/Window: .+ → .+ · Capital: ₹/).should("be.visible");
+        });
+      });
     });
   });
 
@@ -206,7 +244,12 @@ describe("Strategies page (REL-044/045/046)", () => {
         // generous headroom above that real budget for load variance (confirmed empirically:
         // a real run under concurrent test-suite load took ~5 min end-to-end for this job).
         cy.contains("button", "Running…", { timeout: 240_000 }).should("not.exist");
-        cy.get(".flex.flex-wrap.gap-1\\.5 > button", { timeout: 15_000 }).should(
+        // Bug fix (found 2026-09-05): 15s was occasionally too tight for the invalidated
+        // detailQuery's own refetch-and-rerender round trip to land under concurrent test-suite
+        // load (this assertion is about React Query's refetch latency after "Running…"
+        // disappears, not the backtest itself, which has already finished by this point) --
+        // widened to the same 30s margin used elsewhere on this page for a plain data refresh.
+        cy.get(".flex.flex-wrap.gap-1\\.5 > button", { timeout: 30_000 }).should(
           "have.length",
           countBefore + 1,
         );

@@ -1,7 +1,7 @@
-# Wrapper for scripts/verify_audit_chain.py, matching archive_audit_log.ps1's pattern.
-#
-# REL-031 (SEC-040): registered as the "TradingOS Audit Chain Verification" Windows Scheduled
-# Task. Can still be run manually for an on-demand check:
+# DEPRECATED (2026-09-05): the "TradingOS Audit Chain Verification" Windows Scheduled Task this
+# wrapper was registered for (REL-031, SEC-040) has been unregistered -- REL-081 moved this job
+# to the in-app APScheduler (src/agents/scheduler.py, AUDIT_CHAIN_VERIFICATION_JOB_ID), which is
+# now the sole live path. This script is kept only as a manual/CLI fallback:
 #   powershell -File scripts\windows\verify_audit_chain.ps1
 #
 # Assumes tradingos-app is already running (docker compose up). Scheduled Tasks capture no

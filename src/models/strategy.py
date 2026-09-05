@@ -91,6 +91,14 @@ class StrategyVersion(Base, UUIDPKMixin, TimestampMixin):
     strategy_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=False
     )
+    # API-007/008: the one artifact kind the Live Canvas needs that previously had no durable
+    # link back to the AgentRun/graph_thread_id that produced it (BacktestResult.agent_run_id and
+    # AgentLog.agent_run_id both already existed) -- nullable, not backfilled (a row created
+    # before this migration genuinely has no real run to attribute), same honest-None convention
+    # already used throughout this model.
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_runs.id")
+    )
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
     python_code: Mapped[str] = mapped_column(Text, nullable=False)
     validation_status: Mapped[str] = mapped_column(String(20), default="Pending")

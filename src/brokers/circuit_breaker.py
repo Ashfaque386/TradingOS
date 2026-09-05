@@ -58,6 +58,11 @@ class BrokerCircuitBreaker(BrokerAdapter):
     fallback: BrokerAdapter | None = None
     failure_threshold: int = 3  # "consecutive 5XX errors" per Phase_6 §6
     cooldown: timedelta = timedelta(minutes=1)
+    # Test-only, same convention as ops_alerts.py/notifiers.py's own `transport` params -- lets a
+    # test inject an httpx.MockTransport so `_alert()`'s real outbound send (Slack/Telegram/
+    # Discord/PagerDuty, all genuinely configured in this dev .env) never actually fires during a
+    # plain unit-test run. None (the default) means real network, correct for production.
+    alert_transport: httpx.AsyncBaseTransport | None = None
 
     _state: CircuitState = field(default="CLOSED", init=False)
     _consecutive_failures: int = field(default=0, init=False)
@@ -163,13 +168,13 @@ class BrokerCircuitBreaker(BrokerAdapter):
         self, order: OrderRequest, *, reason: str
     ) -> OrderResponse:
         if self.fallback is not None:
-            self._alert(f"Circuit OPEN ({reason}) -- failing over order for {order.symbol}.")
+            await self._alert(f"Circuit OPEN ({reason}) -- failing over order for {order.symbol}.")
             return await self.fallback.place_order(order)
 
         self.queued_orders.append(
             QueuedOrder(order=order, queued_at=datetime.now(UTC), reason=reason)
         )
-        self._alert(
+        await self._alert(
             f"Order for {order.symbol} queued ({reason}) -- primary down, no fallback available."
         )
         raise AdminAlert(
@@ -177,6 +182,16 @@ class BrokerCircuitBreaker(BrokerAdapter):
             f"{order.symbol} queued for manual review, not placed."
         )
 
-    def _alert(self, message: str) -> None:
-        # In-process alert log for now; Phase 4 E4.4 wires this to PagerDuty/Slack.
+    async def _alert(self, message: str) -> None:
+        """Phase 4 E4.4: real outbound delivery via src.core.ops_alerts' Slack/Telegram/Discord/
+        PagerDuty fan-out, not just an in-process log -- `self.alerts` is kept too (every existing
+        caller/test already reads it) since it's the one place this breaker's own alert history
+        is inspectable without a live channel. `send_ops_alert` never raises (best-effort
+        fan-out), so a delivery failure here can't block the real order-routing decision this
+        method is called from."""
         self.alerts.append(message)
+        from src.core.ops_alerts import send_ops_alert
+
+        await send_ops_alert(
+            f"[TradingOS circuit breaker] {message}", transport=self.alert_transport
+        )

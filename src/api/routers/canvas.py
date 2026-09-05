@@ -113,3 +113,112 @@ def get_canvas_state() -> CanvasStateResponse:
             latest_backtest=latest_backtest,
             latest_agent_activity=latest_activity,
         )
+
+
+class SessionArtifacts(BaseModel):
+    """API-007/008. `session_id` is AgentRun.graph_thread_id -- the UUID minted fresh every time
+    a graph run is triggered/retried (src/api/routers/agents.py), already returned to the
+    frontend as `thread_id` in TriggerResponse/AgentRunSummary. Full history (not just the
+    latest), unlike GET /state above -- this answers "every real artifact this specific research
+    session produced," not "the single most recent artifact across every session."
+    """
+
+    session_id: str
+    code_versions: list[LatestCode]
+    backtests: list[LatestBacktest]
+    agent_activity: list[LatestAgentActivity]
+
+
+@router.get("/{session_id}/artifacts", response_model=SessionArtifacts)
+def get_session_artifacts(session_id: str) -> SessionArtifacts:
+    """Resolves `session_id` to every real AgentRun row sharing that `graph_thread_id` (the root
+    run and its per-node children alike), then joins StrategyVersion/BacktestResult/AgentLog via
+    their own `agent_run_id` FKs -- ordered history, not GET /state's `.first()`-only snapshot.
+    POST (an agent pushing a new artifact) is deliberately not built here: every real artifact
+    this codebase produces already gets persisted by `_persist_strategy_progress`/
+    `_persist_suggestion_regeneration` at the moment its owning graph node completes -- there is
+    no confirmed use case for a second, separate push path."""
+    with get_session() as session:
+        run_ids = list(
+            session.scalars(select(AgentRun.id).where(AgentRun.graph_thread_id == session_id))
+        )
+        if not run_ids:
+            return SessionArtifacts(
+                session_id=session_id, code_versions=[], backtests=[], agent_activity=[]
+            )
+
+        versions = list(
+            session.scalars(
+                select(StrategyVersion)
+                .where(StrategyVersion.agent_run_id.in_(run_ids))
+                .order_by(StrategyVersion.created_at.desc())
+            )
+        )
+        code_versions = []
+        for version in versions:
+            strategy = session.get(Strategy, version.strategy_id)
+            code_versions.append(
+                LatestCode(
+                    strategy_id=version.strategy_id,
+                    strategy_name=strategy.name if strategy else "(deleted strategy)",
+                    version_no=version.version_no,
+                    python_code=version.python_code,
+                    validation_status=version.validation_status,
+                    created_at=version.created_at,
+                )
+            )
+
+        backtest_rows = list(
+            session.scalars(
+                select(BacktestResult)
+                .where(BacktestResult.agent_run_id.in_(run_ids))
+                .order_by(BacktestResult.created_at.desc())
+            )
+        )
+        backtests = []
+        for backtest in backtest_rows:
+            backtest_version = session.get(StrategyVersion, backtest.strategy_version_id)
+            strategy = (
+                session.get(Strategy, backtest_version.strategy_id)
+                if backtest_version is not None
+                else None
+            )
+            backtests.append(
+                LatestBacktest(
+                    backtest_id=backtest.id,
+                    strategy_id=(
+                        backtest_version.strategy_id if backtest_version else uuid.UUID(int=0)
+                    ),
+                    strategy_name=strategy.name if strategy else "(unknown strategy)",
+                    sharpe_ratio=backtest.sharpe_ratio,
+                    max_drawdown=backtest.max_drawdown,
+                    total_trades=backtest.total_trades,
+                    has_equity_curve=bool(backtest.equity_curve_path),
+                    created_at=backtest.created_at,
+                )
+            )
+
+        logs = list(
+            session.scalars(
+                select(AgentLog)
+                .where(AgentLog.agent_run_id.in_(run_ids))
+                .order_by(AgentLog.created_at.desc())
+            )
+        )
+        agent_activity = []
+        for log in logs:
+            run = session.get(AgentRun, log.agent_run_id)
+            agent_activity.append(
+                LatestAgentActivity(
+                    node=run.agent_name if run else "unknown",
+                    message=log.message,
+                    created_at=log.created_at,
+                )
+            )
+
+        return SessionArtifacts(
+            session_id=session_id,
+            code_versions=code_versions,
+            backtests=backtests,
+            agent_activity=agent_activity,
+        )

@@ -65,6 +65,7 @@ p, SystemAdministrator, /api/v1/skills/{name}/enable, POST
 p, SystemAdministrator, /api/v1/skills/{name}/disable, POST
 p, SystemAdministrator, /api/v1/skills/agent-map, POST
 p, SystemAdministrator, /api/v1/skills/agent-map/{grant_id}, DELETE
+p, SystemAdministrator, /api/v1/skills/{skill_id}, DELETE
 p, SystemAdministrator, /api/v1/portfolio/allocation-recommendation/trigger, POST
 p, PortfolioManager, /api/v1/portfolio/allocation-recommendation/trigger, POST
 p, SystemAdministrator, /api/v1/portfolio/allocation-recommendation/{recommendation_id}/accept, POST

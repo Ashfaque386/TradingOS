@@ -458,6 +458,10 @@ services:
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
       DISCORD_ALERT_WEBHOOK_URL: ${DISCORD_ALERT_WEBHOOK_URL:-}
+      # Phase 4 E4.4: real PagerDuty Events API v2 integration key for the same downtime alert --
+      # adds paging/escalation-policy semantics (on-call rotation, ack/resolve) the other three
+      # channels don't have. Same .env-gitignored / $__env{...} pattern as the others above.
+      PAGERDUTY_INTEGRATION_KEY: ${PAGERDUTY_INTEGRATION_KEY:-}
     volumes:
       # REL-029: mounted read-only at -src, not directly at /etc/grafana/provisioning --
       # provisioning-entrypoint.sh copies it into a writable path and patches the one field

@@ -49,3 +49,19 @@ contactPoints:
           title: '{{ template "default.title" . }}'
           message: '{{ template "default.message" . }}'
         disableResolveMessage: false
+      # Phase 4 E4.4: real PagerDuty Events API v2 integration -- adds paging/escalation-policy
+      # semantics (on-call rotation, ack/resolve, escalation after N minutes) the other three
+      # channels don't have. `integrationKey`/`severity` field names are Grafana's own real
+      # receiver-settings schema (github.com/grafana/alerting/receivers/pagerduty/config.go),
+      # confirmed before writing this, not guessed -- same discipline as the other receivers
+      # above. `PAGERDUTY_INTEGRATION_KEY` empty means this receiver silently no-ops (an empty
+      # integrationKey is rejected by PagerDuty's own API as a real send-time failure, not a
+      # provisioning-time one), matching this file's own already-established optional-channel
+      # convention -- no receiver here is required to be configured for Grafana to start.
+      - uid: pagerduty-downtime-alerts
+        type: pagerduty
+        settings:
+          integrationKey: $__env{PAGERDUTY_INTEGRATION_KEY}
+          severity: critical
+          summary: '{{ template "default.message" . }}'
+        disableResolveMessage: false

@@ -80,6 +80,7 @@ SHADOW_MODE_DAILY_CYCLE_JOB_ID = "scheduler_shadow_mode_daily_cycle"
 AUDIT_ARCHIVE_JOB_ID = "scheduler_audit_archive"
 AUDIT_CHAIN_VERIFICATION_JOB_ID = "scheduler_audit_chain_verification"
 DATA_LAKE_BACKUP_JOB_ID = "scheduler_data_lake_backup"
+DUCKDB_CATALOG_REFRESH_JOB_ID = "scheduler_duckdb_catalog_refresh"
 # REL-010 E10.7: no intraday-ingestion job is wired here -- Upstox's real historical-candle
 # endpoint 404s in sandbox mode (confirmed empirically, see
 # src/brokers/upstox_adapter.py::get_historical_candles's own docstring) and this dev
@@ -412,6 +413,22 @@ def run_data_lake_backup_job() -> JobResult:
         return JobResult("Failed", str(exc))
 
 
+def run_duckdb_catalog_refresh_job() -> JobResult:
+    """DB-022: keeps the DuckDB catalog views (src/data/datalake/catalog.py) matching whatever
+    partitions currently exist in the lake -- `CREATE OR REPLACE VIEW` is idempotent, so running
+    this on every tick even when nothing changed since the last run is safe and cheap."""
+    from src.data.datalake.catalog import refresh_catalog_views
+
+    try:
+        result = refresh_catalog_views(get_settings().data_lake_root)
+        summary = f"Refreshed {', '.join(result.views_created)} in {result.catalog_path}"
+        logger.info("scheduler_duckdb_catalog_refresh_completed", catalog_path=result.catalog_path)
+        return JobResult("Completed", summary)
+    except Exception as exc:  # noqa: BLE001 - a failed refresh must not crash the app
+        logger.warning("scheduler_duckdb_catalog_refresh_failed", error=str(exc))
+        return JobResult("Failed", str(exc))
+
+
 # --- REL-081: the real, editable schedule registry + execution tracking ------------------------
 
 
@@ -525,6 +542,16 @@ JOB_REGISTRY: dict[str, ScheduledJobSpec] = {
         "real Parquet snapshot with SHA-256 + DuckDB checksum validation (Phase 1 E1.3).",
         default_cron="0 23 * * *",
         func=run_data_lake_backup_job,
+        is_async=False,
+    ),
+    DUCKDB_CATALOG_REFRESH_JOB_ID: ScheduledJobSpec(
+        job_id=DUCKDB_CATALOG_REFRESH_JOB_ID,
+        display_name="DuckDB Catalog View Refresh",
+        description="DB-022: keeps the persistent DuckDB catalog's ohlcv_daily/ohlcv_intraday "
+        "views (src/data/datalake/catalog.py) matching the lake's current real partitions, so any "
+        "DuckDB client can query them directly without going through the DataLake Python class.",
+        default_cron="30 23 * * *",
+        func=run_duckdb_catalog_refresh_job,
         is_async=False,
     ),
 }

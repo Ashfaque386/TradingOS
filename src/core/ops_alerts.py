@@ -45,6 +45,34 @@ async def send_slack_webhook_alert(
         response.raise_for_status()
 
 
+async def send_pagerduty_alert(
+    *,
+    routing_key: str,
+    summary: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
+    """`POST` to PagerDuty's real Events API v2 --
+    https://developer.pagerduty.com/api-reference/368ae3d938c9e-send-an-event-to-pager-duty.
+    `dedup_key` is deliberately omitted: every call here is a fresh, independent alert (this
+    codebase has no ongoing-incident-lifecycle tracking to key a stable dedup_key off of), so
+    each fires as its own new PagerDuty incident rather than updating/resolving a prior one.
+    `transport` is test-only, see `notifiers.send_telegram_message`."""
+    async with httpx.AsyncClient(timeout=_SEND_TIMEOUT_SECONDS, transport=transport) as client:
+        response = await client.post(
+            "https://events.pagerduty.com/v2/enqueue",
+            json={
+                "routing_key": routing_key,
+                "event_action": "trigger",
+                "payload": {
+                    "summary": summary,
+                    "source": "tradingos",
+                    "severity": "critical",
+                },
+            },
+        )
+        response.raise_for_status()
+
+
 async def send_ops_alert(
     message: str,
     *,
@@ -87,5 +115,13 @@ async def send_ops_alert(
             )
         except Exception:  # noqa: BLE001
             failures.append("slack")
+
+    if settings.pagerduty_routing_key:
+        try:
+            await send_pagerduty_alert(
+                routing_key=settings.pagerduty_routing_key, summary=message, transport=transport
+            )
+        except Exception:  # noqa: BLE001
+            failures.append("pagerduty")
 
     return failures

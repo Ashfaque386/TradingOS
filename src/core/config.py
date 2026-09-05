@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     telegram_alert_bot_token: str | None = None
     telegram_alert_chat_id: str | None = None
     discord_alert_webhook_url: str | None = None
+    # PagerDuty Events API v2 routing key (an Events API v2 integration's own key, not an API
+    # token) -- the real substitute-channel gap this closes: Slack/Telegram/Discord above have no
+    # paging/escalation-policy semantics (on-call rotation, ack/resolve, escalation after N
+    # minutes), so an alert on those channels can go unseen indefinitely. Optional, same
+    # dev-only-env-var precedent as the three channels above.
+    pagerduty_routing_key: str | None = None
 
     # REL-032 (NFR-01): src/engine/sandbox/pool.py -- a small pool of persistent, warm sandbox
     # worker subprocesses for the real-backtest path only (see that module's own docstring for

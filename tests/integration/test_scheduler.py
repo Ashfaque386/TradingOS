@@ -130,14 +130,15 @@ def test_data_lake_list_symbols_matches_what_freshness_gate_checks(tmp_path):
 
 
 def test_build_scheduler_registers_every_real_cron_job():
-    """REL-081: 11 real jobs total (7 pre-existing + the 4 that used to be external Windows
-    Scheduled Tasks) -- asserted against the live JOB_REGISTRY itself, not a hand-copied count,
-    so this can't silently under-count the way the plan's own initial "10" draft did."""
+    """REL-081: 11 real jobs (7 pre-existing + the 4 that used to be external Windows Scheduled
+    Tasks), + 1 more (DB-022's DuckDB catalog view refresh) = 12 total -- asserted against the
+    live JOB_REGISTRY itself, not a hand-copied count, so this can't silently under-count the way
+    the plan's own initial "10" draft did."""
     scheduler = build_scheduler()
     job_ids = {job.id for job in scheduler.get_jobs()}
 
     assert job_ids == set(JOB_REGISTRY.keys())
-    assert len(job_ids) == 11
+    assert len(job_ids) == 12
 
     assert DAILY_CYCLE_JOB_ID in job_ids
     assert WEEKEND_MEMORY_JOB_ID in job_ids

@@ -1,9 +1,11 @@
-# Wrapper invoked by the Windows Scheduled Task "TradingOS Daily Shadow Mode" (created via
-# PowerShell's Register-ScheduledTask, weekdays 10:00 AM IST -- see
-# Phase_14_Master_Development_Roadmap.md §6 for why this exists: no in-app scheduler exists yet,
-# so this OS-level task is what actually advances the Shadow Mode consecutive-clean-days streak
-# day to day. Just runs scripts/run_daily_shadow_mode.py inside the real running container and
-# appends timestamped output to a log file, since Scheduled Tasks capture no output by default.
+# DEPRECATED (2026-09-05): the "TradingOS Daily Shadow Mode" Windows Scheduled Task this wrapper
+# was registered for has been unregistered -- REL-081 moved this job to the in-app APScheduler
+# (src/agents/scheduler.py, SHADOW_MODE_DAILY_CYCLE_JOB_ID), which is now the sole live path.
+# This script is kept only as a manual/CLI fallback:
+#   powershell -File scripts\windows\run_daily_shadow_mode.ps1
+#
+# Just runs scripts/run_daily_shadow_mode.py inside the real running container and appends
+# timestamped output to a log file, since Scheduled Tasks captured no output by default.
 #
 # Assumes tradingos-app is already running (docker compose up) and today's broker tokens have
 # already been refreshed -- if either isn't true, the underlying script reports that honestly

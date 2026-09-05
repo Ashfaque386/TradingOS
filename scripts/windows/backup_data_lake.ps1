@@ -1,7 +1,7 @@
-# Wrapper for scripts/backup_data_lake.py, matching run_daily_shadow_mode.ps1's pattern.
-#
-# REL-015 E15.5 (GLH-13): registered as the "TradingOS Nightly Backup" Windows Scheduled Task
-# (verified via `Get-ScheduledTaskInfo`). Can still be run manually for an on-demand backup:
+# DEPRECATED (2026-09-05): the "TradingOS Nightly Backup" Windows Scheduled Task this wrapper
+# was registered for (REL-015 E15.5, GLH-13) has been unregistered -- REL-081 moved this job to
+# the in-app APScheduler (src/agents/scheduler.py, DATA_LAKE_BACKUP_JOB_ID, 23:00 IST), which is
+# now the sole live path. This script is kept only as a manual/CLI fallback:
 #   powershell -File scripts\windows\backup_data_lake.ps1
 #
 # Assumes tradingos-app is already running (docker compose up). Scheduled Tasks capture no

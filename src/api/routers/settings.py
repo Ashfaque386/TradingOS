@@ -33,6 +33,7 @@ per Phase_12_Security_Design.md §2.2's "Configure omni-channel integrations" pe
 """
 
 import uuid
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,10 +41,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from src.api.deps import require_role
+from src.api.routers.risk_limits import _latest_risk_limit
 from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
+from src.data.reference.market_hours import IST, MARKET_CLOSE_MINUTES, MARKET_OPEN_MINUTES
+from src.data.reference.nse_holiday_calendar import HOLIDAYS
 from src.models.user import NotificationChannel, User
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
@@ -155,6 +159,79 @@ def get_integrations_status() -> IntegrationsStatusResponse:
         ),
     ]
     return IntegrationsStatusResponse(llm_providers=llm_providers, brokers=brokers)
+
+
+class RiskThresholds(BaseModel):
+    scope_type: str
+    max_daily_loss: float
+    max_position_size_pct: float | None
+    max_sector_exposure_pct: float | None
+    max_drawdown_pct: float | None
+    effective_from: datetime
+
+
+class TradingCalendarSettings(BaseModel):
+    timezone: str
+    market_open_minutes: int
+    market_close_minutes: int
+    # Only the 3 fixed-date national holidays this codebase actually tracks (see
+    # nse_holiday_calendar.py's own module docstring on the real, deliberate scope limit --
+    # movable holidays like Diwali/Holi are not covered). Returned as an honest, real reflection
+    # of HOLIDAYS, not a claim of full NSE calendar coverage.
+    fixed_holidays: list[date]
+
+
+class SystemSettingsResponse(BaseModel):
+    risk_thresholds: RiskThresholds | None
+    trading_calendar: TradingCalendarSettings
+    # No feature-flag storage layer exists anywhere in this codebase today (confirmed: no
+    # FeatureFlag model, no config table, no toggle mechanism beyond the unrelated per-agent
+    # enable/disable state in AgentControlState). Returned honestly empty rather than fabricated.
+    feature_flags: dict[str, bool]
+
+
+@router.get("", response_model=SystemSettingsResponse)
+def get_system_settings() -> SystemSettingsResponse:
+    """API-074. A composite, non-secret read of "current system configuration" -- real risk
+    thresholds (reusing risk_limits.py's own _latest_risk_limit lookup, the same query
+    GET /risk-limits/current already runs) and the real, hardcoded trading-calendar constants
+    (src/data/reference/market_hours.py, nse_holiday_calendar.py). Deliberately does not fabricate
+    a feature-flag system that doesn't exist in this codebase -- see SystemSettingsResponse's own
+    docstring on that field."""
+    with get_session() as session:
+        limit = _latest_risk_limit(session)
+        risk_thresholds = (
+            RiskThresholds(
+                scope_type=limit.scope_type,
+                max_daily_loss=float(limit.max_daily_loss),
+                max_position_size_pct=(
+                    float(limit.max_position_size_pct)
+                    if limit.max_position_size_pct is not None
+                    else None
+                ),
+                max_sector_exposure_pct=(
+                    float(limit.max_sector_exposure_pct)
+                    if limit.max_sector_exposure_pct is not None
+                    else None
+                ),
+                max_drawdown_pct=(
+                    float(limit.max_drawdown_pct) if limit.max_drawdown_pct is not None else None
+                ),
+                effective_from=limit.effective_from,
+            )
+            if limit is not None
+            else None
+        )
+        return SystemSettingsResponse(
+            risk_thresholds=risk_thresholds,
+            trading_calendar=TradingCalendarSettings(
+                timezone=str(IST),
+                market_open_minutes=MARKET_OPEN_MINUTES,
+                market_close_minutes=MARKET_CLOSE_MINUTES,
+                fixed_holidays=sorted(HOLIDAYS),
+            ),
+            feature_flags={},
+        )
 
 
 class VaultStatusResponse(BaseModel):

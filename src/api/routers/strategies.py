@@ -439,6 +439,32 @@ def get_strategy(strategy_id: uuid.UUID) -> StrategyDetail:
         )
 
 
+@router.get("/{strategy_id}/validation", response_model=StrategyVersionSummary)
+def get_strategy_validation(strategy_id: uuid.UUID) -> StrategyVersionSummary:
+    """API-048. Every field here is already fetched and returned by GET /{strategy_id} (nested
+    under versions[]) -- this is a thin, narrower read of just the current version's own
+    validation-related fields, for a caller that wants to poll validation status without pulling
+    the full StrategyDetail payload (versions + backtests) on every poll."""
+    with get_session() as session:
+        strategy = session.get(Strategy, strategy_id)
+        if strategy is None:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        if strategy.current_version_id is None:
+            raise HTTPException(status_code=404, detail="Strategy has no current version yet")
+        version = session.get(StrategyVersion, strategy.current_version_id)
+        if version is None:
+            raise HTTPException(status_code=404, detail="Current version not found")
+        return StrategyVersionSummary(
+            id=version.id,
+            version_no=version.version_no,
+            validation_status=version.validation_status,
+            validator_feedback=version.validator_feedback,
+            option_legs=version.option_legs,
+            option_expiry=version.option_expiry,
+            option_rationale=version.option_rationale,
+        )
+
+
 class VersionCode(BaseModel):
     version_no: int
     python_code: str

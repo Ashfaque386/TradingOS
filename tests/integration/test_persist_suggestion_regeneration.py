@@ -14,6 +14,7 @@ Also covers BUG-011 (found live-testing this exact feature): `options_strategy_a
 """
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from src.agents.state import PythonCode, StrategyLogic, ValidationResult
@@ -24,8 +25,35 @@ from src.api.routers.agents import (
 )
 from src.core.db import get_session
 from src.models.account import Account
+from src.models.agent import AgentRun
 from src.models.strategy import Strategy, StrategyVersion
 from src.models.user import User
+
+
+def _seed_agent_run() -> uuid.UUID:
+    """A real AgentRun row -- required since StrategyVersion.agent_run_id (API-007/008) became a
+    real FK; the `python_code_generator` branch (which now writes this column) needs a real row
+    to point at, not a fabricated `uuid.uuid4()`."""
+    run_id = uuid.uuid4()
+    with get_session() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                graph_thread_id=f"persist-suggestion-regen-test-{run_id}",
+                agent_name="python_code_generator",
+                status="Completed",
+                started_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    return run_id
+
+
+def _cleanup_agent_run(run_id: uuid.UUID) -> None:
+    with get_session() as session:
+        session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+        session.commit()
+
 
 _ORIGINAL_LOGIC = StrategyLogic(
     hypothesis="Original hypothesis before any suggestion",
@@ -112,6 +140,7 @@ def _cleanup(user_id: uuid.UUID, account_id: uuid.UUID, strategy_id: uuid.UUID) 
 
 def test_strategy_generator_output_updates_the_existing_strategy_not_a_new_row():
     user_id, account_id, strategy_id = _seed_strategy()
+    run_id = _seed_agent_run()
     try:
         with get_session() as session:
             before_count = session.query(Strategy).count()
@@ -121,6 +150,7 @@ def test_strategy_generator_output_updates_the_existing_strategy_not_a_new_row()
                 node_name="strategy_generator",
                 output={"strategy_logic": _REGENERATED_LOGIC},
                 tracking=tracking,
+                agent_run_id=run_id,
             )
             session.commit()
             after_count = session.query(Strategy).count()
@@ -134,6 +164,7 @@ def test_strategy_generator_output_updates_the_existing_strategy_not_a_new_row()
             assert float(strategy_row.confidence_score) == _REGENERATED_LOGIC.confidence_score
     finally:
         _cleanup(user_id, account_id, strategy_id)
+        _cleanup_agent_run(run_id)
 
 
 def test_options_strategy_agent_none_output_does_not_crash_bug_011():
@@ -146,21 +177,28 @@ def test_options_strategy_agent_none_output_does_not_crash_bug_011():
     )
 
     user_id, account_id, strategy_id = _seed_strategy()
+    run_id = _seed_agent_run()
     try:
         with get_session() as session:
             tracking = _SuggestionRegenTracking(strategy_id=strategy_id)
             # Must not raise -- this is the exact call site that crashed before the fix.
             _persist_suggestion_regeneration(
-                session, node_name="options_strategy_agent", output=None, tracking=tracking
+                session,
+                node_name="options_strategy_agent",
+                output=None,
+                tracking=tracking,
+                agent_run_id=run_id,
             )
             session.commit()
             assert tracking.pending_option_legs is None
     finally:
         _cleanup(user_id, account_id, strategy_id)
+        _cleanup_agent_run(run_id)
 
 
 def test_python_code_generator_creates_a_new_version_attached_to_the_existing_strategy():
     user_id, account_id, strategy_id = _seed_strategy()
+    run_id = _seed_agent_run()
     try:
         with get_session() as session:
             tracking = _SuggestionRegenTracking(strategy_id=strategy_id)
@@ -169,6 +207,7 @@ def test_python_code_generator_creates_a_new_version_attached_to_the_existing_st
                 node_name="python_code_generator",
                 output={"python_code": PythonCode(code="def run_backtest(): ...", version_no=2)},
                 tracking=tracking,
+                agent_run_id=run_id,
             )
             session.commit()
 
@@ -184,6 +223,7 @@ def test_python_code_generator_creates_a_new_version_attached_to_the_existing_st
             assert strategy_row.status == "Coding"
     finally:
         _cleanup(user_id, account_id, strategy_id)
+        _cleanup_agent_run(run_id)
 
 
 def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
@@ -191,6 +231,7 @@ def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
     test file for the full explanation (a real user-reported backtest AttributeError traced back
     to a validator Fail never being recorded on the StrategyVersion row)."""
     user_id, account_id, strategy_id = _seed_strategy()
+    run_id = _seed_agent_run()
     try:
         with get_session() as session:
             tracking = _SuggestionRegenTracking(strategy_id=strategy_id)
@@ -199,6 +240,7 @@ def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
                 node_name="python_code_generator",
                 output={"python_code": PythonCode(code="def run_backtest(): ...", version_no=2)},
                 tracking=tracking,
+                agent_run_id=run_id,
             )
             session.commit()
             version_id = tracking.new_version_id
@@ -213,6 +255,7 @@ def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
                     )
                 },
                 tracking=tracking,
+                agent_run_id=run_id,
             )
             session.commit()
 
@@ -222,3 +265,4 @@ def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
             assert version_row.validator_feedback == "sandbox execution failed: boom"
     finally:
         _cleanup(user_id, account_id, strategy_id)
+        _cleanup_agent_run(run_id)

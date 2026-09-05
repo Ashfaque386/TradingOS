@@ -1,7 +1,7 @@
-# Wrapper for scripts/archive_audit_log.py, matching backup_data_lake.ps1's pattern.
-#
-# REL-015 E15.3 (GLH-06, SEC-039): registered as the "TradingOS Nightly Audit Archive" Windows
-# Scheduled Task. Can still be run manually for an on-demand archive pass:
+# DEPRECATED (2026-09-05): the "TradingOS Nightly Audit Archive" Windows Scheduled Task this
+# wrapper was registered for (REL-015 E15.3, GLH-06, SEC-039) has been unregistered -- REL-081
+# moved this job to the in-app APScheduler (src/agents/scheduler.py, AUDIT_ARCHIVE_JOB_ID,
+# 23:30 IST), which is now the sole live path. This script is kept only as a manual/CLI fallback:
 #   powershell -File scripts\windows\archive_audit_log.ps1
 #
 # Assumes tradingos-app is already running (docker compose up). Scheduled Tasks capture no

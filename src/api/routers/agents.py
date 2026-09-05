@@ -29,7 +29,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -228,6 +228,67 @@ def set_agent_control_state(
             updated_by=user.email,
             updated_at=row.updated_at,
         )
+
+
+# --- Full agent registry with live status (API-025) -----------------------------------------
+
+
+class AgentRegistryEntry(AgentControlEntry):
+    """Superset of AgentControlEntry (same enable/disable admin fields) plus a genuine
+    per-agent live-status derivation from the most recent AgentRun row -- distinct from
+    `enabled`, which is administrative on/off state, not "is this agent currently executing"."""
+
+    last_run_status: str | None
+    last_run_at: datetime | None
+    live_status: Literal["Running", "Idle", "Never run"]
+
+
+@router.get("", response_model=list[AgentRegistryEntry])
+def list_agent_registry() -> list[AgentRegistryEntry]:
+    """API-025. The full KNOWN_AGENTS roster (all 25 real, still-shipped agents -- AGT-017/018/019
+    excluded, see control.py's own docstring) with a genuine live running/idle indicator, derived
+    from each agent's own most recent AgentRun row (same last-run lookup GET /{agent_id} already
+    does per-instance below, just applied across the whole registry in one response instead of
+    one agent_id at a time). Superset of GET /control's enable/disable fields so a caller doesn't
+    have to reconcile two parallel shapes."""
+    with get_session() as session:
+        control_rows = {row.agent_name: row for row in session.scalars(select(AgentControlState))}
+        entries = []
+        for agent in KNOWN_AGENTS:
+            control_row = control_rows.get(agent.name)
+            updated_by_email = None
+            if control_row is not None and control_row.updated_by_user_id is not None:
+                user = session.get(User, control_row.updated_by_user_id)
+                updated_by_email = user.email if user is not None else None
+            last_run = session.scalars(
+                select(AgentRun)
+                .where(AgentRun.agent_name == agent.name)
+                .order_by(AgentRun.started_at.desc())
+                .limit(1)
+            ).first()
+            if last_run is None:
+                live_status: Literal["Running", "Idle", "Never run"] = "Never run"
+            elif last_run.status == "Running":
+                live_status = "Running"
+            else:
+                live_status = "Idle"
+            entries.append(
+                AgentRegistryEntry(
+                    agent_name=agent.name,
+                    agent_id=agent.agent_id,
+                    display_name=agent.display_name,
+                    kind=agent.kind,
+                    enforced=agent.enforced,
+                    enabled=control_row is None or control_row.enabled,
+                    reason=control_row.reason if control_row is not None else None,
+                    updated_by=updated_by_email,
+                    updated_at=control_row.updated_at if control_row is not None else None,
+                    last_run_status=last_run.status if last_run is not None else None,
+                    last_run_at=last_run.started_at if last_run is not None else None,
+                    live_status=live_status,
+                )
+            )
+        return entries
 
 
 # --- Trigger a real run ---------------------------------------------------------------------
@@ -434,6 +495,7 @@ def _persist_strategy_progress(
         code = output["python_code"]
         version = StrategyVersion(
             strategy_id=tracking.strategy_id,
+            agent_run_id=agent_run_id,
             version_no=code.version_no,
             python_code=code.code,
             validation_status="Pending",
@@ -888,6 +950,7 @@ def _persist_suggestion_regeneration(
     node_name: str,
     output: dict[str, Any],
     tracking: _SuggestionRegenTracking,
+    agent_run_id: uuid.UUID,
 ) -> None:
     """REL-048. Deliberately NOT `_persist_strategy_progress` above -- that function's own
     `strategy_generator` branch unconditionally creates a brand-new `Strategy` row every time it
@@ -922,6 +985,7 @@ def _persist_suggestion_regeneration(
         code = output["python_code"]
         version = StrategyVersion(
             strategy_id=tracking.strategy_id,
+            agent_run_id=agent_run_id,
             version_no=code.version_no,
             python_code=code.code,
             validation_status="Pending",
@@ -1220,7 +1284,11 @@ def run_suggestion_regeneration(*, suggestion_id: uuid.UUID) -> None:
                         )
                     )
                     _persist_suggestion_regeneration(
-                        session, node_name=node_name, output=output, tracking=tracking
+                        session,
+                        node_name=node_name,
+                        output=output,
+                        tracking=tracking,
+                        agent_run_id=child.id,
                     )
                     session.commit()
                 publish_agent_log(

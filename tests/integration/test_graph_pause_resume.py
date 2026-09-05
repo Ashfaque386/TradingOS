@@ -26,6 +26,7 @@ from src.api.routers.agents import _execute_graph_run
 from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_RISK_MANAGER
 from src.models.agent import AgentLog, AgentRun
+from src.models.strategy import StrategyVersion
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 from tests.unit.test_graph import _DIRECTIVE, _mock_pipeline
 
@@ -65,6 +66,13 @@ def _cleanup_run(thread_id: str) -> None:
             r.id for r in session.query(AgentRun.id).filter(AgentRun.graph_thread_id == thread_id)
         ]
         session.query(AgentLog).filter(AgentLog.agent_run_id.in_(run_ids)).delete(
+            synchronize_session=False
+        )
+        # API-007/008: the real, unmocked _persist_strategy_progress call this test's mocked
+        # python_code_generator output still flows through can create a real StrategyVersion row
+        # with agent_run_id set (a real FK since that migration) -- must be deleted before the
+        # AgentRun it points to, or the FK constraint blocks the AgentRun delete below.
+        session.query(StrategyVersion).filter(StrategyVersion.agent_run_id.in_(run_ids)).delete(
             synchronize_session=False
         )
         session.query(AgentRun).filter(AgentRun.graph_thread_id == thread_id).delete(

@@ -13,7 +13,7 @@ the real paper account still wins.
 """
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from src.agents.state import (
@@ -28,8 +28,35 @@ from src.api.routers.agents import _persist_strategy_progress, _StrategyTracking
 from src.core.db import get_session
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.models.account import Account
+from src.models.agent import AgentRun
 from src.models.strategy import Strategy, StrategyVersion
 from src.models.user import User
+
+
+def _seed_agent_run() -> uuid.UUID:
+    """A real AgentRun row -- required since StrategyVersion.agent_run_id (API-007/008) became a
+    real FK; any test whose call chain reaches the `python_code_generator` branch (which now
+    writes this column) needs a real row to point at, not a fabricated `uuid.uuid4()`."""
+    run_id = uuid.uuid4()
+    with get_session() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                graph_thread_id=f"persist-strategy-progress-test-{run_id}",
+                agent_name="python_code_generator",
+                status="Completed",
+                started_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    return run_id
+
+
+def _cleanup_agent_run(run_id: uuid.UUID) -> None:
+    with get_session() as session:
+        session.query(AgentRun).filter(AgentRun.id == run_id).delete()
+        session.commit()
+
 
 _STRATEGY_LOGIC = StrategyLogic(
     hypothesis="Momentum breakout on Nifty 50 constituents",
@@ -221,10 +248,10 @@ def test_options_strategy_agent_rationale_is_persisted_onto_the_strategy_version
         ],
     )
     strategy_id = None
+    run_id = _seed_agent_run()
     try:
         with get_session() as session:
             tracking = _StrategyTracking()
-            run_id = uuid.uuid4()
 
             _persist_strategy_progress(
                 session,
@@ -276,6 +303,7 @@ def test_options_strategy_agent_rationale_is_persisted_onto_the_strategy_version
                 ).delete()
                 session.query(Strategy).filter(Strategy.id == strategy_id).delete()
                 session.commit()
+        _cleanup_agent_run(run_id)
 
 
 def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
@@ -287,10 +315,10 @@ def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
     cause for the strategy that surfaced this bug). Now the real validator_feedback lands on the
     version that actually failed, so a caller can tell "proven broken" from "not yet tested"."""
     strategy_id = None
+    run_id = _seed_agent_run()
     try:
         with get_session() as session:
             tracking = _StrategyTracking()
-            run_id = uuid.uuid4()
 
             _persist_strategy_progress(
                 session,
@@ -352,3 +380,4 @@ def test_a_failed_validation_is_persisted_onto_the_strategy_version_rel_080():
                 ).delete()
                 session.query(Strategy).filter(Strategy.id == strategy_id).delete()
                 session.commit()
+        _cleanup_agent_run(run_id)
