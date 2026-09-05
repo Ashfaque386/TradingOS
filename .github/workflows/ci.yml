@@ -163,20 +163,25 @@ jobs:
         run: docker compose run --rm app python scripts/seed_paper_account.py
 
       - name: Seed real historical market data for data-dependent tests
-        # Found in the same 102-failure investigation as the Vault/paper-account steps above:
-        # test_real_backtest_runner.py, test_optuna_real_sandbox.py (both need a real year of TCS
-        # EOD data) and test_risk_manager_correlation_real_data.py (whose own assertion message
-        # names this exact yfinance command) all read directly from the real Parquet data lake --
-        # never mocked, matching this codebase's stated convention -- but a fresh CI checkout's
-        # lake starts completely empty, failing all of them with "This test requires real ... data
-        # already ingested" or an empty-DataFrame error. `--source managed` for TCS transparently
-        # runs yfinance alone in this job (build_market_data_manager()'s own documented graceful
-        # degradation -- no Upstox secret is configured here, matching production's real
-        # Upstox-then-yfinance failover, not a CI-only workaround). Idempotent (the writer
-        # de-duplicates on (symbol, date), same as every other real ingestion path in this repo).
+        # Found in the same 102-failure investigation as the Vault/paper-account steps above, and
+        # confirmed by a first real CI run of this job (commit b03f6e7) that only seeded TCS/
+        # ^NSEI: a real, documented 5-symbol window is required, not just TCS --
+        # test_corporate_actions_backtest_diff.py's own module docstring states it plainly ("the
+        # real data lake's real coverage window (2023-07-21..2024-07-19, 5 real symbols --
+        # confirmed live against this exact Docker stack)"), and test_market_data_router.py's own
+        # comment names all 5 (RELIANCE/TCS/INFY/HDFCBANK/ICICIBANK) plus ^NSEI. Without RELIANCE/
+        # INFY/HDFCBANK/ICICIBANK, that first CI run's own real failures showed exactly this gap:
+        # test_market_data_router.py failing "assert 'RELIANCE' in ['TCS', '^NSEI']", and
+        # test_daily_signal_job.py's F&O tests failing on "no historical data ingested for INFY".
+        # `--source managed` transparently runs yfinance alone in this job (build_market_data_
+        # manager()'s own documented graceful degradation -- no Upstox secret is configured here,
+        # matching production's real Upstox-then-yfinance failover, not a CI-only workaround).
+        # Idempotent (the writer de-duplicates on (symbol, date), same as every other real
+        # ingestion path in this repo).
         run: |
           docker compose run --rm app python -m src.data.ingest.pipeline \
-            --source managed --symbols TCS --start 2023-07-01 --end 2024-07-01
+            --source managed --symbols RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK \
+            --start 2023-07-21 --end 2024-07-19
           docker compose run --rm app python -m src.data.ingest.pipeline \
             --source yfinance --symbols ^NSEI --start 2023-07-21 --end 2024-07-19
 
