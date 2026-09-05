@@ -119,12 +119,14 @@ def _cleanup_live_account_if_owned_by(user_id: uuid.UUID) -> None:
     creates one... every later Live order reuses this same row"), looked up by
     broker="LIVE"/account_type="Live" alone, never by user_id. On this dev host that row was
     already created (and is owned) by a real, permanent user from an earlier real session, so no
-    test here has ever hit this -- but a fresh CI Postgres has none yet, and this is exactly the
-    first test in this file to place a Live order that succeeds, so it (not `_seed_strategy()`'s
-    own separate account) becomes the real, permanent owner. Without this, `cleanup_user(user_id)`
-    below fails with a real `ForeignKeyViolation` on `accounts_user_id_fkey`, confirmed via a real
-    CI run. Deleting it here is safe and correct test hygiene, not a production concern: the row
-    is trivially self-healing (the next real Live order anywhere just recreates it)."""
+    test here has ever hit this -- but a fresh CI Postgres has none yet. Confirmed via two
+    separate real CI runs that this isn't just one specific test's problem: whichever Live-order
+    test happens to run first (in a given run) creates and owns it, and if that test's own
+    cleanup then deletes it, the *next* Live-order test becomes the new first owner next time --
+    so every test that places a real, successful Live order calls this before `cleanup_user`,
+    each guarded by its own user_id so it only ever touches an account it might itself have just
+    created. Deleting it here is safe test hygiene, not a production concern: the row is trivially
+    self-healing (the next real Live order anywhere just recreates it)."""
     with get_session() as session:
         account = session.scalars(
             select(Account).where(
@@ -412,6 +414,7 @@ def test_place_order_live_publishes_a_real_order_event():
         redis_client.close()
         if order_id is not None:
             _cleanup_orders(order_id)
+        _cleanup_live_account_if_owned_by(user_id)
         cleanup_user(user_id)
         _cleanup_strategy(strategy_id)
 
@@ -641,6 +644,7 @@ def test_close_position_live_places_the_opposite_side_order():
     finally:
         if order_id is not None:
             _cleanup_orders(order_id)
+        _cleanup_live_account_if_owned_by(user_id)
         cleanup_user(user_id)
         _cleanup_strategy(strategy_id)
 

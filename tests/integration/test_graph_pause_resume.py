@@ -121,7 +121,16 @@ def test_pause_after_one_node_then_resume_runs_only_the_remaining_nodes_once():
         with get_session() as session:
             root = session.get(AgentRun, root_id)
             assert root is not None
-            assert root.status == "Paused"
+            if root.status != "Paused":
+                # _execute_graph_run's own except-Exception clause (src/api/routers/agents.py)
+                # swallows the real cause into an AgentLog row rather than re-raising it -- surface
+                # it here so a future failure (a real one was seen once in CI, never reproduced
+                # locally) shows the actual exception instead of just "Failed" != "Paused".
+                logs = session.query(AgentLog).filter(AgentLog.agent_run_id == root_id).all()
+                messages = [f"[{log_row.log_level}] {log_row.message}" for log_row in logs]
+                raise AssertionError(
+                    f"expected status 'Paused', got {root.status!r}. AgentLog rows: {messages}"
+                )
             assert root.pause_requested is False
             assert root.tracking_snapshot is not None
 
