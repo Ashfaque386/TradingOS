@@ -189,6 +189,16 @@ jobs:
         run: |
           until curl -sf http://localhost:8200/v1/sys/health; do sleep 2; done
 
+      - name: Alembic migrations apply cleanly
+        # Found investigating a real, reproduced failure: this job never ran migrations at all,
+        # so the real non-superuser `tradingos_app` Postgres role (REL-014 E14.1, created by
+        # migration u2v3w4x5y6z7 -- the role `app`'s own DATABASE_URL and every seed script below
+        # connect as) never existed against this job's fresh CI Postgres, failing with a real
+        # "password authentication failed for user tradingos_app" the first time anything tried
+        # to connect. Matches lint-type-test's own already-proven step; must run before starting
+        # `app` below, which connects as this same role at its own FastAPI-lifespan startup.
+        run: docker compose run --rm app alembic upgrade head
+
       - name: Start app and frontend
         # NEXT_PUBLIC_API_BASE_URL override: real, confirmed root cause of every Cypress
         # login-flow failure this session -- the default (http://localhost:8001, correct for a
