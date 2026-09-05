@@ -112,6 +112,30 @@ def _cleanup_strategy(strategy_id: uuid.UUID) -> None:
             session.commit()
 
 
+def _cleanup_live_account_if_owned_by(user_id: uuid.UUID) -> None:
+    """`POST /orders` with account_scope=Live lazily creates a single, real, system-wide Account
+    row the first time it's ever called (src/api/routers/orders.py's own
+    `_get_or_create_live_account` docstring: "the first real manual Live order ever placed lazily
+    creates one... every later Live order reuses this same row"), looked up by
+    broker="LIVE"/account_type="Live" alone, never by user_id. On this dev host that row was
+    already created (and is owned) by a real, permanent user from an earlier real session, so no
+    test here has ever hit this -- but a fresh CI Postgres has none yet, and this is exactly the
+    first test in this file to place a Live order that succeeds, so it (not `_seed_strategy()`'s
+    own separate account) becomes the real, permanent owner. Without this, `cleanup_user(user_id)`
+    below fails with a real `ForeignKeyViolation` on `accounts_user_id_fkey`, confirmed via a real
+    CI run. Deleting it here is safe and correct test hygiene, not a production concern: the row
+    is trivially self-healing (the next real Live order anywhere just recreates it)."""
+    with get_session() as session:
+        account = session.scalars(
+            select(Account).where(
+                Account.broker == "LIVE", Account.account_type == "Live", Account.user_id == user_id
+            )
+        ).first()
+        if account is not None:
+            session.delete(account)
+            session.commit()
+
+
 def _seed_order(*, strategy_id: uuid.UUID, symbol: str, status: str = "FILLED") -> uuid.UUID:
     with get_session() as session:
         order = Order(
@@ -342,6 +366,7 @@ def test_place_order_live_places_a_real_broker_order_when_confirmed():
     finally:
         if order_id is not None:
             _cleanup_orders(order_id)
+        _cleanup_live_account_if_owned_by(user_id)
         cleanup_user(user_id)
         _cleanup_strategy(strategy_id)
 

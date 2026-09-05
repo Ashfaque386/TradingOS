@@ -115,7 +115,20 @@ jobs:
         # with a real "Collection doesn't exist" error, not a data-emptiness assertion.
         # Idempotent (checks each collection's existence before creating), same shape as the
         # Vault Transit/KV steps above.
-        run: docker compose run --rm app python -m src.memory.collections
+        #
+        # EMBEDDING_PROVIDER=local (here and in Pytest below): src/memory/embeddings.py's own
+        # module docstring names this exact provider as "the default for any environment where
+        # neither the account-tier gate [HuggingFace] nor local Ollama reliability can be
+        # assumed" -- CI is exactly that environment. The real default (settings.embedding_
+        # provider="ollama") points at OLLAMA_BASE_URL=http://host.docker.internal:11434, a
+        # Docker-Desktop-only convenience hostname with no Ollama server behind it on a
+        # GitHub-hosted runner -- confirmed via a real CI run failing 12 memory/Qdrant/RAG tests
+        # on "httpcore.ConnectError: [Errno -2] Name or service not known". "local" runs
+        # sentence-transformers' all-MiniLM-L6-v2 in-process on CPU (already a real, non-optional
+        # pyproject.toml dependency) -- no network dependency, no billing gate, dim=384 instead
+        # of Ollama's dim=768, which is why this must be set before the bootstrap step too (the
+        # collections it creates must match whatever Pytest will actually embed with).
+        run: docker compose run --rm -e EMBEDDING_PROVIDER=local app python -m src.memory.collections
 
       - name: Generate the dev TLS cert for app-tls
         # scripts/generate_dev_tls_cert.py's own docstring: idempotent (no-ops if
@@ -186,7 +199,9 @@ jobs:
             --source yfinance --symbols ^NSEI --start 2023-07-21 --end 2024-07-19
 
       - name: Pytest
-        run: docker compose run --rm app pytest --cov=src --cov-report=xml --cov-report=json
+        run: |
+          docker compose run --rm -e EMBEDDING_PROVIDER=local app \
+            pytest --cov=src --cov-report=xml --cov-report=json
 
       - name: Per-module coverage gate
         run: docker compose run --rm app python scripts/module_coverage.py check
@@ -303,6 +318,31 @@ jobs:
         # to connect. Matches lint-type-test's own already-proven step; must run before starting
         # `app` below, which connects as this same role at its own FastAPI-lifespan startup.
         run: docker compose run --rm app alembic upgrade head
+
+      - name: Sync the real NSE instrument master
+        # Found via the same real CI run's Cypress failures: "Instruments tab searches the real,
+        # locally-synced Upstox instrument master" and the symbol-override combobox spec both
+        # search src/models/instrument.py's `instruments` table directly (src/api/routers/
+        # market_data.py's search_instruments_endpoint), which this job never populated -- a
+        # fresh CI Postgres has zero rows there. A public, unauthenticated Upstox static file
+        # download (instrument_sync.py's own module docstring) -- no broker credential needed,
+        # same graceful-degradation shape as the OHLCV pipeline below.
+        run: docker compose run --rm app python -m src.data.ingest.instrument_sync --exchange NSE
+
+      - name: Seed real historical market data for data-dependent specs
+        # This job doesn't share a runner or a Postgres/data-lake volume with lint-type-test's
+        # own identically-named step -- each job gets a fresh checkout and fresh containers, so
+        # the same real gap applies here independently. Found via the same real CI run's Cypress
+        # failures: Market Analysis's "expected 0 to be above 0", and Backtests dashboard/
+        # Candlestick chart specs failing on missing RELIANCE (and friends) real OHLCV data. Same
+        # real 5-symbol + ^NSEI window as lint-type-test's own step -- see that step's comment for
+        # the full citation trail.
+        run: |
+          docker compose run --rm app python -m src.data.ingest.pipeline \
+            --source managed --symbols RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK \
+            --start 2023-07-21 --end 2024-07-19
+          docker compose run --rm app python -m src.data.ingest.pipeline \
+            --source yfinance --symbols ^NSEI --start 2023-07-21 --end 2024-07-19
 
       - name: Start app and frontend
         # NEXT_PUBLIC_API_BASE_URL override: real, confirmed root cause of every Cypress
