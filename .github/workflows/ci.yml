@@ -80,6 +80,36 @@ jobs:
           ensure_transit_key(get_settings())
           "
 
+      - name: Ensure the Vault KV secrets engine exists
+        # Found investigating a real, reproduced 102-test failure spanning webhooks/MFA/LLM-
+        # key/Vault-round-trip tests: `ensure_kv_engine()` (src/core/vault.py) is only ever
+        # called from the real FastAPI `lifespan()` (src/api/main.py), which never runs in this
+        # job -- every step above is a one-off `docker compose run --rm app <command>`, never a
+        # real persistent `app` server start. Real server-mode Vault (REL-015) mounts no KV
+        # engine by default (`-dev` mode used to auto-mount one), so every _read_secret/
+        # _write_secret call 404'd until this ran -- confirmed directly via
+        # test_settings_api.py's own real assertion (`kv_engine_mounted is True`), which was
+        # failing. Same idempotent-on-every-run shape as the Transit step above.
+        run: |
+          docker compose run --rm app python -c "
+          from src.core.config import get_settings
+          from src.core.vault import ensure_kv_engine
+          ensure_kv_engine(get_settings())
+          "
+
+      - name: Seed the real admin user
+        run: docker compose run --rm app python scripts/seed_admin_user.py
+
+      - name: Seed the real Paper trading account
+        # Found in the same investigation: scripts/paper_account.py's own get_paper_account()
+        # raises a real, explicit RuntimeError ("No seeded Paper account found") when none
+        # exists -- this local dev host has had one real seeded account since REL-034
+        # (2026-08-12), but a fresh CI Postgres starts with none, failing every test that
+        # touches paper trading (account summary, daily signal job, paper execution pipeline,
+        # orders). Idempotent (finds the existing row rather than duplicating it); requires the
+        # admin user seeded just above.
+        run: docker compose run --rm app python scripts/seed_paper_account.py
+
       - name: Pytest
         run: docker compose run --rm app pytest --cov=src --cov-report=xml --cov-report=json
 
