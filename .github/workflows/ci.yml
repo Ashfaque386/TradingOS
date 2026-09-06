@@ -355,6 +355,14 @@ jobs:
       - name: Seed the real admin user Cypress logs in as
         run: docker compose exec -T app python scripts/seed_admin_user.py
 
+      - name: Seed the real Paper trading account
+        # Found via a real CI run's own Cypress failures: account_statement.cy.ts's 2 tests both
+        # got a real 503 from GET /api/v1/paper-trading/account/summary and .../statement/export
+        # -- the exact same "no seeded Paper account" gap lint-type-test's own identically-named
+        # step already fixes (get_paper_account()'s real, explicit RuntimeError), just never
+        # applied to this separate job with its own fresh Postgres. Idempotent, same script.
+        run: docker compose exec -T app python scripts/seed_paper_account.py
+
       - name: Seed the real Strategies-page fixture strategies (REL-044/045/046)
         run: docker compose exec -T app python scripts/seed_strategies_cypress_fixtures.py
 
