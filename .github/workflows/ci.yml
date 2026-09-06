@@ -363,6 +363,16 @@ jobs:
         # applied to this separate job with its own fresh Postgres. Idempotent, same script.
         run: docker compose exec -T app python scripts/seed_paper_account.py
 
+      - name: Seed the real Agent Analytics fixture runs
+        # Found via a real CI run's own Cypress failure: agent_analytics.cy.ts's own comment says
+        # it was written against "real seeded AgentRun data already confirmed non-empty in this
+        # dev DB" -- true on the long-lived dev host, but a fresh CI Postgres has zero AgentRun
+        # rows, so GET /agents/analytics/summary returns an empty list and the frontend renders
+        # its own honest empty state instead of a <table> ("Expected to find element: table, but
+        # never found it"). Idempotent (checks for its own distinctively-prefixed
+        # graph_thread_id before seeding).
+        run: docker compose exec -T app python scripts/seed_agent_analytics_fixtures.py
+
       - name: Seed the real Strategies-page fixture strategies (REL-044/045/046)
         run: docker compose exec -T app python scripts/seed_strategies_cypress_fixtures.py
 
