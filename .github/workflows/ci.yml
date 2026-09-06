@@ -256,14 +256,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase the repository owner for the image tag
+        # Found via this job's own first-ever real run (REL-009 E9.7's build-and-push has been
+        # gated on lint-type-test passing since it was written, which never happened until this
+        # session's own CI fix arc landed -- so this bug sat dormant, never executed, until now).
+        # Docker/OCI image repository names must be all-lowercase; `github.repository_owner`
+        # resolves to this account's real, mixed-case GitHub username ("Ashfaque386"), which
+        # `docker/build-push-action` correctly rejects rather than silently mangling.
+        run: echo "REPO_OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Build and push the app image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/tradingos:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/tradingos:latest
+            ghcr.io/${{ env.REPO_OWNER_LC }}/tradingos:${{ github.sha }}
+            ghcr.io/${{ env.REPO_OWNER_LC }}/tradingos:latest
 
   helm-lint:
     # REL-009 E9.7: validates the new k8s/tradingos/ Helm chart without needing a real cluster --
