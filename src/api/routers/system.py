@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from src.api.deps import get_current_user, require_role
 from src.core import vault_transit
 from src.core.api_rate_limit import peek
+from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_RISK_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
@@ -96,11 +97,26 @@ def rotate_jwt_signing_key(
     signed with a version below the new one stops verifying immediately (see
     src/core/vault_transit.py's rotate_key() and src/core/security.py's decode_access_token()
     for the mechanism) -- this is a genuine, real-time "log everyone out" action, restricted to
-    SystemAdministrator accordingly."""
+    SystemAdministrator accordingly.
+
+    UPDATE (Genuinely Open items, NFR-04): this action wrote no AuditLog row at all before now --
+    a real gap for something this sensitive, found while researching why the ERDTM's own
+    "Vault-based key rotation" item stayed open. Logged the same way every other sensitive
+    mutation in this codebase is (src/api/routers/risk_limits.py's own convention)."""
     try:
         new_version = vault_transit.rotate_key()
     except VaultTransitUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    with get_session() as session:
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="JWT_SIGNING_KEY_ROTATED",
+            entity_type="VaultTransitKey",
+            after_state={"new_version": new_version},
+        )
+        session.commit()
     return JwtSigningKeyRotateResponse(new_version=new_version)
 
 

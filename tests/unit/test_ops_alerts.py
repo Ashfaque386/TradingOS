@@ -6,7 +6,12 @@ import httpx
 import pytest
 
 from src.core.config import Settings
-from src.core.ops_alerts import send_discord_webhook_alert, send_ops_alert, send_slack_webhook_alert
+from src.core.ops_alerts import (
+    send_discord_webhook_alert,
+    send_ops_alert,
+    send_pagerduty_alert,
+    send_slack_webhook_alert,
+)
 
 
 @pytest.mark.asyncio
@@ -75,6 +80,73 @@ async def test_send_slack_webhook_alert_raises_on_real_http_error():
             text="chain broken",
             transport=httpx.MockTransport(handler),
         )
+
+
+@pytest.mark.asyncio
+async def test_send_pagerduty_alert_posts_the_real_events_v2_shape():
+    """send_pagerduty_alert (added REL-083) had zero test coverage -- found during the
+    "Genuinely Open items" NFR-03 research pass."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx.Response(202, json={"status": "success"})
+
+    await send_pagerduty_alert(
+        routing_key="real-routing-key",
+        summary="chain broken",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://events.pagerduty.com/v2/enqueue"
+    assert b'"routing_key":"real-routing-key"' in captured["body"]
+    assert b'"event_action":"trigger"' in captured["body"]
+    assert b'"summary":"chain broken"' in captured["body"]
+    assert b'"source":"tradingos"' in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_send_pagerduty_alert_raises_on_real_http_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"status": "invalid event", "message": "bad routing key"})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await send_pagerduty_alert(
+            routing_key="bad-key",
+            summary="chain broken",
+            transport=httpx.MockTransport(handler),
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_ops_alert_fans_out_to_every_configured_channel_including_pagerduty():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if "telegram" in str(request.url):
+            return httpx.Response(200, json={"ok": True})
+        if "pagerduty" in str(request.url):
+            return httpx.Response(202, json={"status": "success"})
+        return httpx.Response(200, text="ok")
+
+    settings = Settings(
+        telegram_alert_bot_token="tok",
+        telegram_alert_chat_id="chat-1",
+        discord_alert_webhook_url="https://discord.com/api/webhooks/1/abc",
+        slack_webhook_url="https://hooks.slack.com/services/T1/B1/xyz",
+        pagerduty_routing_key="real-routing-key",
+    )
+
+    failures = await send_ops_alert(
+        "chain broken", settings=settings, transport=httpx.MockTransport(handler)
+    )
+
+    assert failures == []
+    assert len(calls) == 4
 
 
 @pytest.mark.asyncio

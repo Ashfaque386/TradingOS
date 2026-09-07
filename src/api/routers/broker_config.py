@@ -27,6 +27,8 @@ from src.api.deps import require_role
 from src.brokers.base import OrderResponse
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core import vault
+from src.core.audit import write_audit_entry
+from src.core.db import get_session
 from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
 from src.models.user import User
 
@@ -85,9 +87,23 @@ def set_broker_credentials(
     """API-052 (previously mislabeled "API-053" here, which is actually `GET /broker/order-book`
     -- see broker_order_book() above). Writes to the real dev Vault via
     `write_broker_credentials` (already used by src/brokers/factory.py's Vault-first credential
-    resolution) -- a 503 here means Vault is genuinely unreachable, not a fabricated success."""
+    resolution) -- a 503 here means Vault is genuinely unreachable, not a fabricated success.
+
+    UPDATE (Genuinely Open items, NFR-04): wrote no AuditLog row at all before now -- logs only
+    the broker name and which credential fields were set, never a value, matching the same
+    never-log-a-secret rule src/api/routers/settings.py's LLM-key endpoints follow."""
     if not vault.write_broker_credentials(broker, body.credentials):
         raise HTTPException(status_code=503, detail="Vault unreachable -- credentials not stored")
+    with get_session() as session:
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="BROKER_CREDENTIALS_ROTATED",
+            entity_type="VaultSecret",
+            after_state={"broker": broker, "fields_set": sorted(body.credentials.keys())},
+        )
+        session.commit()
 
 
 @router.delete("/credentials/{broker}", status_code=204)
@@ -98,3 +114,13 @@ def remove_broker_credentials(
     counterpart out as "added, beyond this spec row." Previously mislabeled "API-054" here, which
     is actually `POST /orders` (place an order; see src/api/routers/orders.py)."""
     vault.delete_broker_credentials(broker)
+    with get_session() as session:
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="BROKER_CREDENTIALS_REMOVED",
+            entity_type="VaultSecret",
+            after_state={"broker": broker},
+        )
+        session.commit()

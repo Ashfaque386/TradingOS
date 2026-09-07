@@ -6,10 +6,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from src.api.main import app
 from src.core import vault
+from src.core.db import get_session
 from src.core.security import ROLE_READ_ONLY_AUDITOR, ROLE_SYSTEM_ADMINISTRATOR
+from src.models.audit import AuditLog
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
 client = TestClient(app)
@@ -60,11 +63,31 @@ def test_system_administrator_can_write_and_delete_a_real_vault_credential():
         stored = vault.read_broker_credentials(broker_name)
         assert stored == {"api_key": "test-key-value"}
 
+        # NFR-04 (Genuinely Open items pass): both writes/deletes now log a real AuditLog row,
+        # never the credential value itself.
+        with get_session() as session:
+            set_entry = session.scalars(
+                select(AuditLog)
+                .where(AuditLog.action == "BROKER_CREDENTIALS_ROTATED")
+                .order_by(AuditLog.created_at.desc())
+            ).first()
+            assert set_entry is not None
+            assert set_entry.after_state == {"broker": broker_name, "fields_set": ["api_key"]}
+
         delete_response = client.delete(
             f"/api/v1/broker/credentials/{broker_name}", headers=auth_header(token)
         )
         assert delete_response.status_code == 204
         assert vault.read_broker_credentials(broker_name) is None
+
+        with get_session() as session:
+            delete_entry = session.scalars(
+                select(AuditLog)
+                .where(AuditLog.action == "BROKER_CREDENTIALS_REMOVED")
+                .order_by(AuditLog.created_at.desc())
+            ).first()
+            assert delete_entry is not None
+            assert delete_entry.after_state == {"broker": broker_name}
     finally:
         vault.delete_broker_credentials(broker_name)
         cleanup_user(user_id)

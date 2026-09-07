@@ -10,8 +10,10 @@ tests/integration/test_nfr02_real_broker_latency.py, against Upstox's genuine sa
 
 import time
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
 
 from src.brokers.base import (
     BrokerAdapter,
@@ -22,15 +24,19 @@ from src.brokers.base import (
     Position,
     Quote,
 )
+from src.core.db import get_session
 from src.engine.live.execution_pipeline import (
     LiveExecutionPipeline,
     RiskRejected,
     SymbolState,
     Tick,
     TradeSignal,
+    compliance_pre_trade_check,
 )
+from src.engine.risk.compliance_checker import ComplianceVerdict, ComplianceViolation
 from src.engine.risk.kill_switch import MaxDrawdownKillSwitch
 from src.engine.risk.ws_latency_guard import WebSocketLatencyGuard
+from src.models.audit import AuditLog
 
 
 class FakeBrokerAdapter(BrokerAdapter):
@@ -283,3 +289,42 @@ async def test_trading_resumes_automatically_once_the_latency_guard_recovers():
 
     assert result is not None
     assert len(broker.placed_orders) == 1
+
+
+def test_compliance_pre_trade_check_writes_a_real_audit_entry_on_block():
+    """The one real branch this module's own coverage report showed uncovered: a compliance
+    Block never reaches the broker, so the AuditLog row compliance_pre_trade_check writes itself
+    (execution_pipeline.py's own docstring: "this AuditLog entry is the *only* persisted record
+    of the rejection") is the only proof a real block ever happened. Mocks evaluate_compliance
+    directly rather than constructing a real naked-options/position-limit scenario -- this test
+    is about the pipeline's own audit-write/raise behavior, not compliance_checker.py's rule
+    logic, which has its own dedicated tests."""
+    signal = TradeSignal(symbol="RELIANCE", side="BUY", quantity=100)
+    verdict = ComplianceVerdict(
+        verdict="Block",
+        violations=[
+            ComplianceViolation(
+                rule="SEBI_POSITION_LIMIT",
+                detail="Quantity exceeds the real per-symbol position limit",
+                remediation="Reduce quantity or split across sessions",
+            )
+        ],
+        position_limit_checked=True,
+    )
+
+    with (
+        patch("src.engine.live.execution_pipeline.evaluate_compliance", return_value=verdict),
+        pytest.raises(RiskRejected, match="Compliance block for RELIANCE"),
+    ):
+        compliance_pre_trade_check(signal)
+
+    with get_session() as session:
+        entry = session.scalars(
+            select(AuditLog)
+            .where(AuditLog.action == "ORDER_BLOCKED_COMPLIANCE")
+            .order_by(AuditLog.created_at.desc())
+        ).first()
+        assert entry is not None
+        assert entry.actor_type == "System"
+        assert entry.after_state["symbol"] == "RELIANCE"
+        assert entry.after_state["violations"][0]["rule"] == "SEBI_POSITION_LIMIT"

@@ -8,8 +8,10 @@ import uuid
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.core import vault
+from src.core.config import get_settings
 from src.core.db import get_session
-from src.core.security import ROLE_SYSTEM_ADMINISTRATOR
+from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
 from src.models.user import NotificationChannel
 from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
 
@@ -102,3 +104,109 @@ def test_notification_channel_full_crud_cycle():
 
     with get_session() as session:
         assert session.get(NotificationChannel, uuid.UUID(channel_id)) is None
+
+
+# --- GET /settings (API-074) ---------------------------------------------------------------
+
+
+def test_get_system_settings_returns_real_risk_thresholds_and_trading_calendar():
+    """API-074: a composite, non-secret read -- ungated, matching this router's own established
+    posture for plain status/config reads (test_vault_status_reports.../
+    test_integrations_status_never_leaks... above)."""
+    response = client.get("/api/v1/settings")
+    assert response.status_code == 200
+    body = response.json()
+
+    # risk_thresholds is None only if no RiskLimit row exists at all yet, which every real
+    # environment past REL-007 has -- assert the real shape when present rather than assuming.
+    if body["risk_thresholds"] is not None:
+        assert body["risk_thresholds"]["scope_type"] in {"Global", "Strategy"}
+        assert isinstance(body["risk_thresholds"]["max_daily_loss"], (int, float))
+
+    calendar = body["trading_calendar"]
+    assert calendar["timezone"] == "Asia/Kolkata"
+    assert calendar["market_open_minutes"] < calendar["market_close_minutes"]
+    assert isinstance(calendar["fixed_holidays"], list) and len(calendar["fixed_holidays"]) > 0
+
+    # No feature-flag storage layer exists anywhere in this codebase -- honestly empty, never
+    # fabricated (see SystemSettingsResponse's own docstring).
+    assert body["feature_flags"] == {}
+
+    # NFR-04: real per-provider/per-broker rotation timestamps (or None, honestly, if nothing is
+    # Vault-stored for it) -- never a fabricated value.
+    rotation = body["credential_rotation"]
+    for provider_id in ("openai", "anthropic", "deepseek", "gemini", "huggingface", "opencode"):
+        assert provider_id in rotation
+    for broker in ("zerodha", "upstox"):
+        assert broker in rotation
+
+
+# --- LLM provider key write/delete (REL-021 E21.1) -----------------------------------------
+
+
+def test_set_llm_provider_key_requires_system_administrator():
+    unauthenticated = client.post(
+        "/api/v1/settings/llm-provider-keys/deepseek", json={"api_key": "x"}
+    )
+    assert unauthenticated.status_code == 401
+
+    pm_id, pm_token = create_authenticated_user(ROLE_PORTFOLIO_MANAGER)
+    try:
+        wrong_role = client.post(
+            "/api/v1/settings/llm-provider-keys/deepseek",
+            json={"api_key": "x"},
+            headers=auth_header(pm_token),
+        )
+        assert wrong_role.status_code == 403
+    finally:
+        cleanup_user(pm_id)
+
+
+def test_set_llm_provider_key_rejects_an_unknown_provider():
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.post(
+            "/api/v1/settings/llm-provider-keys/not-a-real-provider",
+            json={"api_key": "x"},
+            headers=auth_header(admin_token),
+        )
+        assert response.status_code == 422
+    finally:
+        cleanup_user(admin_id)
+
+
+def test_set_and_remove_llm_provider_key_round_trips_against_the_real_vault():
+    """Same real-Vault-write-then-restore-or-delete convention as
+    test_vault.py::test_llm_router_prefers_a_real_vault_stored_key_over_env_settings -- a real
+    key written via the actual HTTP endpoint (there is deliberately no GET that reads a stored
+    value back out, so verification goes through vault.read_llm_provider_key directly, same as
+    that test)."""
+    provider = "deepseek"
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    headers = auth_header(admin_token)
+    marker_key = f"settings-api-round-trip-{uuid.uuid4().hex[:8]}"
+
+    try:
+        set_response = client.post(
+            f"/api/v1/settings/llm-provider-keys/{provider}",
+            json={"api_key": marker_key},
+            headers=headers,
+        )
+        assert set_response.status_code == 204
+        assert vault.read_llm_provider_key(provider) == marker_key
+
+        delete_response = client.delete(
+            f"/api/v1/settings/llm-provider-keys/{provider}", headers=headers
+        )
+        assert delete_response.status_code == 204
+        assert vault.read_llm_provider_key(provider) is None
+    finally:
+        cleanup_user(admin_id)
+        # Belt-and-braces: restore the real .env-sourced key if one exists (mirrors
+        # test_vault.py's own established restore-or-delete pattern) in case the DELETE above
+        # never ran (an earlier assertion failed first).
+        real_settings = get_settings()
+        if real_settings.deepseek_api_key:
+            vault.write_llm_provider_key(provider, real_settings.deepseek_api_key)
+        else:
+            vault.delete_llm_provider_key(provider)

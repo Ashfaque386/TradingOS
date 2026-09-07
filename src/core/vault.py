@@ -126,6 +126,30 @@ def _read_secret(path: str, *, settings: Settings) -> dict[str, str] | None:
         return None
 
 
+def _read_secret_created_at(path: str, *, settings: Settings) -> str | None:
+    """NFR-04 (Genuinely Open items pass): "when was this credential last rotated" was
+    previously unanswerable anywhere in this codebase -- Phase_12_Security_Design.md's own
+    rotation table specifies a 60-day target cadence for LLM keys with nothing tracking real
+    elapsed time against it. KV v2 already timestamps every version it creates
+    (`create_or_update_secret`, called by every write helper above); this reads only that
+    metadata -- `read_secret_metadata` never returns the secret value itself, a genuine
+    least-privilege read for a caller that only needs to know "how stale is this," not what it
+    is. Returns `None` under the exact same conditions every other read in this file does
+    (Vault unreachable, nothing ever written) -- never raises."""
+    client = _client(settings)
+    if client is None:
+        return None
+    try:
+        response = client.secrets.kv.v2.read_secret_metadata(mount_point=_KV_MOUNT, path=path)
+        current_version = response["data"]["current_version"]
+        return cast(str, response["data"]["versions"][str(current_version)]["created_time"])
+    except hvac.exceptions.InvalidPath:
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Vault metadata read failed for path=%s: %s", path, exc)
+        return None
+
+
 @dataclass(frozen=True)
 class VaultStatus:
     reachable: bool
@@ -199,6 +223,17 @@ def delete_broker_credentials(broker: str, *, settings: Settings | None = None) 
     )
 
 
+def read_broker_credentials_rotated_at(
+    broker: str, *, settings: Settings | None = None
+) -> str | None:
+    """NFR-04: the real KV v2 version timestamp of this broker's currently-stored credential,
+    or `None` if nothing has ever been written (or Vault is unreachable). See
+    `write_broker_credentials` on the `settings` param."""
+    return _read_secret_created_at(
+        f"{_BROKER_CREDENTIALS_PREFIX}/{broker}", settings=settings or get_settings()
+    )
+
+
 def write_llm_provider_key(
     provider: str, api_key: str, *, settings: Settings | None = None
 ) -> bool:
@@ -217,6 +252,18 @@ def delete_llm_provider_key(provider: str, *, settings: Settings | None = None) 
     leave Vault exactly as they found it (not overwritten with a stale value) when the real
     `.env` has no key for that provider to restore."""
     return _delete_secret(
+        f"{_LLM_PROVIDER_KEYS_PREFIX}/{provider}", settings=settings or get_settings()
+    )
+
+
+def read_llm_provider_key_rotated_at(
+    provider: str, *, settings: Settings | None = None
+) -> str | None:
+    """NFR-04: the real KV v2 version timestamp of this provider's currently-stored key, or
+    `None` if nothing has ever been written to Vault for it (or Vault is unreachable) -- a key
+    resolved purely from `.env` has no Vault-tracked rotation history at all, which is itself
+    real, honest information for a caller checking staleness, not a value to fabricate."""
+    return _read_secret_created_at(
         f"{_LLM_PROVIDER_KEYS_PREFIX}/{provider}", settings=settings or get_settings()
     )
 

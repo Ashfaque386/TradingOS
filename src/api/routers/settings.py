@@ -43,6 +43,7 @@ from sqlalchemy import select
 from src.api.deps import require_role
 from src.api.routers.risk_limits import _latest_risk_limit
 from src.core import vault
+from src.core.audit import write_audit_entry
 from src.core.config import get_settings
 from src.core.db import get_session
 from src.core.security import ROLE_PORTFOLIO_MANAGER, ROLE_SYSTEM_ADMINISTRATOR
@@ -188,6 +189,13 @@ class SystemSettingsResponse(BaseModel):
     # FeatureFlag model, no config table, no toggle mechanism beyond the unrelated per-agent
     # enable/disable state in AgentControlState). Returned honestly empty rather than fabricated.
     feature_flags: dict[str, bool]
+    # NFR-04 (Genuinely Open items pass): "when was this credential last rotated" was previously
+    # unanswerable anywhere in this codebase -- Phase_12_Security_Design.md's own rotation table
+    # specifies a 60-day target for LLM keys with nothing tracking real elapsed time. `None` means
+    # either Vault has nothing stored for it (resolved purely from `.env`, so no rotation history
+    # exists to report) or Vault is unreachable -- indistinguishable, same as every other Vault
+    # read in this codebase, never fabricated.
+    credential_rotation: dict[str, str | None]
 
 
 @router.get("", response_model=SystemSettingsResponse)
@@ -198,6 +206,15 @@ def get_system_settings() -> SystemSettingsResponse:
     (src/data/reference/market_hours.py, nse_holiday_calendar.py). Deliberately does not fabricate
     a feature-flag system that doesn't exist in this codebase -- see SystemSettingsResponse's own
     docstring on that field."""
+    credential_rotation: dict[str, str | None] = {
+        provider_id: vault.read_llm_provider_key_rotated_at(provider_id)
+        for provider_id in LLM_PROVIDER_IDS
+    }
+    # Same 2 real brokers get_integrations_status() above already reports on -- no broader
+    # broker registry exists anywhere in this codebase to iterate instead.
+    for broker in ("zerodha", "upstox"):
+        credential_rotation[broker] = vault.read_broker_credentials_rotated_at(broker)
+
     with get_session() as session:
         limit = _latest_risk_limit(session)
         risk_thresholds = (
@@ -231,6 +248,7 @@ def get_system_settings() -> SystemSettingsResponse:
                 fixed_holidays=sorted(HOLIDAYS),
             ),
             feature_flags={},
+            credential_rotation=credential_rotation,
         )
 
 
@@ -265,7 +283,10 @@ def set_llm_provider_key(
     """REL-021 E21.1. Mirrors `broker_config.py::set_broker_credentials` exactly -- writes to the
     real Vault via `vault.write_llm_provider_key`, which `llm_router.py::resolve_api_key` already
     reads from first on every real LLM call, before falling back to `.env`. A 503 here means
-    Vault is genuinely unreachable, not a fabricated success."""
+    Vault is genuinely unreachable, not a fabricated success.
+
+    UPDATE (Genuinely Open items, NFR-04): wrote no AuditLog row at all before now -- logs only
+    the provider name, never the key value."""
     if provider not in LLM_PROVIDER_IDS:
         raise HTTPException(
             status_code=422,
@@ -273,6 +294,16 @@ def set_llm_provider_key(
         )
     if not vault.write_llm_provider_key(provider, body.api_key):
         raise HTTPException(status_code=503, detail="Vault unreachable -- key not stored")
+    with get_session() as session:
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="LLM_PROVIDER_KEY_ROTATED",
+            entity_type="VaultSecret",
+            after_state={"provider": provider},
+        )
+        session.commit()
 
 
 @router.delete("/llm-provider-keys/{provider}", status_code=204)
@@ -286,6 +317,16 @@ def remove_llm_provider_key(provider: str, _user: User = Depends(_can_manage_llm
             detail=f"Unknown provider '{provider}'. Must be one of {LLM_PROVIDER_IDS}.",
         )
     vault.delete_llm_provider_key(provider)
+    with get_session() as session:
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=_user.email,
+            action="LLM_PROVIDER_KEY_REMOVED",
+            entity_type="VaultSecret",
+            after_state={"provider": provider},
+        )
+        session.commit()
 
 
 # --- Notification channels (real CRUD) ---------------------------------------------------------

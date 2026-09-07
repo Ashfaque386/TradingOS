@@ -10,14 +10,23 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from src.api.main import app
 from src.core import security, vault_transit
+from src.core.db import get_session
 from src.core.security import (
+    ROLE_SYSTEM_ADMINISTRATOR,
     InvalidTokenError,
     create_access_token,
     decode_access_token,
 )
 from src.core.vault_transit import VaultTransitUnavailableError
+from src.models.audit import AuditLog
+from tests.auth_helpers import auth_header, cleanup_user, create_authenticated_user
+
+client = TestClient(app)
 
 
 def test_ensure_transit_key_is_idempotent():
@@ -87,6 +96,39 @@ def test_rotating_the_transit_key_invalidates_tokens_signed_before_the_rotation(
     assert decode_access_token(token_b)["sub"] == "33333333-3333-3333-3333-333333333333"
     with pytest.raises(InvalidTokenError):
         decode_access_token(token_a)
+
+
+def test_rotate_jwt_signing_key_endpoint_requires_system_administrator():
+    unauthenticated = client.post("/api/v1/system/jwt-signing-key/rotate")
+    assert unauthenticated.status_code == 401
+
+
+def test_rotate_jwt_signing_key_endpoint_writes_a_real_audit_entry():
+    """UPDATE (Genuinely Open items, NFR-04): this real, sensitive, "log everyone out" endpoint
+    had no dedicated API-level test at all before now, and wrote no AuditLog row -- both found
+    while researching why the ERDTM's own "Vault-based key rotation" item stayed open. Rotates
+    the real Transit key for real (the same accepted-risk pattern
+    test_rotating_the_transit_key_invalidates_tokens_signed_before_the_rotation above already
+    uses directly), through the actual HTTP endpoint this time, to prove the new audit write."""
+    admin_id, admin_token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        response = client.post(
+            "/api/v1/system/jwt-signing-key/rotate", headers=auth_header(admin_token)
+        )
+        assert response.status_code == 200
+        new_version = response.json()["new_version"]
+
+        with get_session() as session:
+            entry = session.scalars(
+                select(AuditLog)
+                .where(AuditLog.action == "JWT_SIGNING_KEY_ROTATED")
+                .order_by(AuditLog.created_at.desc())
+            ).first()
+            assert entry is not None
+            assert entry.actor_type == "Human"
+            assert entry.after_state["new_version"] == new_version
+    finally:
+        cleanup_user(admin_id)
 
 
 def test_verify_fails_closed_on_a_cache_miss_against_unreachable_vault():
