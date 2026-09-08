@@ -649,6 +649,117 @@ def test_instrument_search_returns_a_real_expiry_for_a_seeded_futures_row():
         _cleanup_test_instruments()
 
 
+def test_instrument_search_returns_a_real_strike_and_expiry_for_a_seeded_option_row():
+    """REL-088/089: option contracts (CE/PE) are in the searchable catalog now. A seeded CE row
+    with a real strike surfaces through the search response with `instrument_type="CE"`, a real
+    `strike`, and a real `expiry` (both null for EQ/INDEX, `expiry`-only for FUT). Name chosen so
+    it can't collide with the EQ/FUT rows the other search tests seed and count."""
+    with get_session() as session:
+        session.add(
+            Instrument(
+                provider=_INSTR_PROVIDER,
+                instrument_key=f"{_INSTR_EXCHANGE}_FO|ROUTERTESTCE",
+                exchange=_INSTR_EXCHANGE,
+                segment=f"{_INSTR_EXCHANGE}_FO",
+                symbol="OPTPROBE 22500 CE 29 SEP 26",
+                name="Option Probe Router Co",
+                instrument_type="CE",
+                isin=None,
+                expiry=date(2026, 9, 29),
+                strike=22500.0,
+                lot_size=75,
+                tick_size=5.0,
+                is_active=True,
+            )
+        )
+        session.commit()
+    try:
+        response = client.get(
+            "/api/v1/market/instruments/search",
+            params={"q": "OPTPROBE 22500 CE", "exchange": _INSTR_EXCHANGE},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        item = body["items"][0]
+        assert item["instrument_key"] == f"{_INSTR_EXCHANGE}_FO|ROUTERTESTCE"
+        assert item["instrument_type"] == "CE"
+        assert item["strike"] == 22500.0
+        assert item["expiry"] == "2026-09-29"
+    finally:
+        _cleanup_test_instruments()
+
+
+def test_selecting_a_real_nifty_option_resolves_and_ingests_or_reports_honestly_empty():
+    """REL-089: the end-to-end path the Candlestick Chart drives when a user picks an F&O option
+    from search -- search hit -> `resolve_instrument_key()` -> managed OHLCV ingest -> chart data
+    fetch. Branches honestly on whatever real historical coverage Upstox has for the specific
+    contract: a liquid near-money strike returns real daily bars; a thin/far-OTM or freshly-listed
+    one legitimately returns zero, and the ingest job must still complete cleanly with no error
+    (the documented OPEN-A6 residual, not a defect). Skips only when no options have been synced
+    into this environment yet, or when the ingest itself hard-fails (a broker-token day)."""
+    from src.data.instruments import resolve_instrument_key
+
+    search = client.get(
+        "/api/v1/market/instruments/search",
+        params={"q": "NIFTY", "instrument_type": "CE", "exchange": "NSE", "page_size": 10},
+    )
+    assert search.status_code == 200
+    options = [i for i in search.json()["items"] if i["instrument_type"] == "CE"]
+    if not options:
+        pytest.skip("No NIFTY CE options synced into the instrument catalog in this environment")
+
+    symbol = options[0]["symbol"]
+    with get_session() as session:
+        assert resolve_instrument_key(session, symbol) == options[0]["instrument_key"]
+
+    user_id, token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
+    try:
+        trigger = client.post(
+            "/api/v1/market/ingest/trigger",
+            json={
+                "source": "managed",
+                "symbols": [symbol],
+                "start": date.today().replace(month=1, day=1).isoformat(),
+                "end": date.today().isoformat(),
+            },
+            headers=auth_header(token),
+        )
+        assert trigger.status_code == 202
+        job_id = trigger.json()["job_id"]
+
+        for _ in range(60):
+            status = client.get(
+                f"/api/v1/market/ingest/jobs/{job_id}/status", headers=auth_header(token)
+            ).json()
+            if status["status"] != "Running":
+                break
+            time.sleep(2)
+    finally:
+        cleanup_user(user_id)
+
+    if status["status"] == "Failed":
+        pytest.skip(
+            f"Managed ingest hard-failed ({status['error']!r}) -- likely a broker-token day"
+        )
+
+    assert status["status"] == "Completed"
+    ohlcv = client.get(f"/api/v1/market/ohlcv/{symbol}")
+    assert ohlcv.status_code == 200
+    bars = ohlcv.json()
+
+    if status["rows_written"] and status["rows_written"] > 0:
+        assert len(bars) > 0
+        assert set(bars[0]) == {"date", "open", "high", "low", "close", "volume"}
+        assert bars[-1]["close"] > 0
+        assert symbol in client.get("/api/v1/market/symbols").json()
+    else:
+        # Honest empty outcome for a contract with no real historical coverage anywhere --
+        # job still completed, no error, and the chart data endpoint returns [] not a 500.
+        assert status["error"] is None
+        assert bars == []
+
+
 def test_instrument_search_returns_empty_for_no_match():
     response = client.get(
         "/api/v1/market/instruments/search", params={"q": "NoSuchInstrumentAtAll12345"}
