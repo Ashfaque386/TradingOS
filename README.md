@@ -32,3 +32,5 @@ docker compose run --rm app mypy src
 ```
 
 The `app` service mounts the repo into the container and reloads on change, so day-to-day editing doesn't require rebuilding the image — only dependency changes in `pyproject.toml` do (`docker compose build app`).
+
+Hit a wall (login timing out, a fresh volume coming up empty, a non-Chrome browser refusing the self-signed cert)? See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
