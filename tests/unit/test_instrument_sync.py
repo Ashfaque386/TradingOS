@@ -89,17 +89,42 @@ def test_parse_record_accepts_a_real_shaped_index_record_with_no_isin_or_lot_siz
 
 
 def test_parse_record_rejects_an_unsupported_instrument_type():
-    """REL-078: FUT is now supported (see test_parse_record_accepts_a_real_shaped_futures_record
-    below) -- options (CE/PE) stay out of scope (REL-077's live broker option-chain serves them,
-    no local catalog needed), so this now proves that boundary instead."""
+    """REL-078/088: EQ/INDEX/FUT/CE/PE are all supported now -- `SG` (sovereign gold bond) is a
+    real type in the live NSE file that stays out of scope, so this proves that boundary."""
     record = {
-        "instrument_type": "CE",
-        "instrument_key": "NSE_FO|54321",
-        "trading_symbol": "NIFTY24DEC24000CE",
-        "name": "NIFTY",
-        "segment": "NSE_FO",
+        "instrument_type": "SG",
+        "instrument_key": "NSE_EQ|SGBSOMETHING",
+        "trading_symbol": "SGBDEC30",
+        "name": "SOVEREIGN GOLD BOND",
+        "segment": "NSE_EQ",
     }
     assert _parse_record(record, exchange="NSE") is None
+
+
+def test_parse_record_accepts_a_real_shaped_option_record_with_a_real_strike():
+    """REL-088: real ground-truth CE row shape from the live Upstox NSE master -- unlike FUT, an
+    option carries a genuine `strike_price` (stored), and its `expiry` epoch ms is parsed the
+    same way. `trading_symbol` is the human-readable "NIFTY 22500 CE 15 SEP 26" a user actually
+    types into the Candlestick Chart's symbol search."""
+    record = {
+        "instrument_type": "CE",
+        "instrument_key": "NSE_FO|50918",
+        "trading_symbol": "NIFTY 22500 CE 15 SEP 26",
+        "name": "NIFTY",
+        "segment": "NSE_FO",
+        "expiry": 1790706599000,
+        "lot_size": 75,
+        "tick_size": 5.0,
+        "strike_price": 22500.0,
+        "underlying_symbol": "NIFTY",
+    }
+    row = _parse_record(record, exchange="NSE")
+    assert row is not None
+    assert row["instrument_type"] == "CE"
+    assert row["symbol"] == "NIFTY 22500 CE 15 SEP 26"
+    assert row["expiry"] == date(2026, 9, 29)
+    assert row["strike"] == 22500.0
+    assert row["lot_size"] == 75
 
 
 def test_parse_record_accepts_a_real_shaped_futures_record():

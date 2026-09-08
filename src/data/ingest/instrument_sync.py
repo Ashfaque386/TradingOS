@@ -12,19 +12,23 @@ Real, confirmed per-type field schema: equities (`instrument_type="EQ"`) carry
 `segment, name, exchange, isin, instrument_type, instrument_key, lot_size, tick_size,
 trading_symbol`; indices (`instrument_type="INDEX"`) carry a minimal real set --
 `segment, name, exchange, instrument_type, instrument_key, trading_symbol` -- genuinely no
-ISIN/lot_size/tick_size, not an omission. Options (`CE`/`PE`) records are real too but out of
-scope -- this codebase's own real options-chain browsing (REL-077) is served live from the
-broker at query time (`BrokerAdapter.get_option_chain`), not from a local instrument catalog,
-so there is no need to sync them here.
+ISIN/lot_size/tick_size, not an omission.
 
-REL-078: futures (`instrument_type="FUT"`) are now in scope, closing this module's own prior
-"F&O out of scope" boundary for that one type. Real, confirmed field schema (fetched from the
-live file, not invented): `segment="NSE_FO", name, exchange, expiry (epoch ms),
+REL-078: futures (`instrument_type="FUT"`) are in scope. Real, confirmed field schema (fetched
+from the live file, not invented): `segment="NSE_FO", name, exchange, expiry (epoch ms),
 instrument_type="FUT", underlying_symbol, instrument_key, lot_size, tick_size, trading_symbol
 (e.g. "TCS FUT 29 SEP 26" -- a real, unique, human-readable string with the expiry already
 baked in as text), strike_price` -- `strike_price` is always `0.0` for a real FUT row, never a
 real strike, so it is not stored (`strike` stays `None`, the same honest-null convention already
 used for EQ/INDEX).
+
+REL-088: option contracts (`instrument_type="CE"`/`"PE"`) are now in scope too -- previously
+left out because F&O *chain* browsing (REL-077) is served live from the broker, but a user
+searching "nifty 22500" in the Candlestick Chart's own symbol picker needs the contract to
+exist in this local catalog. ~66k real CE/PE rows in the live NSE file, carrying a real
+`strike_price` (a genuine value, unlike FUT's always-0.0), `expiry (epoch ms)`,
+`underlying_symbol`, and a human-readable `trading_symbol` (e.g. "NIFTY 22500 CE 15 SEP 26").
+`strike` is stored for these; `expiry` is parsed the same way as for FUT.
 """
 
 from __future__ import annotations
@@ -50,7 +54,9 @@ _INSTRUMENT_MASTER_URL = (
     "https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
 )
 PROVIDER = "upstox_v3"
-_SUPPORTED_INSTRUMENT_TYPES = {"EQ", "INDEX", "FUT"}
+_SUPPORTED_INSTRUMENT_TYPES = {"EQ", "INDEX", "FUT", "CE", "PE"}
+_EXPIRY_TYPES = {"FUT", "CE", "PE"}
+_STRIKE_TYPES = {"CE", "PE"}
 
 
 class InstrumentSyncService:
@@ -93,18 +99,32 @@ class InstrumentSyncService:
             .values(is_active=False)
         )
 
+        parsed = [
+            {**row, "provider": PROVIDER, "is_active": True}
+            for record in records
+            if (row := _parse_record(record, exchange=exchange)) is not None
+        ]
+
+        # Chunked bulk upsert (REL-088): the NSE file jumped from ~3.7k rows to ~70k once option
+        # contracts came into scope, so a per-row `session.execute()` loop is no longer sensible.
+        # 1,000 rows/chunk keeps each statement well under Postgres' 65,535-bind-parameter limit
+        # (~11 columns/row). `set_` references `excluded` (the proposed row), not a fixed dict,
+        # so every row in a multi-row insert updates from its own values on conflict.
         written = 0
-        for record in records:
-            row = _parse_record(record, exchange=exchange)
-            if row is None:
-                continue
-            stmt = insert(Instrument).values(provider=PROVIDER, is_active=True, **row)
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_instruments_provider_key",
-                set_={**row, "is_active": True},
+        for start in range(0, len(parsed), 1000):
+            chunk = parsed[start : start + 1000]
+            stmt = insert(Instrument).values(chunk)
+            update_cols = {
+                c.name: getattr(stmt.excluded, c.name)
+                for c in Instrument.__table__.columns
+                if c.name not in ("id", "created_at", "provider", "instrument_key")
+            }
+            session.execute(
+                stmt.on_conflict_do_update(
+                    constraint="uq_instruments_provider_key", set_=update_cols
+                )
             )
-            session.execute(stmt)
-            written += 1
+            written += len(chunk)
 
         session.commit()
         logger.info("instrument_sync_complete", exchange=exchange, rows_written=written)
@@ -129,8 +149,17 @@ def _parse_record(record: dict[str, Any], *, exchange: str) -> dict[str, Any] | 
     expiry_ms = record.get("expiry")
     expiry: date | None = (
         datetime.fromtimestamp(expiry_ms / 1000, tz=UTC).date()
-        if instrument_type == "FUT" and expiry_ms
+        if instrument_type in _EXPIRY_TYPES and expiry_ms
         else None  # unchanged for EQ/INDEX -- neither type carries a real expiry
+    )
+
+    # A real strike only for options -- a real FUT row's own strike_price is always 0.0, and
+    # EQ/INDEX carry none at all.
+    strike_raw = record.get("strike_price")
+    strike: float | None = (
+        float(strike_raw)
+        if instrument_type in _STRIKE_TYPES and strike_raw not in (None, 0, 0.0)
+        else None
     )
 
     return {
@@ -142,8 +171,7 @@ def _parse_record(record: dict[str, Any], *, exchange: str) -> dict[str, Any] | 
         "instrument_type": instrument_type,
         "isin": record.get("isin"),
         "expiry": expiry,
-        "strike": None,  # real for EQ/INDEX/FUT -- none of these carry a real strike (a real
-        # FUT row's own strike_price is always 0.0, not a real value)
+        "strike": strike,
         "lot_size": record.get("lot_size"),
         "tick_size": record.get("tick_size"),
     }
