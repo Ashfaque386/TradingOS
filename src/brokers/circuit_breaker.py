@@ -17,12 +17,14 @@ directly and simply propagate its errors -- an existing order/position lives on 
 holds it, and this breaker has no order->broker ownership map (that belongs to the Execution
 Agent's order-tracking table, Phase 4 E4.2).
 
-`get_quote` is the one exception: a market quote is broker-agnostic (RELIANCE's LTP is the same
-whichever broker is asked) with no account-state ownership concern, so it *does* fail over to
-`fallback` when `primary` is unreachable -- keeping the live tick feed
-(`src/workers/tick_publisher.py`) running off Upstox whenever the Zerodha access token has
-expired for the day (GLH-11), instead of going dark until the next manual re-auth. This never
-touches circuit state.
+The market-data reads are the exception: a quote / option chain / expiry list is broker-agnostic
+(RELIANCE's LTP, NIFTY's option chain are the same whichever broker is asked) with no
+account-state ownership concern, so `get_quote`, `get_option_chain` and `list_expiries` *do*
+fail over to `fallback` when `primary` is unreachable -- keeping the live tick feed
+(`src/workers/tick_publisher.py`) and the Options Chain browser
+(`GET /market/option-chain/{underlying}`) running off Upstox whenever the Zerodha access token
+has expired for the day (GLH-11), instead of going dark until the next manual re-auth. This
+never touches circuit state.
 """
 
 from dataclasses import dataclass, field
@@ -145,7 +147,7 @@ class BrokerCircuitBreaker(BrokerAdapter):
 
     async def get_quote(self, symbol: str) -> Quote:
         """Broker-agnostic market-data read -- fails over to `fallback` when `primary` is
-        unreachable (see the module docstring on why this one read differs from the account-state
+        unreachable (see the module docstring on why these reads differ from the account-state
         reads above). Circuit state is untouched: only `place_order` gates it."""
         try:
             return await self.primary.get_quote(symbol)
@@ -155,10 +157,26 @@ class BrokerCircuitBreaker(BrokerAdapter):
             return await self.fallback.get_quote(symbol)
 
     async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
-        return await self.primary.get_option_chain(underlying, expiry)
+        """Broker-agnostic market-data read (an option chain is the same regardless of which
+        broker serves it) -- same `primary`-then-`fallback` treatment as `get_quote`. Without
+        this, the Options Chain browser (`GET /market/option-chain/{underlying}`) 502s the moment
+        the Zerodha daily token lapses, even with a valid Upstox token (GLH-11)."""
+        try:
+            return await self.primary.get_option_chain(underlying, expiry)
+        except (httpx.HTTPStatusError, httpx.TransportError):
+            if self.fallback is None:
+                raise
+            return await self.fallback.get_option_chain(underlying, expiry)
 
     async def list_expiries(self, underlying: str) -> list[date]:
-        return await self.primary.list_expiries(underlying)
+        """Broker-agnostic market-data read -- same `primary`-then-`fallback` treatment as
+        `get_quote`/`get_option_chain`."""
+        try:
+            return await self.primary.list_expiries(underlying)
+        except (httpx.HTTPStatusError, httpx.TransportError):
+            if self.fallback is None:
+                raise
+            return await self.fallback.list_expiries(underlying)
 
     # --- circuit breaker internals ------------------------------------------------------
 

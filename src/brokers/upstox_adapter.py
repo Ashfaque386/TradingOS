@@ -16,6 +16,7 @@ modification/cancellation can be exercised end-to-end in tests without ever touc
 exchange or real funds. Flipping to production is a deliberate settings change, never a default.
 """
 
+import contextlib
 from datetime import date
 from typing import Any
 
@@ -272,23 +273,38 @@ class UpstoxAdapter(BrokerAdapter):
         candles: list[list[Any]] = response.json()["data"]["candles"]
         return candles
 
+    async def _resolve_underlying_key(self, underlying: str) -> str:
+        """REL-087: `underlying` may arrive as a bare symbol ("NIFTY", "RELIANCE") -- the shape
+        `KiteConnectAdapter.get_option_chain` accepts, and therefore the shape the circuit breaker
+        passes through on fail-over -- but Upstox's `/option/chain` and `/option/contract` need a
+        real instrument_key ("NSE_INDEX|Nifty 50"). Resolve it if it isn't one already: F&O
+        underlyings are overwhelmingly indices (NIFTY/BANKNIFTY/FINNIFTY), so try Upstox's
+        `segments=INDEX` search first, then fall back to `EQ` for single-stock options. Raises
+        `ValueError` if neither matches, rather than letting Upstox 400 on a malformed key."""
+        if "|" in underlying:
+            return underlying
+        for segment in ("INDEX", "EQ"):
+            with contextlib.suppress(ValueError):
+                return await self.search_instrument_key(underlying, segment=segment)
+        raise ValueError(f"No Upstox INDEX or EQ instrument found for underlying={underlying!r}")
+
     async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
         """REL-010 E10.4. Real Upstox endpoint -- `GET /option/chain?instrument_key=...&
         expiry_date=YYYY-MM-DD` -- confirmed against Upstox's own developer docs. Unlike Kite,
         Upstox's real response already includes real Greeks/IV per contract (`option_greeks`),
         so this method parses Upstox's own values directly rather than re-deriving them via
-        src/engine/options/greeks.py. `underlying` must be a real Upstox instrument_key (e.g.
-        "NSE_INDEX|Nifty 50"), matching this method's own real endpoint contract -- callers
-        resolve a plain symbol via `search_instrument_key()` first, same as every other method
-        here that needs one.
+        src/engine/options/greeks.py. `underlying` may be a bare symbol or a real Upstox
+        instrument_key -- `_resolve_underlying_key()` (REL-087) handles either, so this adapter
+        is interchangeable with Kite's behind the circuit breaker.
 
         Real, confirmed finding (empirical call against the live sandbox at implementation
         time): Upstox's SANDBOX also 404s on this endpoint, same as get_historical_candles above
         -- covered by mocked-HTTP unit tests only; real live verification needs a genuine
         production Upstox access token, not configured in this dev environment."""
+        instrument_key = await self._resolve_underlying_key(underlying)
         response = await self._client.get(
             "/option/chain",
-            params={"instrument_key": underlying, "expiry_date": expiry.isoformat()},
+            params={"instrument_key": instrument_key, "expiry_date": expiry.isoformat()},
         )
         response.raise_for_status()
         rows = response.json()["data"]
@@ -325,10 +341,13 @@ class UpstoxAdapter(BrokerAdapter):
         (https://upstox.com/developer/api-documentation/get-option-contracts/), confirmed
         against Upstox's own current docs -- with no `expiry_date` param, per that endpoint's
         own documented purpose distinct from `/option/chain` above (which requires one real
-        expiry). `underlying` must already be a real Upstox instrument_key, same contract as
-        get_option_chain above. Real, confirmed limitation matching that method's own: Upstox's
-        sandbox 404s on this endpoint too -- covered by mocked-HTTP unit tests only here."""
-        response = await self._client.get("/option/contract", params={"instrument_key": underlying})
+        expiry). `underlying` may be a bare symbol or a real Upstox instrument_key, same as
+        get_option_chain above (REL-087). Real, confirmed limitation matching that method's own:
+        Upstox's sandbox 404s on this endpoint too -- mocked-HTTP unit tests only here."""
+        instrument_key = await self._resolve_underlying_key(underlying)
+        response = await self._client.get(
+            "/option/contract", params={"instrument_key": instrument_key}
+        )
         response.raise_for_status()
         rows = response.json()["data"]
 

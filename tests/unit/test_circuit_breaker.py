@@ -4,7 +4,7 @@ consecutive-5XX detection, automated failover, and queue-and-alert when no fallb
 
 import asyncio
 import contextlib
-from datetime import timedelta
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -12,6 +12,7 @@ import pytest
 from src.brokers.base import (
     BrokerAdapter,
     Margin,
+    OptionChain,
     OrderRequest,
     OrderResponse,
     OrderType,
@@ -25,13 +26,24 @@ class FakeBrokerAdapter(BrokerAdapter):
     """A scripted test double: `place_order_results` is consumed one at a time, each entry
     either an `OrderResponse` (success) or an `Exception` instance (raised)."""
 
-    def __init__(self, place_order_results: list, *, quote_result: object = None) -> None:
+    def __init__(
+        self,
+        place_order_results: list,
+        *,
+        quote_result: object = None,
+        chain_result: object = None,
+        expiries_result: object = None,
+    ) -> None:
         self._results = list(place_order_results)
         self.calls = 0
-        # Either a `Quote` (returned) or an `Exception` instance (raised) -- mirrors the
-        # place_order_results convention above, for the get_quote failover tests.
+        # Each of these is either a value (returned) or an `Exception` instance (raised) --
+        # mirrors the place_order_results convention above, for the market-data failover tests.
         self._quote_result = quote_result
+        self._chain_result = chain_result
+        self._expiries_result = expiries_result
         self.quote_calls = 0
+        self.chain_calls = 0
+        self.expiries_calls = 0
 
     async def place_order(self, order: OrderRequest) -> OrderResponse:
         self.calls += 1
@@ -72,10 +84,20 @@ class FakeBrokerAdapter(BrokerAdapter):
         return self._quote_result
 
     async def get_option_chain(self, underlying: str, expiry):
-        raise NotImplementedError
+        self.chain_calls += 1
+        if self._chain_result is None:
+            raise NotImplementedError
+        if isinstance(self._chain_result, Exception):
+            raise self._chain_result
+        return self._chain_result
 
     async def list_expiries(self, underlying: str):
-        raise NotImplementedError
+        self.expiries_calls += 1
+        if self._expiries_result is None:
+            raise NotImplementedError
+        if isinstance(self._expiries_result, Exception):
+            raise self._expiries_result
+        return self._expiries_result
 
 
 def _dummy_response(broker_order_id: str = "X") -> OrderResponse:
@@ -342,3 +364,47 @@ async def test_get_quote_uses_primary_when_it_is_healthy():
 
     assert quote.last_price == 1300.0
     assert fallback.quote_calls == 0
+
+
+def _chain(spot: float = 24500.0) -> OptionChain:
+    return OptionChain(underlying="NIFTY", expiry=date(2026, 9, 15), spot_price=spot)
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_fails_over_to_fallback_when_primary_is_unreachable():
+    """The exact symptom a user hit: the Options Chain browser 502'd because the Zerodha daily
+    token had lapsed (`/quote?i=NSE:NIFTY 50` -> 403), even though Upstox's token was valid. An
+    option chain is broker-agnostic market data, so it fails over just like get_quote."""
+    primary = FakeBrokerAdapter([], chain_result=_forbidden())
+    fallback = FakeBrokerAdapter([], chain_result=_chain(24500.0))
+    breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback)
+
+    chain = await breaker.get_option_chain("NIFTY", date(2026, 9, 15))
+
+    assert chain.spot_price == 24500.0
+    assert primary.chain_calls == 1
+    assert fallback.chain_calls == 1
+    assert breaker.state == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_list_expiries_fails_over_to_fallback_when_primary_is_unreachable():
+    primary = FakeBrokerAdapter([], expiries_result=_forbidden())
+    fallback = FakeBrokerAdapter([], expiries_result=[date(2026, 9, 15), date(2026, 9, 22)])
+    breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback)
+
+    expiries = await breaker.list_expiries("NIFTY")
+
+    assert expiries == [date(2026, 9, 15), date(2026, 9, 22)]
+    assert fallback.expiries_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_option_chain_and_expiries_propagate_when_there_is_no_fallback():
+    primary = FakeBrokerAdapter([], chain_result=_forbidden(), expiries_result=_forbidden())
+    breaker = BrokerCircuitBreaker(primary=primary, fallback=None)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await breaker.get_option_chain("NIFTY", date(2026, 9, 15))
+    with pytest.raises(httpx.HTTPStatusError):
+        await breaker.list_expiries("NIFTY")

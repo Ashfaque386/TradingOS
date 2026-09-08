@@ -464,3 +464,57 @@ async def test_list_expiries_returns_real_distinct_future_expiries_sorted_ascend
     assert "instrument_key=NSE_INDEX" in captured["url"].replace("%7C", "|")
     assert "expiry_date" not in captured["url"]
     assert expiries == [date(2027, 1, 28), date(2027, 2, 25)]
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_resolves_a_bare_underlying_symbol_via_the_index_search_first():
+    """REL-087: the circuit breaker passes a bare "NIFTY" through on fail-over (the shape Kite's
+    adapter accepts), but Upstox's /option/chain needs a real instrument_key -- so this adapter
+    resolves it, trying INDEX before EQ (F&O underlyings are overwhelmingly indices). Without
+    this, the Options Chain browser 400s the moment it falls over from a lapsed Zerodha token."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if "instruments/search" in request.url.path:
+            assert request.url.params["segments"] == "INDEX"
+            return httpx.Response(
+                200,
+                json={"status": "success", "data": [{"instrument_key": "NSE_INDEX|Nifty 50"}]},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": [
+                    {
+                        "expiry": "2026-09-15",
+                        "strike_price": 24000,
+                        "underlying_spot_price": 23635.1,
+                        "call_options": {
+                            "instrument_key": "NSE_FO|CE24000",
+                            "market_data": {"ltp": 150.0, "oi": 1000},
+                            "option_greeks": {"iv": 15.2},
+                        },
+                        "put_options": None,
+                    }
+                ],
+            },
+        )
+
+    adapter = _adapter_with_transport(handler)
+    chain = await adapter.get_option_chain("NIFTY", date(2026, 9, 15))
+
+    assert any("instruments/search" in u for u in calls)
+    chain_call = next(u for u in calls if "option/chain" in u)
+    assert "instrument_key=NSE_INDEX" in chain_call.replace("%7C", "|")
+    assert chain.spot_price == 23635.1
+
+
+@pytest.mark.asyncio
+async def test_resolve_underlying_key_passes_an_existing_instrument_key_through_untouched():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - never called
+        raise AssertionError("no search should happen for an already-resolved key")
+
+    adapter = _adapter_with_transport(handler)
+    assert await adapter._resolve_underlying_key("NSE_INDEX|Nifty 50") == "NSE_INDEX|Nifty 50"
