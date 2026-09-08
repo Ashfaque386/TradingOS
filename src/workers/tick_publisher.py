@@ -59,6 +59,13 @@ async def _publish_once(symbols: list[str]) -> None:
     redis_client = get_async_redis_client()
     try:
         for symbol in symbols:
+            # `^`-prefixed tickers (e.g. `^NSEI` for Nifty 50) are a yfinance convention the
+            # historical lake understands, but neither broker's live-quote API resolves them --
+            # Kite 403s on `NSE:^NSEI` and Upstox's instrument search silently matches an
+            # unrelated equity, so a "live tick" here would be a fabricated price. Skip them
+            # rather than publish garbage; their historical daily bars still come from yfinance.
+            if symbol.startswith("^"):
+                continue
             try:
                 quote = await broker.get_quote(symbol)
             except Exception as exc:  # noqa: BLE001 -- one symbol's failure must not stop the rest

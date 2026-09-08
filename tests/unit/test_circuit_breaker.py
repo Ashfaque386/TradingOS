@@ -25,9 +25,13 @@ class FakeBrokerAdapter(BrokerAdapter):
     """A scripted test double: `place_order_results` is consumed one at a time, each entry
     either an `OrderResponse` (success) or an `Exception` instance (raised)."""
 
-    def __init__(self, place_order_results: list) -> None:
+    def __init__(self, place_order_results: list, *, quote_result: object = None) -> None:
         self._results = list(place_order_results)
         self.calls = 0
+        # Either a `Quote` (returned) or an `Exception` instance (raised) -- mirrors the
+        # place_order_results convention above, for the get_quote failover tests.
+        self._quote_result = quote_result
+        self.quote_calls = 0
 
     async def place_order(self, order: OrderRequest) -> OrderResponse:
         self.calls += 1
@@ -60,7 +64,12 @@ class FakeBrokerAdapter(BrokerAdapter):
         return []
 
     async def get_quote(self, symbol: str) -> Quote:
-        raise NotImplementedError
+        self.quote_calls += 1
+        if self._quote_result is None:
+            raise NotImplementedError
+        if isinstance(self._quote_result, Exception):
+            raise self._quote_result
+        return self._quote_result
 
     async def get_option_chain(self, underlying: str, expiry):
         raise NotImplementedError
@@ -88,6 +97,18 @@ def _server_error(status_code: int = 503) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", "https://example.com/order/place")
     response = httpx.Response(status_code, request=request)
     return httpx.HTTPStatusError("server error", request=request, response=response)
+
+
+def _forbidden() -> httpx.HTTPStatusError:
+    """The real failure mode this fail-over exists for: Zerodha's daily-expiring Kite Connect
+    access token returns 403 on every call once it lapses (~6 AM IST, no refresh token, GLH-11)."""
+    request = httpx.Request("GET", "https://api.kite.trade/quote")
+    response = httpx.Response(403, request=request)
+    return httpx.HTTPStatusError("forbidden", request=request, response=response)
+
+
+def _quote(last_price: float = 1289.0) -> Quote:
+    return Quote(symbol="RELIANCE", last_price=last_price)
 
 
 def _no_alert_transport() -> httpx.MockTransport:
@@ -270,7 +291,7 @@ async def test_a_success_resets_the_consecutive_failure_counter():
 
 
 @pytest.mark.asyncio
-async def test_modify_cancel_and_read_methods_always_target_primary():
+async def test_modify_cancel_and_account_state_reads_always_target_primary():
     primary = FakeBrokerAdapter([])
     fallback = FakeBrokerAdapter([])
     breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback)
@@ -283,3 +304,41 @@ async def test_modify_cancel_and_read_methods_always_target_primary():
 
     # None of these touched place_order's failure-counting machinery.
     assert breaker.state == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_get_quote_fails_over_to_fallback_when_primary_is_unreachable():
+    """The real GLH-11 scenario: Zerodha's daily token has lapsed (403 on every call), but
+    Upstox's token is still valid -- the live tick feed must keep flowing off Upstox, not go
+    dark. A quote is broker-agnostic, so unlike the account-state reads this one fails over."""
+    primary = FakeBrokerAdapter([], quote_result=_forbidden())
+    fallback = FakeBrokerAdapter([], quote_result=_quote(1289.0))
+    breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback)
+
+    quote = await breaker.get_quote("RELIANCE")
+
+    assert quote.last_price == 1289.0
+    assert primary.quote_calls == 1
+    assert fallback.quote_calls == 1
+    assert breaker.state == "CLOSED"  # a read failover never touches circuit state
+
+
+@pytest.mark.asyncio
+async def test_get_quote_propagates_the_error_when_there_is_no_fallback():
+    primary = FakeBrokerAdapter([], quote_result=_forbidden())
+    breaker = BrokerCircuitBreaker(primary=primary, fallback=None)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await breaker.get_quote("RELIANCE")
+
+
+@pytest.mark.asyncio
+async def test_get_quote_uses_primary_when_it_is_healthy():
+    primary = FakeBrokerAdapter([], quote_result=_quote(1300.0))
+    fallback = FakeBrokerAdapter([], quote_result=_quote(999.0))
+    breaker = BrokerCircuitBreaker(primary=primary, fallback=fallback)
+
+    quote = await breaker.get_quote("RELIANCE")
+
+    assert quote.last_price == 1300.0
+    assert fallback.quote_calls == 0

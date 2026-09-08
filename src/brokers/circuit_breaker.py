@@ -11,10 +11,18 @@ in as `primary` once it's implemented, with `UpstoxAdapter` as `fallback`, match
 "Zerodha: Primary executor. Upstox: Secondary executor/fallback."
 
 Only `place_order` failures affect circuit state: that's the one operation where a retry after
-an ambiguous timeout risks a duplicate live order. `modify_order`/`cancel_order`/read methods
-always target `primary` directly and simply propagate its errors -- an existing order lives on
-whichever broker placed it, and this breaker has no order->broker ownership map (that belongs to
-the Execution Agent's order-tracking table, Phase 4 E4.2).
+an ambiguous timeout risks a duplicate live order. `modify_order`/`cancel_order` and the
+account-state reads (`get_margin`/`get_positions`/`get_order_book`) always target `primary`
+directly and simply propagate its errors -- an existing order/position lives on whichever broker
+holds it, and this breaker has no order->broker ownership map (that belongs to the Execution
+Agent's order-tracking table, Phase 4 E4.2).
+
+`get_quote` is the one exception: a market quote is broker-agnostic (RELIANCE's LTP is the same
+whichever broker is asked) with no account-state ownership concern, so it *does* fail over to
+`fallback` when `primary` is unreachable -- keeping the live tick feed
+(`src/workers/tick_publisher.py`) running off Upstox whenever the Zerodha access token has
+expired for the day (GLH-11), instead of going dark until the next manual re-auth. This never
+touches circuit state.
 """
 
 from dataclasses import dataclass, field
@@ -136,7 +144,15 @@ class BrokerCircuitBreaker(BrokerAdapter):
         return await self.primary.get_positions()
 
     async def get_quote(self, symbol: str) -> Quote:
-        return await self.primary.get_quote(symbol)
+        """Broker-agnostic market-data read -- fails over to `fallback` when `primary` is
+        unreachable (see the module docstring on why this one read differs from the account-state
+        reads above). Circuit state is untouched: only `place_order` gates it."""
+        try:
+            return await self.primary.get_quote(symbol)
+        except (httpx.HTTPStatusError, httpx.TransportError):
+            if self.fallback is None:
+                raise
+            return await self.fallback.get_quote(symbol)
 
     async def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
         return await self.primary.get_option_chain(underlying, expiry)
