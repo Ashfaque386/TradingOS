@@ -37,7 +37,10 @@ const symbolSearchInput = () => cy.get('input[aria-label="Search symbol or name"
 // provider (found for real this session: a dynamically-picked micro-cap completed its real ingest
 // job with `rows_written: 0`, an honest "no data" outcome useEnsureSymbolIngested now surfaces as
 // a real error rather than a false success -- exactly the outcome this list avoids exercising
-// here, since this test's own job is proving the real happy path, not that edge case).
+// here, since this test's own job is proving the real happy path, not that edge case). REL-090:
+// when that zero-row outcome is hit for an F&O *option* symbol (isOptionSymbol() in
+// useEnsureSymbolIngested.ts), the error now also carries a strike/expiry hint, since deep-ITM /
+// thin / certain-weekly option strikes genuinely have no Upstox daily history at all.
 const REAL_LIQUID_LARGE_CAPS = [
   "SBIN",
   "ITC",
