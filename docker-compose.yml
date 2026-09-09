@@ -68,6 +68,14 @@ services:
     # 12)" (inotify instance/watch limits exhausted), even though no port was actually in
     # conflict. Restricting the watch to `src` (the only directory that actually changes at
     # dev-reload time) fixes it.
+    #
+    # --timeout-graceful-shutdown 10 (REL-092): on a reload, uvicorn stops accepting connections,
+    # asks open ones to close, then waits for outstanding app tasks. Without a cap it waits
+    # FOREVER -- an open /stream/* WebSocket relay blocked on its next Redis message never
+    # notices the socket is gone, so a reload wedges on "Waiting for background tasks to
+    # complete." and the server stops answering (login times out). The stream endpoints now exit
+    # on disconnect too (src/api/routers/streams.py), so this cap is the belt to that fix's
+    # braces -- 10s worst case, then uvicorn force-cancels and finishes the reload.
     command:
       [
         "uvicorn",
@@ -79,6 +87,8 @@ services:
         "--reload",
         "--reload-dir",
         "src",
+        "--timeout-graceful-shutdown",
+        "10",
       ]
 
   # REL-007 E7.6 (SEC-023/024, reduced local equivalent): real HTTPS via a self-signed dev CA
@@ -151,6 +161,11 @@ services:
         "--reload",
         "--reload-dir",
         "src",
+        # REL-092: bounded graceful shutdown -- see the `app` service's own note. This is the
+        # service the frontend's HTTPS NEXT_PUBLIC_API_BASE_URL points at, so a wedged reload
+        # here is exactly what makes the login page time out.
+        "--timeout-graceful-shutdown",
+        "10",
       ]
 
   # `image:` names below are given an explicit `tradingos-` prefix (matching `tradingos-app`)

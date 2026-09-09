@@ -137,6 +137,34 @@ def test_a_stale_tick_pauses_the_shared_latency_guard_and_a_fresh_one_resumes_it
     assert guard.paused is False
 
 
+def test_market_stream_ends_promptly_on_disconnect_with_no_traffic():
+    """REL-092: a relay parked in `pubsub.listen()` with no tick ever published must still end
+    the instant the client goes away. Before the anyio drain task this coroutine blocked
+    forever, which is exactly what left `uvicorn --reload` hung on shutdown after every source
+    edit. `TestClient`'s WebSocket context manager waits for the endpoint coroutine on `__exit__`
+    and re-raises anything it left behind, so both a hang *and* a stray `CancelledError` here
+    would fail this test; the time budget makes the intent explicit."""
+    client = TestClient(app)
+    start = time.perf_counter()
+    with client.websocket_connect("/api/v1/stream/market/NOTRAFFIC"):
+        pass  # immediate disconnect, nothing ever published on this channel
+    assert time.perf_counter() - start < 5.0
+
+
+def test_a_fresh_connection_after_an_abrupt_disconnect_still_relays():
+    """The per-connection Redis pubsub/client is closed in the relay's `finally` when the drain
+    task cancels the group, so a reconnect gets a clean subscription rather than inheriting a
+    half-torn one."""
+    client = TestClient(app)
+    with client.websocket_connect("/api/v1/stream/market/RECONNECT"):
+        pass
+    with client.websocket_connect("/api/v1/stream/market/RECONNECT") as websocket:
+        redis_client = get_redis_client()
+        time.sleep(0.2)
+        publish_tick(redis_client, "RECONNECT", json.dumps({"price": 42.0}))
+        assert websocket.receive_json()["ltp"] == 42.0
+
+
 def test_metrics_endpoint_exposes_the_ws_latency_histogram():
     client = TestClient(app)
 

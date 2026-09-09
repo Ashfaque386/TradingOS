@@ -24,15 +24,26 @@ codebase.
 Any error while relaying (client disconnect, Redis hiccup) simply ends the relay loop -- this is
 a read-only display feed, not an order-routing path, so there is nothing risk-sensitive to
 protect by treating errors more strictly here.
+
+REL-092: every relay runs under `_serve`, which pairs it with a `receive()` drain task inside an
+anyio task group. A relay parked waiting for its next Redis message (or asleep between portfolio
+polls) never touches the socket, so it can't notice a disconnect on its own -- which is what
+left `uvicorn --reload` hung on "Waiting for background tasks to complete." after every source
+edit, with the login page timing out until a manual restart. The drain task sees the
+`websocket.disconnect` (client-initiated, or server-initiated when uvicorn tears the transport
+down on shutdown) and cancels the group, so the relay task stops promptly and the reload
+completes on its own.
 """
 
-import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
+import anyio
 from fastapi import APIRouter, WebSocket
 
 from src.api.routers.portfolio import _latest_risk_limit, _pct_of_daily_limit
+from src.brokers.base import BrokerAdapter
 from src.brokers.factory import NoBrokerConfigured, build_broker
 from src.core.db import get_session
 from src.engine.live.tick_listener import get_async_redis_client
@@ -45,6 +56,35 @@ _PORTFOLIO_POLL_INTERVAL_SECONDS = 3.0
 router = APIRouter(prefix="/api/v1/stream", tags=["stream"])
 
 
+async def _serve(websocket: WebSocket, relay: Callable[[], Awaitable[None]]) -> None:
+    """Run `relay` alongside a drain task that watches for the socket closing; whichever finishes
+    first cancels the other. The anyio task group absorbs its own scope cancellation, so this
+    returns cleanly (no `CancelledError` escaping to the ASGI layer) whether the relay ended
+    itself, the client disconnected, or the server is shutting down."""
+
+    async with anyio.create_task_group() as task_group:
+
+        async def _run_relay() -> None:
+            try:
+                await relay()
+            finally:
+                task_group.cancel_scope.cancel()
+
+        async def _drain_until_disconnect() -> None:
+            try:
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        return
+            except Exception:
+                return
+            finally:
+                task_group.cancel_scope.cancel()
+
+        task_group.start_soon(_run_relay)
+        task_group.start_soon(_drain_until_disconnect)
+
+
 @router.websocket("/market/{symbol}")
 async def stream_market_ticks(websocket: WebSocket, symbol: str) -> None:
     """API-091. Also measures relay latency (tick timestamp -> about to send) for the
@@ -52,77 +92,78 @@ async def stream_market_ticks(websocket: WebSocket, symbol: str) -> None:
     Register) -- skipped when a tick has no timestamp, since latency can't be measured against
     nothing."""
     await websocket.accept()
-    client = get_async_redis_client()
-    pubsub = client.pubsub()
-    channel = f"{TICK_CHANNEL_PREFIX}{symbol}"
-    await pubsub.subscribe(channel)
-    try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            tick = json.loads(message["data"])
 
-            timestamp_str = tick.get("timestamp")
-            if timestamp_str:
-                tick_time = datetime.fromisoformat(timestamp_str)
-                latency = (datetime.now(UTC) - tick_time).total_seconds()
-                WS_STREAM_LATENCY_SECONDS.labels(stream="market").observe(latency)
-                get_latency_guard().record(latency)
+    async def relay() -> None:
+        client = get_async_redis_client()
+        pubsub = client.pubsub()
+        channel = f"{TICK_CHANNEL_PREFIX}{symbol}"
+        await pubsub.subscribe(channel)
+        try:
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                tick = json.loads(message["data"])
 
-            await websocket.send_json(
-                {
-                    "symbol": symbol,
-                    "ltp": tick["price"],
-                    "volume": tick.get("volume", 0),
-                    "ts": timestamp_str,
-                }
-            )
-    except Exception:
-        pass
-    finally:
-        await pubsub.unsubscribe(channel)
-        await pubsub.aclose()  # type: ignore[no-untyped-call]
-        await client.aclose()
+                timestamp_str = tick.get("timestamp")
+                if timestamp_str:
+                    tick_time = datetime.fromisoformat(timestamp_str)
+                    latency = (datetime.now(UTC) - tick_time).total_seconds()
+                    WS_STREAM_LATENCY_SECONDS.labels(stream="market").observe(latency)
+                    get_latency_guard().record(latency)
+
+                await websocket.send_json(
+                    {
+                        "symbol": symbol,
+                        "ltp": tick["price"],
+                        "volume": tick.get("volume", 0),
+                        "ts": timestamp_str,
+                    }
+                )
+        except Exception:
+            pass
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
+            await client.aclose()
+
+    await _serve(websocket, relay)
 
 
 @router.websocket("/agents/logs")
 async def stream_agent_logs(websocket: WebSocket) -> None:
     """API-092."""
     await websocket.accept()
-    client = get_async_redis_client()
-    pubsub = client.pubsub()
-    await pubsub.subscribe(AGENT_LOG_CHANNEL)
-    try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            await websocket.send_text(message["data"])
-    except Exception:
-        pass
-    finally:
-        await pubsub.unsubscribe(AGENT_LOG_CHANNEL)
-        await pubsub.aclose()  # type: ignore[no-untyped-call]
-        await client.aclose()
+    await _serve(websocket, _channel_relay(websocket, AGENT_LOG_CHANNEL))
 
 
 @router.websocket("/orders")
 async def stream_order_events(websocket: WebSocket) -> None:
     """API-093 (REL-061). Same thin verbatim-relay shape as /agents/logs above."""
     await websocket.accept()
-    client = get_async_redis_client()
-    pubsub = client.pubsub()
-    await pubsub.subscribe(ORDER_EVENT_CHANNEL)
-    try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            await websocket.send_text(message["data"])
-    except Exception:
-        pass
-    finally:
-        await pubsub.unsubscribe(ORDER_EVENT_CHANNEL)
-        await pubsub.aclose()  # type: ignore[no-untyped-call]
-        await client.aclose()
+    await _serve(websocket, _channel_relay(websocket, ORDER_EVENT_CHANNEL))
+
+
+def _channel_relay(websocket: WebSocket, channel: str) -> Callable[[], Awaitable[None]]:
+    """Verbatim relay of every message on a single Redis pub/sub channel to the socket -- shared
+    by /agents/logs and /orders, whose payloads are already in their documented shape."""
+
+    async def relay() -> None:
+        client = get_async_redis_client()
+        pubsub = client.pubsub()
+        await pubsub.subscribe(channel)
+        try:
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                await websocket.send_text(message["data"])
+        except Exception:
+            pass
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
+            await client.aclose()
+
+    return relay
 
 
 @router.websocket("/portfolio")
@@ -138,6 +179,13 @@ async def stream_portfolio(websocket: WebSocket) -> None:
         await websocket.close(code=1011, reason=str(exc))
         return
 
+    async def relay() -> None:
+        await _portfolio_poll_loop(websocket, broker)
+
+    await _serve(websocket, relay)
+
+
+async def _portfolio_poll_loop(websocket: WebSocket, broker: BrokerAdapter) -> None:
     try:
         while True:
             positions = await broker.get_positions()
@@ -156,6 +204,6 @@ async def stream_portfolio(websocket: WebSocket) -> None:
                     "ts": datetime.now(UTC).isoformat(),
                 }
             )
-            await asyncio.sleep(_PORTFOLIO_POLL_INTERVAL_SECONDS)
+            await anyio.sleep(_PORTFOLIO_POLL_INTERVAL_SECONDS)
     except Exception:
         pass

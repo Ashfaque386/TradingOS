@@ -6,17 +6,20 @@ Real gotchas hit while running the full Docker stack locally, with the exact fix
 
 **Symptom.** The login page shows *"Couldn't reach the server at https://localhost:8443"*, or a request to it just hangs / `ERR_TIMED_OUT`. The app itself was working minutes earlier.
 
-**Cause.** `app` and `app-tls` run `uvicorn --reload` with a file watcher (see `docker-compose.yml`). A rapid burst of source edits can leave one reload wedged in `Shutting down` → `Waiting for background tasks to complete.` — a long-lived background task (an open WebSocket relay such as `/stream/portfolio`, or the tick listener) doesn't return, so uvicorn never finishes the reload and the server stops accepting connections. The container stays `Up` (the process is alive, just stuck), so `docker compose ps` looks fine.
+**Cause.** `app` and `app-tls` run `uvicorn --reload` with a file watcher (see `docker-compose.yml`). On a reload, uvicorn stops accepting connections, asks open ones to close, then waits for outstanding app tasks to finish. An open `/stream/*` WebSocket relay parked waiting for its next Redis message never touched the socket, so it couldn't notice the shutdown — uvicorn hung on `Shutting down` → `Waiting for background tasks to complete.` indefinitely and the server stopped answering. The container stayed `Up` (process alive, just stuck), so `docker compose ps` looked fine.
 
-**Confirm it.** `docker compose logs app-tls --tail 20` ends on `Waiting for background tasks to complete. (CTRL+C to force quit)` with nothing after it.
+**Permanent fix (REL-092).** Two changes so this self-recovers:
 
-**Fix.**
+- The `/stream/*` endpoints (`src/api/routers/streams.py`) now run each relay inside an anyio task group alongside a `receive()` drain task, so a client disconnect *or* a server shutdown ends the relay promptly — uvicorn's shutdown finishes cleanly, no "Waiting for background tasks" line at all.
+- `docker-compose.yml` adds `--timeout-graceful-shutdown 10` to both `app` and `app-tls` — a hard cap so any *future* misbehaving shutdown task can't hang the reload either.
+
+A reload now completes on its own in ~20s (mostly fresh-worker startup: Vault round-trips + APScheduler + router imports), where it previously hung forever.
+
+**If you still hit a hang** (e.g. a brand-new long-lived task added later), the manual clear is unchanged:
 
 ```bash
 docker compose restart app app-tls
 ```
-
-Then `POST /api/v1/auth/login` returns `200` again. If you're editing many files at once, expect to do this occasionally.
 
 ## A fresh Postgres / data-lake volume comes up empty
 
