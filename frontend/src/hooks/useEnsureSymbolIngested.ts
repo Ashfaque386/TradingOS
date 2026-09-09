@@ -37,7 +37,14 @@ export function useEnsureSymbolIngested() {
   const [error, setError] = useState<string | null>(null);
 
   async function ensure(symbol: string): Promise<boolean> {
-    if ((symbolsQuery.data ?? []).includes(symbol)) return true;
+    if ((symbolsQuery.data ?? []).includes(symbol)) {
+      // Clear any banner left by a previous failed lookup -- otherwise selecting an
+      // already-cached symbol after a failure leaves the old red error text on screen
+      // under a chart that actually loaded fine.
+      setStatus("idle");
+      setError(null);
+      return true;
+    }
 
     setStatus("ingesting");
     setError(null);

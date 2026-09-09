@@ -214,3 +214,65 @@ def test_per_instrument_isolation_a_primary_failure_does_not_persist_across_call
 def test_no_providers_raises_value_error():
     with pytest.raises(ValueError):
         MarketDataManager([])
+
+
+# -- REL-091: the separate F&O provider chain ------------------------------------------------
+
+_FO_KEY = "NSE_FO|40679"
+_FO_SYMBOL = "NIFTY 22300 CE 08 SEP 26"
+
+
+def test_fo_instrument_uses_the_fo_chain_not_the_equity_chain():
+    equity = _FakeProvider("upstox_v3")
+    bhavcopy = _FakeProvider("nse_fo_bhavcopy")
+    result = MarketDataManager([equity], fo_providers=[bhavcopy]).get_historical_data(
+        instrument_key=_FO_KEY, symbol=_FO_SYMBOL, start=_DAY, end=_DAY, timeframe="1d"
+    )
+    assert result.provider_used == "nse_fo_bhavcopy"
+    assert equity.call_count == 0
+
+
+def test_fo_chain_falls_over_from_bhavcopy_to_upstox():
+    bhavcopy = _FakeProvider("nse_fo_bhavcopy", raises=ProviderInstrumentNotFoundError("no rows"))
+    upstox = _FakeProvider("upstox_v3")
+    result = MarketDataManager(
+        [_FakeProvider("yfinance")], fo_providers=[bhavcopy, upstox]
+    ).get_historical_data(
+        instrument_key=_FO_KEY, symbol=_FO_SYMBOL, start=_DAY, end=_DAY, timeframe="1d"
+    )
+    assert result.provider_used == "upstox_v3"
+
+
+def test_equity_instrument_ignores_the_fo_chain():
+    equity = _FakeProvider("upstox_v3")
+    bhavcopy = _FakeProvider("nse_fo_bhavcopy")
+    result = MarketDataManager([equity], fo_providers=[bhavcopy]).get_historical_data(
+        instrument_key="NSE_EQ|INE002A01018",
+        symbol="RELIANCE",
+        start=_DAY,
+        end=_DAY,
+        timeframe="1d",
+    )
+    assert result.provider_used == "upstox_v3"
+    assert bhavcopy.call_count == 0
+
+
+def test_a_bare_fo_symbol_without_an_nse_fo_key_still_routes_to_the_fo_chain():
+    """`resolve_instrument_key()` can miss (the contract isn't in the synced catalog), so
+    `_fetch_managed` passes the bare symbol as the instrument_key -- the F&O shape of the
+    symbol itself still has to route it to the bhavcopy chain."""
+    bhavcopy = _FakeProvider("nse_fo_bhavcopy")
+    result = MarketDataManager(
+        [_FakeProvider("upstox_v3")], fo_providers=[bhavcopy]
+    ).get_historical_data(
+        instrument_key=_FO_SYMBOL, symbol=_FO_SYMBOL, start=_DAY, end=_DAY, timeframe="1d"
+    )
+    assert result.provider_used == "nse_fo_bhavcopy"
+
+
+def test_no_fo_chain_configured_an_fo_request_uses_the_default_chain():
+    upstox = _FakeProvider("upstox_v3")
+    result = MarketDataManager([upstox]).get_historical_data(
+        instrument_key=_FO_KEY, symbol=_FO_SYMBOL, start=_DAY, end=_DAY, timeframe="1d"
+    )
+    assert result.provider_used == "upstox_v3"

@@ -174,6 +174,11 @@ class Settings(BaseSettings):
     primary_market_data_provider: Literal["upstox_v3", "yfinance"] = "upstox_v3"
     fallback_market_data_provider: Literal["upstox_v3", "yfinance"] = "yfinance"
     enable_provider_failover: bool = True
+    # REL-091: for F&O instruments only, try the free official NSE F&O bhavcopy
+    # (src/data/providers/nse_fo_bhavcopy.py) before Upstox V3 -- it carries every strike/expiry
+    # incl. expired contracts and real open interest, EOD. `False` reverts F&O to the plain
+    # Upstox V3 -> yfinance chain. Day-files are cached under `data_lake_root/_bhavcopy_fo`.
+    enable_nse_fo_bhavcopy: bool = True
     # Deliberately unprefixed to match the exact .env variable names this feature was specced
     # with (MAX_RETRIES/REQUEST_TIMEOUT/BACKOFF_FACTOR/MAX_CONCURRENT_REQUESTS) -- generic-
     # sounding, but real, dedicated market-data-fetch tuning knobs, not an existing concern

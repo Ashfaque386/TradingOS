@@ -44,10 +44,18 @@ from src.data.providers.base import (
     Timeframe,
     validate_candles,
 )
+from src.data.providers.nse_fo_bhavcopy import NseFoBhavcopyProvider, parse_fo_symbol
 from src.data.providers.upstox_v3 import UpstoxV3Provider
 from src.data.providers.yahoo_finance import YahooFinanceProvider
 
 logger = structlog.get_logger(__name__)
+
+
+def _is_fo_instrument(instrument_key: str, symbol: str) -> bool:
+    """An NSE/BSE derivatives instrument -- either a real `NSE_FO|...` key from
+    `resolve_instrument_key()`, or a bare F&O contract symbol the resolver couldn't map."""
+    return instrument_key.startswith(("NSE_FO|", "BSE_FO|")) or parse_fo_symbol(symbol) is not None
+
 
 # Non-retryable: retrying against the SAME provider can't succeed (a bad credential stays bad, a
 # missing instrument stays missing, an unsupported interval stays unsupported) -- straight to
@@ -98,6 +106,7 @@ class MarketDataManager:
         self,
         providers: list[MarketDataProvider],
         *,
+        fo_providers: list[MarketDataProvider] | None = None,
         max_retries: int = 3,
         backoff_factor: float = 1.0,
         enable_failover: bool = True,
@@ -105,6 +114,11 @@ class MarketDataManager:
         if not providers:
             raise ValueError("MarketDataManager needs at least one configured provider")
         self._providers = providers
+        # A separate failover chain used only for F&O instruments (REL-091): the free, official
+        # NSE F&O bhavcopy covers every strike/expiry that Upstox V3's active-contract endpoint
+        # doesn't. `None` -> F&O requests fall through to the normal `providers` chain, exactly
+        # as before this chain existed.
+        self._fo_providers = fo_providers
         self._max_retries = max_retries
         self._backoff_factor = backoff_factor
         self._enable_failover = enable_failover
@@ -118,7 +132,12 @@ class MarketDataManager:
         end: date,
         timeframe: Timeframe = "1d",
     ) -> MarketDataResult:
-        providers = self._providers if self._enable_failover else self._providers[:1]
+        chain = (
+            self._fo_providers
+            if self._fo_providers and _is_fo_instrument(instrument_key, symbol)
+            else self._providers
+        )
+        providers = chain if self._enable_failover else chain[:1]
         requested = providers[0].name
         errors: dict[str, str] = {}
 
@@ -240,8 +259,18 @@ def build_market_data_manager(settings: Settings | None = None) -> MarketDataMan
     if not ordered:
         ordered.append(available["yfinance"])
 
+    # REL-091: F&O instruments get their own chain -- the free, official NSE F&O bhavcopy first
+    # (every strike/expiry, real open interest, EOD), Upstox V3 as the fallback. yfinance is
+    # never in this chain (it has no NSE F&O). Disabled -> F&O falls through to `ordered`.
+    fo_chain: list[MarketDataProvider] = []
+    if settings.enable_nse_fo_bhavcopy:
+        fo_chain.append(NseFoBhavcopyProvider(cache_dir=settings.data_lake_root / "_bhavcopy_fo"))
+    if "upstox_v3" in available:
+        fo_chain.append(available["upstox_v3"])
+
     return MarketDataManager(
         ordered,
+        fo_providers=fo_chain or None,
         max_retries=settings.max_retries,
         backoff_factor=settings.backoff_factor,
         enable_failover=settings.enable_provider_failover,
