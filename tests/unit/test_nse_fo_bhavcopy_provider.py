@@ -46,10 +46,11 @@ def _udiff_row(
     c: str = "1520",
     oi: str = "250000",
     vol: str = "12000",
+    settle: str | None = None,
 ) -> str:
     return (
         f"{trad_dt},{trad_dt},FO,{fin_tp},{tckr},{xpry},{strike},{opt},"
-        f"{o},{h},{low},{c},{c},{oi},{vol},999.0"
+        f"{o},{h},{low},{c},{settle if settle is not None else c},{oi},{vol},999.0"
     )
 
 
@@ -241,6 +242,106 @@ def test_no_matching_contract_in_the_window_raises_empty_data(tmp_path):
             end=date(2026, 9, 2),
             timeframe="1d",
         )
+
+
+def _never_traded_udiff_csv(trad_dt: str, *, settle: str) -> str:
+    """A listed-but-never-traded strike: O=H=L=C=0.00 in the file, only a settlement price."""
+    return (
+        "\n".join(
+            [
+                _UDIFF_HEADER,
+                _udiff_row(
+                    trad_dt=trad_dt,
+                    o="0.00",
+                    h="0.00",
+                    low="0.00",
+                    c="0.00",
+                    oi="0",
+                    vol="0",
+                    settle=settle,
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+
+def test_a_never_traded_contract_falls_back_to_the_settlement_price(tmp_path):
+    """REL-094: a deep-ITM strike NSE lists but nobody trades has O=H=L=0.00 and only a daily
+    settlement price. Rather than "no data" for the whole contract, each such day charts as a
+    flat bar at that real NSE mark, with volume 0 (marked, not traded)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "BhavCopy_NSE_FO_0_0_0_20260901" in request.url.path:
+            return httpx.Response(
+                200,
+                content=_zip_bytes(
+                    "d.csv", _never_traded_udiff_csv("2026-09-01", settle="3989.20")
+                ),
+            )
+        if "BhavCopy_NSE_FO_0_0_0_20260902" in request.url.path:
+            return httpx.Response(
+                200,
+                content=_zip_bytes(
+                    "d.csv", _never_traded_udiff_csv("2026-09-02", settle="4012.55")
+                ),
+            )
+        return httpx.Response(404)
+
+    provider = _provider(tmp_path, handler)
+    candles = provider.get_historical_data(
+        instrument_key="NSE_FO|71710",
+        symbol="NIFTY 22300 CE 08 SEP 26",
+        start=date(2026, 9, 1),
+        end=date(2026, 9, 2),
+        timeframe="1d",
+    )
+    assert [c.close for c in candles] == [3989.20, 4012.55]
+    first = candles[0]
+    assert first.open == first.high == first.low == first.close == 3989.20  # flat mark bar
+    assert first.volume == 0
+    assert first.open_interest == 0
+    assert first.provider == "nse_fo_bhavcopy"
+
+
+def test_a_row_with_neither_ohlc_nor_a_settlement_price_is_still_skipped(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "BhavCopy_NSE_FO_0_0_0_2026090" in request.url.path:
+            return httpx.Response(
+                200,
+                content=_zip_bytes("d.csv", _never_traded_udiff_csv("2026-09-01", settle="0.00")),
+            )
+        return httpx.Response(404)
+
+    provider = _provider(tmp_path, handler)
+    with pytest.raises(ProviderEmptyDataError):
+        provider.get_historical_data(
+            instrument_key="NSE_FO|1",
+            symbol="NIFTY 22300 CE 08 SEP 26",
+            start=date(2026, 9, 1),
+            end=date(2026, 9, 2),
+            timeframe="1d",
+        )
+
+
+def test_a_traded_day_still_uses_real_ohlc_not_the_settlement_price(tmp_path):
+    """The fallback must not shadow a genuinely traded row -- REL-091's own fixture has
+    SttlmPric == close, so this pins that a real OHLC is used as-is."""
+    provider = _provider(tmp_path, _Handler())
+    candles = provider.get_historical_data(
+        instrument_key="NSE_FO|40679",
+        symbol="NIFTY 22300 CE 08 SEP 26",
+        start=date(2026, 9, 1),
+        end=date(2026, 9, 1),
+        timeframe="1d",
+    )
+    assert (candles[0].open, candles[0].high, candles[0].low, candles[0].close) == (
+        1500.0,
+        1560.0,
+        1490.0,
+        1520.0,
+    )
+    assert candles[0].volume == 12000
 
 
 def test_a_404_day_is_skipped_not_fatal(tmp_path):

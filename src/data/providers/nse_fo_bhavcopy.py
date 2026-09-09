@@ -20,6 +20,12 @@ Source files -- immutable once published, so each day-file is cached on disk on 
 EOD only -- no intraday (that's Phase 2, Kite Connect). The current trading day's file appears
 only after NSE publishes it (~7 pm IST); a request that includes today just gets every earlier
 day it can until then.
+
+REL-094: a deep-OTM/ITM strike NSE lists but nobody trades has O=H=L=0.00 in the file and only a
+daily settlement price. Rather than returning "no data" for the whole contract, each such day is
+charted as a flat bar at that settlement price (a real, NSE-computed mark-to-market value), with
+`volume=0` kept so it reads as "marked, not traded". A row with neither a real OHLC nor a
+positive settlement price is still skipped.
 """
 
 from __future__ import annotations
@@ -114,9 +120,30 @@ def parse_fo_symbol(symbol: str) -> FoContract | None:
     return FoContract(match["underlying"], expiry, match["opt"], strike)
 
 
-# UDiFF (current) vs legacy (< 2024-07-08) column names for the six fields we read.
+# UDiFF (current) vs legacy (< 2024-07-08) column names for the fields we read.
 _UDIFF_COLS = ("OpnPric", "HghPric", "LwPric", "ClsPric", "TtlTradgVol", "OpnIntrst")
 _LEGACY_COLS = ("OPEN", "HIGH", "LOW", "CLOSE", "CONTRACTS", "OPEN_INT")
+# NSE's daily mark-to-market settlement price -- present even for a listed-but-never-traded
+# contract, where OpnPric/HghPric/LwPric are all 0.00 (REL-094 charts that as a flat bar).
+_UDIFF_SETTLE = "SttlmPric"
+_LEGACY_SETTLE = "SETTLE_PR"
+
+
+def _num(value: str | None) -> float:
+    """Parse a bhavcopy numeric cell; a blank/missing/malformed cell is 0.0, not an error."""
+    try:
+        return float(value) if value not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _ohlc_is_real(o: float, h: float, low: float, c: float) -> bool:
+    """True only for a genuinely-traded row: every price positive and the OHLC self-consistent.
+    A never-traded contract has O=H=L=0.00 in the file and fails here -- the caller then falls
+    back to the settlement price."""
+    if min(o, h, low, c) <= 0.0:
+        return False
+    return h >= low and h >= o and h >= c and low <= o and low <= c
 
 
 class NseFoBhavcopyProvider(MarketDataProvider):
@@ -231,9 +258,8 @@ class NseFoBhavcopyProvider(MarketDataProvider):
                 f"nse_fo_bhavcopy {day.isoformat()} file is missing an expected column: {exc}"
             ) from exc
 
-        price_cols = _LEGACY_COLS if legacy else _UDIFF_COLS
         for candidate in candidates:
-            if self._prices_are_sane(candidate, price_cols):
+            if self._row_yields_a_candle(candidate, legacy=legacy):
                 return candidate
         return None
 
@@ -276,34 +302,48 @@ class NseFoBhavcopyProvider(MarketDataProvider):
         return out
 
     @staticmethod
-    def _prices_are_sane(row: dict[str, str], price_cols: tuple[str, ...]) -> bool:
-        o_col, h_col, l_col, c_col, _, _ = price_cols
-        try:
-            o = float(row[o_col])
-            h = float(row[h_col])
-            low = float(row[l_col])
-            c = float(row[c_col])
-        except (KeyError, ValueError):
-            return False
-        if min(o, h, low, c) <= 0.0:
-            # A contract that did not trade that day -- no meaningful OHLC. Skipped, not an error.
-            return False
-        return h >= low and h >= o and h >= c and low <= o and low <= c
+    def _row_yields_a_candle(row: dict[str, str], *, legacy: bool) -> bool:
+        """A row is chartable if it either has a real traded OHLC, or -- for a listed-but-
+        never-traded contract, where OHLC is all 0.00 -- a positive settlement price to draw a
+        flat mark-to-market bar from (REL-094). A row with neither is genuinely nothing and is
+        skipped."""
+        o_col, h_col, l_col, c_col, _, _ = _LEGACY_COLS if legacy else _UDIFF_COLS
+        settle_col = _LEGACY_SETTLE if legacy else _UDIFF_SETTLE
+        if _ohlc_is_real(
+            _num(row.get(o_col)), _num(row.get(h_col)), _num(row.get(l_col)), _num(row.get(c_col))
+        ):
+            return True
+        return _num(row.get(settle_col)) > 0.0
 
     def _to_candle(
         self, row: dict[str, str], day: date, instrument_key: str, symbol: str
     ) -> Candle:
-        o_col, h_col, l_col, c_col, vol_col, oi_col = (
-            _LEGACY_COLS if day < _UDIFF_START else _UDIFF_COLS
+        legacy = day < _UDIFF_START
+        o_col, h_col, l_col, c_col, vol_col, oi_col = _LEGACY_COLS if legacy else _UDIFF_COLS
+        settle_col = _LEGACY_SETTLE if legacy else _UDIFF_SETTLE
+
+        o, h, low, c = (
+            _num(row.get(o_col)),
+            _num(row.get(h_col)),
+            _num(row.get(l_col)),
+            _num(row.get(c_col)),
         )
+        volume = int(_num(row.get(vol_col)))
+        if not _ohlc_is_real(o, h, low, c):
+            # Listed-but-never-traded contract: no OHLC in the file, only NSE's daily
+            # mark-to-market settlement price. Chart it as a flat bar; keep volume 0 so it
+            # reads as "marked, not traded" (REL-094).
+            o = h = low = c = _num(row.get(settle_col))
+            volume = 0
+
         return Candle(
             timestamp=datetime.combine(day, time(0, 0), tzinfo=_IST),
-            open=float(row[o_col]),
-            high=float(row[h_col]),
-            low=float(row[l_col]),
-            close=float(row[c_col]),
-            volume=int(float(row.get(vol_col, "0") or "0")),
-            open_interest=int(float(row.get(oi_col, "0") or "0")),
+            open=o,
+            high=h,
+            low=low,
+            close=c,
+            volume=volume,
+            open_interest=int(_num(row.get(oi_col))),
             instrument_key=instrument_key,
             symbol=symbol,
             timeframe="1d",
