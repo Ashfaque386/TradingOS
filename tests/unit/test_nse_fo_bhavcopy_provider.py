@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re as _re
+import time as _time
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -309,3 +311,57 @@ def test_a_404_day_is_cached_so_nse_is_not_re_hit(tmp_path):
 
 def test_health_check_is_optimistic(tmp_path):
     assert _provider(tmp_path, _Handler()).health_check() is True
+
+
+def test_the_scan_window_is_clamped_to_roughly_the_contract_lifetime(tmp_path):
+    """A 2-year backfill request for a Sept-2026 contract must not fan out to 2024 day-files --
+    those are all pre-listing 404s, and scanning them one at a time is what blew past the
+    frontend's 120s on-demand-ingest poll (the "Timed out fetching real historical data"
+    report). The scan is clamped to ~400 days before expiry."""
+    handler = _Handler()
+    provider = _provider(tmp_path, handler)
+    provider.get_historical_data(
+        instrument_key="NSE_FO|40679",
+        symbol="NIFTY 22300 CE 08 SEP 26",  # expiry 2026-09-08
+        start=date(2024, 9, 1),  # ~2 years before expiry
+        end=date(2026, 9, 2),
+        timeframe="1d",
+    )
+    requested = sorted(
+        _re.search(r"_FO_0_0_0_(\d{8})_", path).group(1)  # type: ignore[union-attr]
+        for path in handler.hits
+        if "BhavCopy_NSE_FO" in path
+    )
+    assert requested, "expected at least one day-file request"
+    assert requested[0] >= "20250801", f"scan reached back to {requested[0]} -- clamp not applied"
+
+
+def test_day_files_are_fetched_concurrently(tmp_path):
+    """The loader fans day-file downloads across a thread pool -- a slow-per-request handler for
+    a multi-day window must finish in far less than sum(per-request latency)."""
+
+    def slow_handler(request: httpx.Request) -> httpx.Response:
+        _time.sleep(0.3)
+        match = _re.search(r"_FO_0_0_0_(\d{8})_", request.url.path)
+        if match and match.group(1).startswith("202609"):
+            ymd = match.group(1)
+            trad = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
+            return httpx.Response(
+                200,
+                content=_zip_bytes("d.csv", _udiff_csv(trad, o="10", h="12", low="9", c="11")),
+            )
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(slow_handler), follow_redirects=True)
+    provider = NseFoBhavcopyProvider(cache_dir=tmp_path, client=client)
+    start = _time.perf_counter()
+    candles = provider.get_historical_data(
+        instrument_key="NSE_FO|1",
+        symbol="NIFTY 22300 CE 08 SEP 26",
+        start=date(2026, 9, 1),
+        end=date(2026, 9, 8),
+        timeframe="1d",
+    )
+    elapsed = _time.perf_counter() - start
+    assert len(candles) == 6  # Sep 1-8 2026 minus the weekend
+    assert elapsed < 6 * 0.3, f"{elapsed:.2f}s for 6 x 0.3s requests -- not run concurrently"

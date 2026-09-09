@@ -27,8 +27,10 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from functools import partial
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -52,6 +54,17 @@ logger = structlog.get_logger(__name__)
 
 _IST = ZoneInfo("Asia/Kolkata")
 _ARCHIVE = "https://nsearchives.nseindia.com"
+# Day-files are independent (each its own URL + its own cache path), so a cold multi-year
+# request fans its downloads out across a bounded thread pool instead of fetching ~250-480
+# ~2-5 MB zips one at a time (which blew past the frontend's 120s on-demand-ingest poll -- the
+# "Timed out fetching real historical data" report). 8 is polite to NSE's archive host and
+# still cuts a cold 1-year fetch to well under the timeout; every later fetch is disk-cache.
+_DOWNLOAD_CONCURRENCY = 8
+# No F&O contract trades meaningfully more than ~a year before its expiry (index weeklies list
+# weeks out, monthlies ~3 months, the longest-dated stock options ~a year). A 2-year backfill
+# window for a single contract is therefore mostly pre-listing days that only 404 -- clamp the
+# scan to this many days before expiry so a cold fetch isn't dominated by empty requests.
+_MAX_CONTRACT_LOOKBACK_DAYS = 400
 # NSE switched every bhavcopy to the UDiFF layout on this date (Circular 62424, 2024-06-12).
 _UDIFF_START = date(2024, 7, 8)
 _NSE_HEADERS = {
@@ -150,9 +163,17 @@ class NseFoBhavcopyProvider(MarketDataProvider):
                 f"nse_fo_bhavcopy: {symbol!r} is not an NSE F&O contract symbol"
             )
 
+        # Clamp to the contract's realistic traded life: no useful data exists more than
+        # ~a year before expiry, and none after it, so scanning a full 2-year backfill window
+        # would be mostly empty requests.
+        scan_start = max(start, contract.expiry - timedelta(days=_MAX_CONTRACT_LOOKBACK_DAYS))
+        scan_end = min(end, contract.expiry + timedelta(days=2))
+        days = trading_days_between(scan_start, scan_end) if scan_start <= scan_end else []
+
+        rows_by_day = self._rows_for_days(days, contract)
         candles: list[Candle] = []
-        for day in trading_days_between(start, end):
-            row = self._row_for_day(day, contract)
+        for day in days:
+            row = rows_by_day.get(day)
             if row is not None:
                 candles.append(self._to_candle(row, day, instrument_key, symbol))
 
@@ -160,9 +181,23 @@ class NseFoBhavcopyProvider(MarketDataProvider):
             raise ProviderEmptyDataError(
                 f"nse_fo_bhavcopy has no rows for {symbol} ({instrument_key}) {start}..{end}"
             )
-        # trading_days_between() is ascending, so candles already are -- validate_candles()
+        # `days` is ascending, so candles already are -- validate_candles()
         # (src/data/providers/base.py) never re-sorts on the caller's behalf.
         return candles
+
+    def _rows_for_days(
+        self, days: list[date], contract: FoContract
+    ) -> dict[date, dict[str, str] | None]:
+        """Load every day's row for `contract` concurrently. Day-files are independent (own URL,
+        own cache path), so this fans out across a small thread pool -- the first exception
+        (a real network failure) propagates so `MarketDataManager` can retry the whole call or
+        fail over to Upstox, exactly as the old sequential loop did."""
+        if not days:
+            return {}
+        workers = min(_DOWNLOAD_CONCURRENCY, len(days))
+        load_one = partial(self._row_for_day, contract=contract)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return dict(zip(days, pool.map(load_one, days), strict=True))
 
     def get_latest_data(self, *, instrument_key: str, symbol: str) -> Candle | None:
         contract = parse_fo_symbol(symbol)
