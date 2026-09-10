@@ -35,6 +35,9 @@ export const PERMISSIONS = {
   // src/api/routers/settings.py:_can_manage_llm_keys -- POST/DELETE
   // /settings/llm-provider-keys/{provider} (REL-021 E21.1).
   manageLlmProviderKeys: [ROLES.SystemAdministrator],
+  // src/api/routers/agent_settings.py:_can_manage -- POST /agents/{slug}/config/prompts/*,
+  // PUT .../provider-model, POST .../test (spec 001-ceo-led-trading-org US6, clarify Q4). SA only.
+  manageAgentConfig: [ROLES.SystemAdministrator],
   // src/api/routers/agents.py:_can_manage_hitl -- PUT /agents/control/{agent_name}
   // (REL-019 E19.2, ADR 11). Same role set as manageHitl since disabling a pipeline agent is an
   // equivalent-weight operational action to approving/rejecting a run.

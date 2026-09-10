@@ -1235,6 +1235,55 @@ export interface AgentRegistryEntry {
   next_scheduled_execution: string | null;
 }
 
+export interface AgentConfigView {
+  agent_slug: string;
+  is_llm_backed: boolean;
+  provider_model_mode: string | null;
+  provider_model: string; // "deterministic" | "AUTO" | "<provider>/<model>"
+  precedence: string;
+  active_prompts: Record<string, number | null>;
+  updated_by: string | null;
+}
+
+export interface PromptVersionMeta {
+  kind: string;
+  version: number;
+  author: string;
+  change_summary: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AgentPromptContent {
+  kind: string;
+  version: number;
+  content: string;
+  is_active: boolean;
+}
+
+export interface AgentConfigTestResult {
+  provider: string | null;
+  model: string | null;
+  latency_ms: number;
+  structured_output_valid: boolean;
+  tool_compatible: boolean;
+  errors: string[];
+}
+
+export interface LlmProvider {
+  provider: string;
+  configured: boolean;
+  models: string[];
+}
+
+export interface LlmProviderHealth {
+  provider: string;
+  availability: string; // "connected" | "unreachable"
+  p50_latency_ms: number | null;
+  last_failure_at: string | null;
+  in_fallback: boolean;
+}
+
 export interface AgentActivity {
   agent_id: string;
   agent_name: string;
@@ -1515,4 +1564,35 @@ export const api = {
   agentRegistry: () => get<AgentRegistryEntry[]>("/api/v1/agents"),
   agentActivity: (agentId: string) =>
     get<AgentActivity>(`/api/v1/agents/${agentId}/activity`),
+
+  // --- Per-agent Settings (spec 001-ceo-led-trading-org, US6) -----------------------------
+  agentConfig: (slug: string) =>
+    get<AgentConfigView>(`/api/v1/agents/${slug}/config`),
+  agentPromptVersions: (slug: string) =>
+    get<PromptVersionMeta[]>(`/api/v1/agents/${slug}/config/prompts`),
+  agentPromptVersion: (slug: string, kind: string, version: number) =>
+    get<AgentPromptContent>(`/api/v1/agents/${slug}/config/prompts/${kind}/${version}`),
+  createAgentPrompt: (slug: string, kind: string, content: string, changeSummary: string) =>
+    post<PromptVersionMeta>(`/api/v1/agents/${slug}/config/prompts/${kind}`, {
+      content,
+      change_summary: changeSummary,
+    }),
+  activateAgentPrompt: (slug: string, kind: string, version: number) =>
+    post<PromptVersionMeta>(
+      `/api/v1/agents/${slug}/config/prompts/${kind}/${version}/activate`,
+    ),
+  rollbackAgentPrompt: (slug: string, kind: string, version: number) =>
+    post<PromptVersionMeta>(
+      `/api/v1/agents/${slug}/config/prompts/${kind}/${version}/rollback`,
+    ),
+  setAgentProviderModel: (
+    slug: string,
+    body: { mode: "AUTO" | "CUSTOM"; provider?: string; model?: string },
+  ) => put<AgentConfigView>(`/api/v1/agents/${slug}/config/provider-model`, body),
+  testAgentConfig: (
+    slug: string,
+    body: { kind?: string; version?: number; provider?: string; model?: string },
+  ) => post<AgentConfigTestResult>(`/api/v1/agents/${slug}/config/test`, body),
+  llmProviders: () => get<LlmProvider[]>("/api/v1/providers"),
+  llmProviderHealth: () => get<LlmProviderHealth[]>("/api/v1/providers/health"),
 };

@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, CalendarClock, Palette, Plug } from "lucide-react";
+import { Bell, Bot, CalendarClock, Palette, Plug } from "lucide-react";
 import { api } from "@/lib/api";
 import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
@@ -103,6 +104,40 @@ export default function SettingsPage() {
           <NotificationChannels />
         </Card>
       </section>
+
+      <section className="flex flex-col gap-4">
+        <SectionHeading icon={Bot} label="Agent Settings" />
+        <AgentSettingsIndex />
+      </section>
     </main>
+  );
+}
+
+function AgentSettingsIndex() {
+  const { data, isLoading } = useQuery({ queryKey: ["prompt-summaries"], queryFn: api.prompts });
+  return (
+    <Card eyebrow="Per agent" title="Prompt versions & model routing">
+      <p className="mb-3 text-[11px] leading-relaxed text-text-faint">
+        Manage each agent&rsquo;s prompt version history and provider/model routing. AUTO keeps
+        today&rsquo;s routing; changes are SystemAdministrator-only and audited.
+      </p>
+      {isLoading ? (
+        <div className="h-10 animate-pulse rounded bg-bg" />
+      ) : (
+        <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+          {(data ?? []).map((p) => (
+            <li key={p.agent_slug}>
+              <Link
+                href={`/settings/agents/${p.agent_slug}`}
+                className="block rounded-md border border-card-edge px-2 py-1.5 text-xs hover:bg-bg"
+              >
+                {p.agent_slug}
+                <span className="ml-1 text-text-faint">· v{p.active_version} active</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
