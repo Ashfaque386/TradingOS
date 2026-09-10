@@ -263,13 +263,34 @@ def build_fallback_chain(
     return [pm for pm in routing_table[task_type] if is_configured(pm.provider, settings)]
 
 
-def complete(task_type: TaskType, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+def complete(
+    task_type: TaskType,
+    messages: list[dict[str, str]],
+    *,
+    agent_name: str | None = None,
+    **kwargs: Any,
+) -> Any:
     """Tries each configured provider in the task's fallback chain in order; returns the first
     successful litellm ModelResponse. Raises NoProviderAvailableError if every attempt fails
-    (including the case where no provider in the chain has a configured key)."""
+    (including the case where no provider in the chain has a configured key).
+
+    US6 (FR-104, SC-010): when ``agent_name`` names an agent whose ``AgentConfig`` is ``CUSTOM``
+    with a currently-valid ``(provider, model)`` pair, that pair is prepended as the chain head.
+    ``agent_name=None`` (or an ``AUTO`` / deterministic agent) leaves the chain byte-for-byte
+    identical to the pre-feature behaviour.
+    """
     settings = get_settings()
     _configure_tracing(settings)
     chain = build_fallback_chain(task_type, settings)
+
+    if agent_name is not None:
+        from src.orchestration.agent_config import resolve as _resolve_agent_pair
+
+        pair = _resolve_agent_pair(agent_name, task_type)
+        if pair is not None:
+            head = ProviderModel(pair[0], pair[1])
+            chain = [head, *[pm for pm in chain if pm != head]]
+
     if not chain:
         raise NoProviderAvailableError(f"no configured provider for task type '{task_type}'")
 

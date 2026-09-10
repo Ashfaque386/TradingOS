@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from src.agents.scheduler import build_scheduler
+from src.api.routers.agent_settings import router as agent_settings_router
 from src.api.routers.agents import router as agents_router
 from src.api.routers.approvals import router as approvals_router
 from src.api.routers.audit import observability_router
@@ -24,6 +25,7 @@ from src.api.routers.orders import router as orders_router
 from src.api.routers.organization import router as organization_router
 from src.api.routers.paper_trading import router as paper_trading_router
 from src.api.routers.portfolio import router as portfolio_router
+from src.api.routers.provider_models import router as provider_models_router
 from src.api.routers.risk_limits import router as risk_limits_router
 from src.api.routers.scheduled_jobs import router as scheduled_jobs_router
 from src.api.routers.settings import router as settings_router
@@ -140,6 +142,8 @@ app.include_router(risk_limits_router)
 app.include_router(agents_router)
 app.include_router(organization_router)
 app.include_router(approvals_router)
+app.include_router(agent_settings_router)
+app.include_router(provider_models_router)
 app.include_router(strategies_router)
 app.include_router(settings_router)
 app.include_router(chat_router)

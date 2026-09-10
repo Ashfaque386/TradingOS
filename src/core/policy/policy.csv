@@ -181,3 +181,8 @@ p, PortfolioManager, /api/v1/organization/approvals/{approval_id}/reject, POST
 p, SystemAdministrator, /api/v1/organization/decisions/{decision_id}/resolve, POST
 p, PortfolioManager, /api/v1/organization/decisions/{decision_id}/resolve, POST
 p, RiskManager, /api/v1/organization/decisions/{decision_id}/resolve, POST
+p, SystemAdministrator, /api/v1/agents/{agent_slug}/config/prompts/{kind}, POST
+p, SystemAdministrator, /api/v1/agents/{agent_slug}/config/prompts/{kind}/{version}/activate, POST
+p, SystemAdministrator, /api/v1/agents/{agent_slug}/config/prompts/{kind}/{version}/rollback, POST
+p, SystemAdministrator, /api/v1/agents/{agent_slug}/config/provider-model, PUT
+p, SystemAdministrator, /api/v1/agents/{agent_slug}/config/test, POST
