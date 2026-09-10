@@ -254,6 +254,15 @@ class Settings(BaseSettings):
     api_rate_limit_requests: int = 300
     api_rate_limit_window_seconds: int = 60
 
+    # CEO-led organisation layer (spec 001-ceo-led-trading-org, plan.md §Technical Context).
+    # `org_max_concurrent_runs` = clarify Q3 (default 3); excess objectives queue.
+    org_max_concurrent_runs: int = 3
+    org_task_pool_size: int = 8
+    org_run_stall_seconds: int = 900
+    org_task_default_timeout_seconds: int = 300
+    org_research_task_timeout_seconds: int = 1800
+    llm_call_timeout_seconds: int = 120
+
 
 @lru_cache
 def get_settings() -> Settings:

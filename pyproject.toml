@@ -242,6 +242,12 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    # spec 001-ceo-led-trading-org T003 / BUG-E: tests that hit a real third-party broker API
+    # (daily-expiring Zerodha token, no Upstox sandbox market data). Quarantined from the
+    # default gate; run explicitly with `-m live`.
+    "live: requires a live third-party broker session (excluded from the default CI gate)",
+]
 
 [tool.coverage.run]
 source = ["src"]

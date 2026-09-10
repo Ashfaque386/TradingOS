@@ -199,9 +199,11 @@ jobs:
             --source yfinance --symbols ^NSEI --start 2023-07-21 --end 2024-07-19
 
       - name: Pytest
+        # spec 001-ceo-led-trading-org T003 / BUG-E: `-m "not live"` quarantines tests that need
+        # a real third-party broker session (daily-expiring Zerodha token) from the default gate.
         run: |
           docker compose run --rm -e EMBEDDING_PROVIDER=local app \
-            pytest --cov=src --cov-report=xml --cov-report=json
+            pytest -m "not live" --cov=src --cov-report=xml --cov-report=json
 
       - name: Per-module coverage gate
         run: docker compose run --rm app python scripts/module_coverage.py check

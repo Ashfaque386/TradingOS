@@ -5,12 +5,24 @@ Import every model module here so Alembic's autogenerate sees the full metadata 
 
 from src.models.account import Account, BrokerCredential
 from src.models.agent import AgentLog, AgentRun
+from src.models.agent_config import AgentConfig, PromptVersion
+from src.models.approval import ApprovalRequest
 from src.models.audit import AuditLog
 from src.models.base import Base
 from src.models.chat import ChatMessage
+from src.models.dataset_freshness import DatasetFreshnessRecord
 from src.models.instrument import Instrument
 from src.models.market_data_provenance import MarketDataProvenance
 from src.models.ml import MLModel
+from src.models.orchestration import (
+    OrganizationalDecision,
+    OrganizationalEvent,
+    OrganizationalPlan,
+    OrganizationRun,
+    ResultArtefact,
+    Task,
+    TaskDependency,
+)
 from src.models.paper_trading import PaperTrade
 from src.models.refresh_token import RefreshToken
 from src.models.risk_limit_change_request import RiskLimitChangeRequest
@@ -54,4 +66,15 @@ __all__ = [
     "MarketDataProvenance",
     "ScheduledJobConfig",
     "ScheduledJobRun",
+    "OrganizationRun",
+    "OrganizationalPlan",
+    "Task",
+    "TaskDependency",
+    "ResultArtefact",
+    "OrganizationalDecision",
+    "OrganizationalEvent",
+    "ApprovalRequest",
+    "AgentConfig",
+    "PromptVersion",
+    "DatasetFreshnessRecord",
 ]
