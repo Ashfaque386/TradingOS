@@ -10,7 +10,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.api.deps import get_current_user, require_role
 from src.core.db import get_session
@@ -77,11 +77,53 @@ class PlanOut(BaseModel):
 
 
 class DecisionOut(BaseModel):
+    decision_id: uuid.UUID
     decision_type: str
     summary: str
     reason: str
     next_step: str | None
+    escalated_to_role: str | None
+    resolved_by: str | None
+    supporting_input_artefact_ids: list[str]
     created_at: str
+
+
+class RunDetailOut(RunSummary):
+    """The run workspace header (contracts/rest-api.md §runs): counts by task status, pending
+    approvals, produced strategy, result summary."""
+
+    ended_at: str | None
+    task_counts: dict[str, int]
+    pending_approvals: int
+    produced_strategy_id: uuid.UUID | None
+    result_summary: dict[str, object] | None
+
+
+class AttentionRunOut(BaseModel):
+    run_id: uuid.UUID
+    objective: str
+    status: str
+    stall_flagged_at: str | None
+
+
+class AttentionTaskOut(BaseModel):
+    task_id: uuid.UUID
+    run_id: uuid.UUID
+    capability: str
+    assigned_agent: str
+    status: str
+    blocked_reason: str | None
+
+
+class AttentionOut(BaseModel):
+    stalled_runs: list[AttentionRunOut]
+    blocked_tasks: list[AttentionTaskOut]
+    escalated_decisions: list[DecisionOut]
+    pending_approvals: int
+
+
+class ResolveDecisionRequest(BaseModel):
+    note: str = Field(min_length=1)
 
 
 class EventOut(BaseModel):
@@ -137,13 +179,29 @@ def list_runs(
         ]
 
 
-@router.get("/runs/{run_id}", response_model=RunSummary)
-def get_run(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> RunSummary:
+@router.get("/runs/{run_id}", response_model=RunDetailOut)
+def get_run(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> RunDetailOut:
+    from src.models.approval import ApprovalRequest
+
     with get_session() as session:
         run = session.get(OrganizationRun, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        return RunSummary(
+        counts: dict[str, int] = {}
+        for (task_status,) in session.execute(
+            select(Task.status).where(Task.run_id == run_id)
+        ).all():
+            counts[task_status] = counts.get(task_status, 0) + 1
+        pending = (
+            session.scalar(
+                select(func.count(ApprovalRequest.id)).where(
+                    ApprovalRequest.run_id == run_id,
+                    ApprovalRequest.status == "pending",
+                )
+            )
+            or 0
+        )
+        return RunDetailOut(
             run_id=run.id,
             objective=run.objective,
             source=run.source,
@@ -151,6 +209,11 @@ def get_run(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> RunSu
             queue_position=run.queue_position,
             plan_id=run.plan_id,
             created_at=run.created_at.isoformat(),
+            ended_at=run.ended_at.isoformat() if run.ended_at else None,
+            task_counts=counts,
+            pending_approvals=int(pending),
+            produced_strategy_id=run.produced_strategy_id,
+            result_summary=dict(run.result_summary) if run.result_summary else None,
         )
 
 
@@ -201,16 +264,21 @@ def get_decisions(run_id: uuid.UUID, _user: User = Depends(get_current_user)) ->
             .where(OrganizationalDecision.run_id == run_id)
             .order_by(OrganizationalDecision.created_at.asc())
         ).all()
-        return [
-            DecisionOut(
-                decision_type=d.decision_type,
-                summary=d.summary,
-                reason=d.reason,
-                next_step=d.next_step,
-                created_at=d.created_at.isoformat(),
-            )
-            for d in rows
-        ]
+        return [_decision_out(d) for d in rows]
+
+
+def _decision_out(d: OrganizationalDecision) -> DecisionOut:
+    return DecisionOut(
+        decision_id=d.id,
+        decision_type=d.decision_type,
+        summary=d.summary,
+        reason=d.reason,
+        next_step=d.next_step,
+        escalated_to_role=d.escalated_to_role,
+        resolved_by=d.resolved_by,
+        supporting_input_artefact_ids=list(d.supporting_input_artefact_ids),
+        created_at=d.created_at.isoformat(),
+    )
 
 
 @router.get("/runs/{run_id}/events", response_model=list[EventOut])
@@ -414,3 +482,99 @@ def cancel_run(run_id: uuid.UUID, _user: User = Depends(_can_create_run)) -> Run
             plan_id=run.plan_id,
             created_at=run.created_at.isoformat(),
         )
+
+
+@router.get("/attention", response_model=AttentionOut)
+def get_attention(_user: User = Depends(get_current_user)) -> AttentionOut:
+    """Cross-run queue for the console home (FR-022, research R20): runs flagged ``stalled``,
+    tasks ``blocked``/``escalated``, unresolved escalated decisions, and the pending-approval
+    count."""
+    from src.models.approval import ApprovalRequest
+
+    with get_session() as session:
+        stalled = session.scalars(
+            select(OrganizationRun)
+            .where(OrganizationRun.status == RunStatus.STALLED.value)
+            .order_by(OrganizationRun.updated_at.desc())
+        ).all()
+        blocked = session.scalars(
+            select(Task)
+            .where(Task.status.in_((TaskStatus.BLOCKED.value, TaskStatus.ESCALATED.value)))
+            .order_by(Task.created_at.desc())
+            .limit(100)
+        ).all()
+        escalated = session.scalars(
+            select(OrganizationalDecision)
+            .where(
+                OrganizationalDecision.escalated_to_role.is_not(None),
+                OrganizationalDecision.resolved_by.is_(None),
+            )
+            .order_by(OrganizationalDecision.created_at.desc())
+            .limit(100)
+        ).all()
+        pending = (
+            session.scalar(
+                select(func.count(ApprovalRequest.id)).where(ApprovalRequest.status == "pending")
+            )
+            or 0
+        )
+        return AttentionOut(
+            stalled_runs=[
+                AttentionRunOut(
+                    run_id=r.id,
+                    objective=r.objective,
+                    status=r.status,
+                    stall_flagged_at=(
+                        r.stall_flagged_at.isoformat() if r.stall_flagged_at else None
+                    ),
+                )
+                for r in stalled
+            ],
+            blocked_tasks=[
+                AttentionTaskOut(
+                    task_id=t.id,
+                    run_id=t.run_id,
+                    capability=t.capability,
+                    assigned_agent=t.assigned_agent,
+                    status=t.status,
+                    blocked_reason=t.blocked_reason,
+                )
+                for t in blocked
+            ],
+            escalated_decisions=[_decision_out(d) for d in escalated],
+            pending_approvals=int(pending),
+        )
+
+
+@router.post("/decisions/{decision_id}/resolve", response_model=DecisionOut)
+def resolve_decision(
+    decision_id: uuid.UUID,
+    body: ResolveDecisionRequest,
+    user: User = Depends(_can_create_run),
+) -> DecisionOut:
+    """A human governance role records the resolution of an escalated conflict / decision
+    (contracts/rest-api.md §attention). Sets ``resolved_by`` and writes an audit entry."""
+    from src.core.audit import write_audit_entry
+
+    with get_session() as session:
+        decision = session.get(OrganizationalDecision, decision_id)
+        if decision is None:
+            raise HTTPException(status_code=404, detail="Decision not found")
+        if decision.resolved_by is not None:
+            raise HTTPException(status_code=409, detail="Decision already resolved")
+        decision.resolved_by = user.email
+        decision.next_step = (
+            decision.next_step or ""
+        ) + f"\n[resolved by {user.email}] {body.note}"
+        write_audit_entry(
+            session,
+            actor_type="Human",
+            actor_id=user.email,
+            action="ORG_DECISION_RESOLVED",
+            entity_type="OrganizationalDecision",
+            entity_id=decision_id,
+            after_state={"resolved_by": user.email, "note": body.note},
+        )
+        session.commit()
+        session.refresh(decision)
+        return _decision_out(decision)

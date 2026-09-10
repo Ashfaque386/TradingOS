@@ -1077,6 +1077,184 @@ export interface GoLiveReadiness {
   conditions: GateCondition[];
 }
 
+// --- Organization Command Center (spec 001-ceo-led-trading-org, US5) ----------------------
+
+export interface OrgRunSummary {
+  run_id: string;
+  objective: string;
+  source: string;
+  status: string;
+  queue_position: number | null;
+  plan_id: string | null;
+  created_at: string;
+}
+
+export interface OrgRunDetail extends OrgRunSummary {
+  ended_at: string | null;
+  task_counts: Record<string, number>;
+  pending_approvals: number;
+  produced_strategy_id: string | null;
+  result_summary: Record<string, unknown> | null;
+}
+
+export interface OrgPlannedTask {
+  task_id: string;
+  objective: string;
+  assigned_agent: string;
+  capability: string;
+  priority: number;
+  expected_output: string;
+  status: string;
+  is_concurrency_safe: boolean;
+  depends_on: string[];
+}
+
+export interface OrgPlan {
+  plan_id: string;
+  run_id: string;
+  objective_classification: string;
+  departments: string[];
+  approval_required: boolean;
+  safety_requirements: Record<string, unknown>;
+  tasks: OrgPlannedTask[];
+}
+
+export interface OrgTask {
+  task_id: string;
+  objective: string;
+  assigned_agent: string;
+  capability: string;
+  priority: number;
+  status: string;
+  is_concurrency_safe: boolean;
+  ran_concurrently: boolean;
+  dependency_wait_seconds: number;
+  retry_count: number;
+  blocked_reason: string | null;
+  failure_reason: string | null;
+  result_artefact_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  depends_on: string[];
+}
+
+export interface OrgDependency {
+  dependent_task_id: string;
+  prerequisite_task_id: string;
+  required_artefact_type: string;
+  policy: string;
+  state: string;
+  satisfied_at: string | null;
+}
+
+export interface OrgArtefact {
+  artefact_id: string;
+  task_id: string;
+  artefact_type: string;
+  version: number;
+  disposition: string | null;
+  coverage: string | null;
+  provenance: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface OrgDecision {
+  decision_id: string;
+  decision_type: string;
+  summary: string;
+  reason: string;
+  next_step: string | null;
+  escalated_to_role: string | null;
+  resolved_by: string | null;
+  supporting_input_artefact_ids: string[];
+  created_at: string;
+}
+
+export interface OrgEvent {
+  sequence: number;
+  event_type: string;
+  subject_type: string;
+  subject_id: string | null;
+  payload: Record<string, unknown>;
+  occurred_at: string;
+}
+
+export interface OrgAttention {
+  stalled_runs: { run_id: string; objective: string; status: string; stall_flagged_at: string | null }[];
+  blocked_tasks: {
+    task_id: string;
+    run_id: string;
+    capability: string;
+    assigned_agent: string;
+    status: string;
+    blocked_reason: string | null;
+  }[];
+  escalated_decisions: OrgDecision[];
+  pending_approvals: number;
+}
+
+export interface OrgApproval {
+  id: string;
+  run_id: string | null;
+  strategy_id: string;
+  strategy_version_id: string | null;
+  status: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  reason: string | null;
+  created_at: string | null;
+}
+
+export interface OrgApprovalDetail extends OrgApproval {
+  strategy_name: string | null;
+  strategy_status: string | null;
+  recommendation: { artefact_id: string; artefact_type: string; payload: Record<string, unknown> } | null;
+  related_artefacts: { artefact_id: string; artefact_type: string; payload: Record<string, unknown> }[];
+  go_live_gate: Record<string, unknown> | null;
+}
+
+export interface AgentRegistryEntry {
+  agent_name: string;
+  agent_id: string;
+  display_name: string;
+  kind: "graph_node" | "scheduled" | "registry_only";
+  enforced: boolean;
+  enabled: boolean;
+  reason: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+  last_run_status: string | null;
+  last_run_at: string | null;
+  live_status: "Running" | "Idle" | "Never run";
+  department: string;
+  capabilities: string[];
+  is_llm_backed: boolean;
+  health: string;
+  last_execution: string | null;
+  next_scheduled_execution: string | null;
+}
+
+export interface AgentActivity {
+  agent_id: string;
+  agent_name: string;
+  recent_runs: { run_id: string; status: string; started_at: string | null; ended_at: string | null }[];
+  recent_tasks: {
+    task_id: string;
+    run_id: string;
+    capability: string;
+    status: string;
+    objective: string;
+    result_artefact_id: string | null;
+  }[];
+  recent_outputs: {
+    artefact_id: string;
+    artefact_type: string;
+    disposition: string | null;
+    created_at: string | null;
+  }[];
+}
+
 export const api = {
   login: (email: string, password: string) =>
     post<LoginResponse>("/api/v1/auth/login", { email, password }),
@@ -1307,4 +1485,34 @@ export const api = {
   ) => put<ScheduledJobSummary>(`/api/v1/scheduled-jobs/${jobId}`, body),
   runScheduledJobNow: (jobId: string) =>
     post<{ job_run_id: string; status: string }>(`/api/v1/scheduled-jobs/${jobId}/run-now`),
+
+  // --- Organization Command Center (spec 001-ceo-led-trading-org, US5) --------------------
+  orgRuns: (status?: string) =>
+    get<OrgRunSummary[]>(`/api/v1/organization/runs${toQuery({ status })}`),
+  orgRun: (runId: string) => get<OrgRunDetail>(`/api/v1/organization/runs/${runId}`),
+  orgPlan: (runId: string) => get<OrgPlan>(`/api/v1/organization/runs/${runId}/plan`),
+  orgTasks: (runId: string) => get<OrgTask[]>(`/api/v1/organization/runs/${runId}/tasks`),
+  orgDependencies: (runId: string) =>
+    get<OrgDependency[]>(`/api/v1/organization/runs/${runId}/dependencies`),
+  orgArtefacts: (runId: string) =>
+    get<OrgArtefact[]>(`/api/v1/organization/runs/${runId}/artefacts`),
+  orgDecisions: (runId: string) =>
+    get<OrgDecision[]>(`/api/v1/organization/runs/${runId}/decisions`),
+  orgEvents: (runId: string, afterSequence = 0) =>
+    get<OrgEvent[]>(
+      `/api/v1/organization/runs/${runId}/events${toQuery({ after_sequence: afterSequence })}`,
+    ),
+  orgAttention: () => get<OrgAttention>("/api/v1/organization/attention"),
+  orgResolveDecision: (decisionId: string, note: string) =>
+    post<OrgDecision>(`/api/v1/organization/decisions/${decisionId}/resolve`, { note }),
+  orgApprovals: (status = "pending") =>
+    get<OrgApproval[]>(`/api/v1/organization/approvals${toQuery({ status })}`),
+  orgApproval: (id: string) => get<OrgApprovalDetail>(`/api/v1/organization/approvals/${id}`),
+  orgApprove: (id: string) =>
+    post<OrgApproval>(`/api/v1/organization/approvals/${id}/approve`),
+  orgReject: (id: string, reason: string) =>
+    post<OrgApproval>(`/api/v1/organization/approvals/${id}/reject`, { reason }),
+  agentRegistry: () => get<AgentRegistryEntry[]>("/api/v1/agents"),
+  agentActivity: (agentId: string) =>
+    get<AgentActivity>(`/api/v1/agents/${agentId}/activity`),
 };

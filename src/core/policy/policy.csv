@@ -178,3 +178,6 @@ p, SystemAdministrator, /api/v1/organization/approvals/{approval_id}/approve, PO
 p, PortfolioManager, /api/v1/organization/approvals/{approval_id}/approve, POST
 p, SystemAdministrator, /api/v1/organization/approvals/{approval_id}/reject, POST
 p, PortfolioManager, /api/v1/organization/approvals/{approval_id}/reject, POST
+p, SystemAdministrator, /api/v1/organization/decisions/{decision_id}/resolve, POST
+p, PortfolioManager, /api/v1/organization/decisions/{decision_id}/resolve, POST
+p, RiskManager, /api/v1/organization/decisions/{decision_id}/resolve, POST
