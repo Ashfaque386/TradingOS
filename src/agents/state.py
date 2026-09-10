@@ -277,6 +277,11 @@ class TradingOSGraphState(StrictModel):
     # existing book's own real returns. Empty (not fabricated) whenever no seeded Paper account
     # exists yet, or it has no snapshot rows (a brand-new account, or before REL-034 shipped).
     existing_portfolio_equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
+    # US4 (FR-042/153): the organisation layer's assembled ResearchContext (news/sentiment/
+    # portfolio/market/freshness rollup), injected by the orchestration Task Engine when the
+    # research sub-graph runs as an organisational task. Plain dict -- keeps state.py free of a
+    # circular import on src/orchestration/. None ⇒ the graph runs exactly as before (additive).
+    research_context: dict[str, object] | None = None
 
     # Retry/escalation counters enforcing the business rules from Phase_9/Phase_4:
     code_validation_retry_count: int = 0  # max 3, Code_Validation_Loop

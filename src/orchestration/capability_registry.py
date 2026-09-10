@@ -39,7 +39,9 @@ class _Meta:
 
 # Authoritative per-agent organisation metadata (T019). Keyed by the agent `name` in KNOWN_AGENTS.
 AGENT_META: dict[str, _Meta] = {
-    "ceo_agent": _Meta(EXECUTIVE, ("orchestrate", "synthesize", "decide"), True),
+    "ceo_agent": _Meta(
+        EXECUTIVE, ("orchestrate", "synthesize", "decide", "context_assembly"), True
+    ),
     "ceo_agent_chat": _Meta(EXECUTIVE, ("converse",), True),
     "market_analyst": _Meta(MARKET_INTELLIGENCE, ("market_analysis",), True),
     "news_agent": _Meta(MARKET_INTELLIGENCE, ("news_ingestion",), False),
@@ -79,6 +81,7 @@ CONCURRENCY_SAFE_CAPABILITIES: frozenset[str] = frozenset(
         "memory_ingestion",
         "memory_maintenance",
         "synthesize",
+        "context_assembly",
     }
 )
 

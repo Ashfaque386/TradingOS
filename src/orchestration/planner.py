@@ -74,6 +74,63 @@ class PlanValidationError(ValueError):
     """A generated plan failed a deterministic invariant (FR-007)."""
 
 
+# Capabilities that mean "this plan will generate/implement a strategy" -- a plan like that MUST
+# feed the research pipeline a `context_assembly` task fed by parallel news/sentiment/portfolio/
+# market/freshness tasks (T053, FR-042/044). A pure analysis plan (no strategy output) is left
+# exactly as the CEO produced it.
+_STRATEGY_CAPS = frozenset({"strategy_generation", "strategy_research", "code_generation"})
+# key, capability, assigned_agent, expected_output, scaffold-internal deps
+_CONTEXT_SCAFFOLD: tuple[tuple[str, str, str, str, tuple[str, ...]], ...] = (
+    ("ctx_news", "news_ingestion", "news_agent", "NewsDigest", ()),
+    ("ctx_sentiment", "sentiment_analysis", "sentiment_agent", "SentimentReport", ("ctx_news",)),
+    ("ctx_market", "market_analysis", "market_analyst", "MarketContext", ()),
+    ("ctx_portfolio", "portfolio_read", "portfolio_manager_agent", "PortfolioRiskReport", ()),
+    ("ctx_freshness", "data_freshness", "data_ingestion_agent", "AdHocAnalysis", ()),
+    (
+        "ctx_assembly",
+        "context_assembly",
+        "ceo_agent",
+        "ResearchContext",
+        ("ctx_news", "ctx_sentiment", "ctx_market", "ctx_portfolio", "ctx_freshness"),
+    ),
+)
+
+
+def ensure_research_scaffold(plan: _GeneratedPlan) -> None:
+    """Deterministically guarantee the news/sentiment/portfolio/market/freshness + context
+    assembly tasks around any strategy-generating plan, and make every strategy task depend on
+    the assembled ``ResearchContext`` (T053). Idempotent: reuses a task the CEO already planned
+    for a given capability rather than duplicating it."""
+    if not any(t.capability in _STRATEGY_CAPS for t in plan.tasks):
+        return
+
+    # capability -> the key that provides it (an existing CEO task wins over a scaffold key).
+    key_for_cap: dict[str, str] = {t.capability: t.key for t in plan.tasks}
+    cap_for_scaffold_key = {sk: cap for sk, cap, *_ in _CONTEXT_SCAFFOLD}
+    for sk, capability, *_ in _CONTEXT_SCAFFOLD:
+        key_for_cap.setdefault(capability, sk)
+
+    for _sk, capability, agent, expected, dep_scaffold_keys in _CONTEXT_SCAFFOLD:
+        if any(t.capability == capability for t in plan.tasks):
+            continue
+        plan.tasks.append(
+            _PlannedTask(
+                key=key_for_cap[capability],
+                objective=f"Provide {capability.replace('_', ' ')} for this research objective.",
+                capability=capability,
+                assigned_agent=agent,
+                priority=3,
+                expected_output=expected,
+                depends_on=[key_for_cap[cap_for_scaffold_key[dk]] for dk in dep_scaffold_keys],
+            )
+        )
+
+    assembly_key = key_for_cap["context_assembly"]
+    for t in plan.tasks:
+        if t.capability in _STRATEGY_CAPS and assembly_key not in t.depends_on:
+            t.depends_on.append(assembly_key)
+
+
 def _validate(plan: _GeneratedPlan, known: dict[str, set[str]]) -> None:
     """``known`` maps agent name -> its declared capabilities. Raises PlanValidationError."""
     if not plan.tasks:
@@ -269,6 +326,8 @@ def generate_plan(session: Session, run: OrganizationRun) -> OrganizationalPlan 
             return None
         try:
             _validate(plan, known)
+            ensure_research_scaffold(plan)  # T053: deterministic context coverage
+            _validate(plan, known)  # the injected scaffold must satisfy the same invariants
         except PlanValidationError as exc:
             last_error = str(exc)
             logger.warning(

@@ -103,6 +103,30 @@ def _synthesize_handler(
     return "CeoSynthesis", payload, {"provider_used": provider_used, "tools_used": []}
 
 
+# Minimal schema-valid payloads per context capability, so the placeholder path still produces
+# *correctly typed* NewsDigest / SentimentReport / PortfolioRiskReport artefacts (their real
+# per-agent handlers are wired in a later phase -- US6). Provenance still links every source.
+_CONTEXT_PLACEHOLDERS: dict[str, tuple[str, dict[str, Any]]] = {
+    "news_ingestion": (
+        "NewsDigest",
+        {"headlines": [], "source_count": 1, "reduced_coverage": False},
+    ),
+    "sentiment_analysis": ("SentimentReport", {"per_symbol": {}, "per_sector": {}}),
+    "portfolio_read": ("PortfolioRiskReport", {"exposures": {}, "notes": "placeholder snapshot"}),
+    "market_analysis": (
+        "MarketContext",
+        {
+            "market_regime": "Sideways",
+            "sector_rankings": [],
+            "volatility_assessment": "unknown (placeholder)",
+            "macro_outlook": "unknown (placeholder)",
+            "confidence_score": 0.0,
+            "insights": [],
+        },
+    ),
+}
+
+
 def _placeholder_handler(
     session: Session, task: Task, upstream: list[ResultArtefact]
 ) -> HandlerResult:
@@ -113,6 +137,12 @@ def _placeholder_handler(
     delay = get_settings().org_placeholder_task_delay_seconds
     if delay > 0:
         time.sleep(delay)
+
+    typed = _CONTEXT_PLACEHOLDERS.get(task.capability)
+    if typed is not None:
+        artefact_type, typed_payload = typed
+        return artefact_type, dict(typed_payload), {"tools_used": []}
+
     schema_type = task.expected_output or "AdHocAnalysis"
     payload: dict[str, Any] = {
         "question": task.objective,
@@ -124,6 +154,55 @@ def _placeholder_handler(
     }
     # Fall back to the AdHocAnalysis shape if the declared type has a stricter schema.
     return _coerce_or_adhoc(schema_type, payload), payload, {"tools_used": []}
+
+
+# --- context assembly (T054, FR-042/044) ---------------------------------------------------------
+
+_CONTEXT_SOURCES = ("NewsDigest", "SentimentReport", "PortfolioRiskReport", "MarketContext")
+
+
+def _context_assembly_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """Assemble a ``ResearchContext`` from this run's news / sentiment / portfolio / market /
+    freshness artefacts. A source that is legitimately absent (a ``soft`` dependency that never
+    produced) is recorded in ``missing_inputs`` and drops ``coverage`` to ``reduced`` (FR-044) --
+    the context is never presented as complete when it is not."""
+    by_type: dict[str, ResultArtefact] = {}
+    for a in upstream:
+        by_type.setdefault(a.artefact_type, a)
+
+    news = by_type.get("NewsDigest")
+    sentiment = by_type.get("SentimentReport")
+    portfolio = by_type.get("PortfolioRiskReport")
+    market = by_type.get("MarketContext")
+
+    missing = [s for s in _CONTEXT_SOURCES if s not in by_type]
+    reduced_news = bool(news and news.payload.get("reduced_coverage"))
+    coverage = "reduced" if (missing or reduced_news) else "full"
+
+    sentiment_map: dict[str, float] = {}
+    if sentiment is not None:
+        sentiment_map = {
+            **(sentiment.payload.get("per_symbol") or {}),
+            **{f"sector:{k}": v for k, v in (sentiment.payload.get("per_sector") or {}).items()},
+        }
+
+    payload: dict[str, Any] = {
+        "market_regime": (market.payload.get("market_regime") if market is not None else None),
+        "sector_strengths": (market.payload.get("sector_strengths", {}) if market else {}),
+        "news_summary": (
+            f"{len(news.payload.get('headlines', []))} headline(s)"
+            if news is not None
+            else "no news feed available"
+        ),
+        "sentiment": sentiment_map,
+        "portfolio_exposure": (portfolio.payload.get("exposures", {}) if portfolio else {}),
+        "risk_posture": None,
+        "coverage": coverage,
+        "missing_inputs": missing,
+    }
+    return "ResearchContext", payload, {"tools_used": ["context_assembly"]}
 
 
 def _coerce_or_adhoc(schema_type: str, payload: dict[str, Any]) -> str:
@@ -142,6 +221,7 @@ def _coerce_or_adhoc(schema_type: str, payload: dict[str, Any]) -> str:
 CAPABILITY_HANDLERS: dict[str, Handler] = {
     "synthesize": _synthesize_handler,
     "orchestrate": _synthesize_handler,
+    "context_assembly": _context_assembly_handler,
 }
 
 

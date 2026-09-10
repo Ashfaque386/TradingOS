@@ -63,6 +63,20 @@ def strategy_generator_node(state: TradingOSGraphState) -> dict[str, object]:
         schema=StrategyLogic.model_json_schema(),
     )
 
+    # US4 (FR-042/153): fold in the organisation layer's assembled ResearchContext when the
+    # research sub-graph is running as an organisational task. Purely additive -- absent ⇒ the
+    # prompt is exactly what it was before.
+    if state.research_context:
+        rc = state.research_context
+        user_prompt += (
+            "\n\nOrganisational research context (news/sentiment/portfolio/market rollup):\n"
+            f"- market regime: {rc.get('market_regime')}\n"
+            f"- news: {rc.get('news_summary')}\n"
+            f"- aggregate sentiment: {rc.get('sentiment')}\n"
+            f"- portfolio exposure: {rc.get('portfolio_exposure')}\n"
+            f"- coverage: {rc.get('coverage')} (missing: {rc.get('missing_inputs')})\n"
+        )
+
     response = complete(
         "coding",
         messages=[

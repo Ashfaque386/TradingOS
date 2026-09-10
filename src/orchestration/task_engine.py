@@ -198,6 +198,54 @@ def _has_pending_approval(session: Session, run_id: uuid.UUID) -> bool:
     return has_pending_approval(session, run_id)
 
 
+def _remember_failure(run: OrganizationRun, failed: list[Task], blocked: list[Task]) -> None:
+    """FR-033: a failed run is written to organisational memory (objective + task shape +
+    failure reasons) so future planning can learn from it. A memory-store hiccup never blocks
+    the run from closing out."""
+    try:
+        from src.memory.organization_memory import ingest_org_memory
+
+        reasons = [t.failure_reason or "failed" for t in failed] + [
+            t.blocked_reason or "blocked" for t in blocked
+        ]
+        ingest_org_memory(
+            kind="failed_run",
+            text=f"Objective '{run.objective}' failed: {'; '.join(reasons)[:500]}",
+            payload={
+                "run_id": str(run.id),
+                "objective": run.objective,
+                "failed_capabilities": [t.capability for t in failed],
+                "blocked_capabilities": [t.capability for t in blocked],
+                "reasons": reasons,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 -- memory is best-effort, never load-bearing here
+        logger.warning("org_failure_memory_skipped", run_id=str(run.id), error=str(exc))
+
+
+def _resolve_conflicts(session: Session, run: OrganizationRun) -> None:
+    """T057/SC-014: before a run may finish, a deterministic comparator over its artefacts must
+    have had a chance to fire; any conflict gets a recorded ``resolve_conflict`` decision. Runs
+    once -- skipped if a resolution decision already exists for this run."""
+    from src.models.orchestration import OrganizationalDecision, ResultArtefact
+    from src.orchestration import decisions
+
+    already = session.scalar(
+        select(func.count(OrganizationalDecision.id)).where(
+            OrganizationalDecision.run_id == run.id,
+            OrganizationalDecision.decision_type == "resolve_conflict",
+        )
+    )
+    if already:
+        return
+    artefacts = list(
+        session.scalars(select(ResultArtefact).where(ResultArtefact.run_id == run.id)).all()
+    )
+    conflict = decisions.detect_conflict(artefacts)
+    if conflict is not None:
+        decisions.resolve_conflict(session, run, conflict)
+
+
 def _finalize(run_id: uuid.UUID) -> bool:
     """Returns True if the run reached a terminal state. Sets ``dependency_wait_seconds`` /
     ``ran_concurrently`` on the tasks and blocks completion while any artefact is
@@ -224,6 +272,7 @@ def _finalize(run_id: uuid.UUID) -> bool:
 
         tasks = list(session.scalars(select(Task).where(Task.run_id == run_id)).all())
         _record_timings(session, tasks)
+        _resolve_conflicts(session, run)
 
         failed = [t for t in tasks if t.status == TaskStatus.FAILED.value]
         blocked = [t for t in tasks if t.status == TaskStatus.BLOCKED.value]
@@ -245,6 +294,7 @@ def _finalize(run_id: uuid.UUID) -> bool:
                 payload=run.result_summary,
                 audited=True,
             )
+            _remember_failure(run, failed, blocked)
         elif undispositioned:
             # Every artefact must be consumed or explicitly informational before a run can
             # complete (SC-004). MVP: artefacts are persisted as `informational`, so this is

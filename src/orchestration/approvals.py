@@ -151,5 +151,26 @@ def reject(
     session.flush()
     if request.run_id is not None:
         run_manager.settle_run_after_approval(session, request.run_id)
+    _remember_rejection(request, strategy, reason.strip())
     logger.info("approval_rejected", request_id=str(request_id), actor=actor_id)
     return request
+
+
+def _remember_rejection(request: ApprovalRequest, strategy: Strategy | None, reason: str) -> None:
+    """FR-033: a human rejection of a deployment recommendation is written to organisational
+    memory so future planning can weigh why a similar strategy was turned down. Best-effort."""
+    try:
+        from src.memory.organization_memory import ingest_org_memory
+
+        name = strategy.name if strategy is not None else str(request.strategy_id)
+        ingest_org_memory(
+            kind="rejected_strategy",
+            text=f"Strategy '{name}' rejected at the Paper-Trading gate: {reason[:400]}",
+            payload={
+                "strategy_id": str(request.strategy_id),
+                "approval_id": str(request.id),
+                "reason": reason,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 -- memory is best-effort
+        logger.warning("org_rejection_memory_skipped", approval_id=str(request.id), error=str(exc))
