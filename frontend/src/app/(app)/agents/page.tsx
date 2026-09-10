@@ -62,9 +62,10 @@ export default function AgentConsole() {
               <div className="h-24 animate-pulse rounded-xl bg-bg" />
             )}
             <p className="mt-3 text-[11px] text-text-faint">
-              5 real nodes (CEO → Market Analyst → Strategy Generator → Code Generator ↺
-              Validator) plus a placeholder terminal node awaiting the Phase 3 backtesting engine.
-              Topology is introspected live from the compiled graph, not hand-drawn.
+              {topologyQuery.data
+                ? `${topologyQuery.data.nodes.length} nodes, ${topologyQuery.data.edges.length} edges`
+                : "Loading topology"}
+              {" "}introspected live from the compiled graph (GET /agents/graph), not hand-drawn.
             </p>
             <HitlPanel run={runDetailQuery.data ?? null} />
           </Card>

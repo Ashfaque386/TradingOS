@@ -378,3 +378,39 @@ def test_analytics_trend_buckets_real_runs_by_day():
                 synchronize_session=False
             )
             session.commit()
+
+
+# --- US5 / T062: organisation-registry fields + per-agent activity feed --------------------
+
+
+def test_agent_registry_carries_the_organisation_fields():
+    response = client.get("/api/v1/agents")
+    assert response.status_code == 200
+    entries = response.json()
+    assert entries
+    for e in entries:
+        assert isinstance(e["department"], str) and e["department"]
+        assert isinstance(e["capabilities"], list)
+        assert isinstance(e["is_llm_backed"], bool)
+        assert e["health"] in {"idle", "running", "degraded", "disabled"}
+        assert "last_execution" in e
+        assert "next_scheduled_execution" in e
+
+    news = next(e for e in entries if e["agent_name"] == "news_agent")
+    assert news["department"] == "Market Intelligence"
+    assert news["is_llm_backed"] is False
+    assert "news_ingestion" in news["capabilities"]
+
+
+def test_agent_activity_feed_returns_runs_tasks_and_outputs():
+    response = client.get("/api/v1/agents/AGT-013/activity")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_id"] == "AGT-013"
+    assert body["agent_name"] == "news_agent"
+    for key in ("recent_runs", "recent_tasks", "recent_outputs"):
+        assert isinstance(body[key], list)
+
+
+def test_agent_activity_feed_404s_for_an_unknown_agent_id():
+    assert client.get("/api/v1/agents/not-a-real-agent-id/activity").status_code == 404

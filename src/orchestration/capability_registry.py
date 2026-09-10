@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypedDict
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.agents.control import KNOWN_AGENTS, is_agent_enabled
@@ -99,13 +100,38 @@ class AgentSnapshotRow(TypedDict):
     health: str
 
 
+def _latest_run_status_by_agent(session: Session) -> dict[str, str]:
+    """Most recent ``AgentRun.status`` per ``agent_name`` in one ``DISTINCT ON`` query."""
+    from src.models.agent import AgentRun
+
+    rows = session.execute(
+        select(AgentRun.agent_name, AgentRun.status)
+        .distinct(AgentRun.agent_name)
+        .order_by(AgentRun.agent_name, AgentRun.started_at.desc())
+    ).all()
+    return {name: status for name, status in rows}
+
+
+def derive_health(*, enabled: bool, last_run_status: str | None) -> str:
+    """A real, honest per-agent health signal (US5, FR-016) -- never fabricated."""
+    if not enabled:
+        return "disabled"
+    if last_run_status == "Failed":
+        return "degraded"
+    if last_run_status == "Running":
+        return "running"
+    return "idle"
+
+
 def snapshot(session: Session) -> list[AgentSnapshotRow]:
     """The planner's view of the organisation (FR-006). Real enabled state from
-    ``agent_control_state``; health left as a follow-up (US5) -- reported honestly as
-    ``"unknown"`` rather than fabricated (constitution VI)."""
+    ``agent_control_state`` and a real ``health`` derived from each agent's most recent
+    ``AgentRun`` (US5)."""
+    last_status = _latest_run_status_by_agent(session)
     out: list[AgentSnapshotRow] = []
     for descriptor in KNOWN_AGENTS:
         meta = AGENT_META.get(descriptor.name)
+        enabled = is_agent_enabled(session, descriptor.name)
         out.append(
             AgentSnapshotRow(
                 name=descriptor.name,
@@ -116,8 +142,10 @@ def snapshot(session: Session) -> list[AgentSnapshotRow]:
                 capabilities=list(meta.capabilities) if meta else [],
                 is_llm_backed=meta.is_llm_backed if meta else True,
                 concurrency_limit=meta.concurrency_limit if meta else 1,
-                enabled=is_agent_enabled(session, descriptor.name),
-                health="unknown",
+                enabled=enabled,
+                health=derive_health(
+                    enabled=enabled, last_run_status=last_status.get(descriptor.name)
+                ),
             )
         )
     return out

@@ -76,6 +76,8 @@ from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account, AccountEquitySnapshot
 from src.models.agent import AgentControlState, AgentLog, AgentRun
 from src.models.approval import ApprovalRequest
+from src.models.orchestration import ResultArtefact as OrgResultArtefact
+from src.models.orchestration import Task as OrgTask
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
@@ -237,11 +239,50 @@ def set_agent_control_state(
 class AgentRegistryEntry(AgentControlEntry):
     """Superset of AgentControlEntry (same enable/disable admin fields) plus a genuine
     per-agent live-status derivation from the most recent AgentRun row -- distinct from
-    `enabled`, which is administrative on/off state, not "is this agent currently executing"."""
+    `enabled`, which is administrative on/off state, not "is this agent currently executing".
+
+    US5 (FR-016): also carries the organisation-registry fields the Command Center renders --
+    `department`, `capabilities`, `is_llm_backed`, a real derived `health`, and the last / next
+    execution timestamps."""
 
     last_run_status: str | None
     last_run_at: datetime | None
     live_status: Literal["Running", "Idle", "Never run"]
+    department: str
+    capabilities: list[str]
+    is_llm_backed: bool
+    health: str
+    last_execution: datetime | None
+    next_scheduled_execution: datetime | None
+
+
+# The few agents whose cadence is a real APScheduler job (the rest are event-driven -> None,
+# reported honestly rather than guessed).
+_AGENT_SCHEDULER_JOB: dict[str, str] = {
+    "news_agent": "news-sentiment-cycle",
+    "sentiment_agent": "news-sentiment-cycle",
+    "data_ingestion_agent": "market-data-ingestion",
+    "memory_agent": "weekend-memory-consolidation",
+    "memory_ingest": "weekend-memory-consolidation",
+    "audit_agent": "audit-archive",
+    "ceo_agent": "daily-research-cycle",
+}
+
+
+def _next_scheduled_execution(agent_name: str) -> datetime | None:
+    job_id = _AGENT_SCHEDULER_JOB.get(agent_name)
+    if job_id is None:
+        return None
+    try:
+        from src.agents.scheduler import get_running_scheduler
+
+        scheduler = get_running_scheduler()
+        if scheduler is None:
+            return None
+        job = scheduler.get_job(job_id)
+        return getattr(job, "next_run_time", None) if job is not None else None
+    except Exception:  # noqa: BLE001 -- scheduler introspection is best-effort metadata
+        return None
 
 
 @router.get("", response_model=list[AgentRegistryEntry])
@@ -252,11 +293,15 @@ def list_agent_registry() -> list[AgentRegistryEntry]:
     does per-instance below, just applied across the whole registry in one response instead of
     one agent_id at a time). Superset of GET /control's enable/disable fields so a caller doesn't
     have to reconcile two parallel shapes."""
+    from src.orchestration.capability_registry import snapshot as capability_snapshot
+
     with get_session() as session:
         control_rows = {row.agent_name: row for row in session.scalars(select(AgentControlState))}
+        meta_by_name = {m["name"]: m for m in capability_snapshot(session)}
         entries = []
         for agent in KNOWN_AGENTS:
             control_row = control_rows.get(agent.name)
+            meta = meta_by_name.get(agent.name)
             updated_by_email = None
             if control_row is not None and control_row.updated_by_user_id is not None:
                 user = session.get(User, control_row.updated_by_user_id)
@@ -273,6 +318,7 @@ def list_agent_registry() -> list[AgentRegistryEntry]:
                 live_status = "Running"
             else:
                 live_status = "Idle"
+            enabled = control_row is None or control_row.enabled
             entries.append(
                 AgentRegistryEntry(
                     agent_name=agent.name,
@@ -280,16 +326,129 @@ def list_agent_registry() -> list[AgentRegistryEntry]:
                     display_name=agent.display_name,
                     kind=agent.kind,
                     enforced=agent.enforced,
-                    enabled=control_row is None or control_row.enabled,
+                    enabled=enabled,
                     reason=control_row.reason if control_row is not None else None,
                     updated_by=updated_by_email,
                     updated_at=control_row.updated_at if control_row is not None else None,
                     last_run_status=last_run.status if last_run is not None else None,
                     last_run_at=last_run.started_at if last_run is not None else None,
                     live_status=live_status,
+                    department=meta["department"] if meta is not None else "Operations",
+                    capabilities=list(meta["capabilities"]) if meta is not None else [],
+                    is_llm_backed=meta["is_llm_backed"] if meta is not None else True,
+                    health=(
+                        meta["health"]
+                        if meta is not None
+                        else ("disabled" if not enabled else "idle")
+                    ),
+                    last_execution=last_run.started_at if last_run is not None else None,
+                    next_scheduled_execution=_next_scheduled_execution(agent.name),
                 )
             )
         return entries
+
+
+# --- Per-agent activity feed (US5 / BUG-C: the console had no window into non-graph agents) ---
+
+
+class AgentActivityRun(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    started_at: datetime | None
+    ended_at: datetime | None
+
+
+class AgentActivityTask(BaseModel):
+    task_id: uuid.UUID
+    run_id: uuid.UUID
+    capability: str
+    status: str
+    objective: str
+    result_artefact_id: uuid.UUID | None
+
+
+class AgentActivityArtefact(BaseModel):
+    artefact_id: uuid.UUID
+    artefact_type: str
+    disposition: str | None
+    created_at: datetime | None
+
+
+class AgentActivityResponse(BaseModel):
+    agent_id: str
+    agent_name: str
+    recent_runs: list[AgentActivityRun]
+    recent_tasks: list[AgentActivityTask]
+    recent_outputs: list[AgentActivityArtefact]
+
+
+@router.get("/{agent_id}/activity", response_model=AgentActivityResponse)
+def get_agent_activity(agent_id: str, limit: int = 20) -> AgentActivityResponse:
+    """Recent execution history for one agent -- runs, delegated organisation tasks, and result
+    artefacts. `agent_id` is the SRS identifier (e.g. "AGT-013"), matching `GET /{agent_id}`.
+    Closes the console's blind spot for scheduled / non-graph agents (BUG-C)."""
+    matches = [a for a in KNOWN_AGENTS if a.agent_id == agent_id]
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"Unknown agent id '{agent_id}'")
+    names = {a.name for a in matches}
+    capped = max(1, min(limit, 100))
+
+    with get_session() as session:
+        runs = session.scalars(
+            select(AgentRun)
+            .where(AgentRun.agent_name.in_(names))
+            .order_by(AgentRun.started_at.desc())
+            .limit(capped)
+        ).all()
+        tasks = session.scalars(
+            select(OrgTask)
+            .where(OrgTask.assigned_agent.in_(names))
+            .order_by(OrgTask.created_at.desc())
+            .limit(capped)
+        ).all()
+        artefact_ids = [t.result_artefact_id for t in tasks if t.result_artefact_id is not None]
+        outputs = (
+            session.scalars(
+                select(OrgResultArtefact)
+                .where(OrgResultArtefact.id.in_(artefact_ids))
+                .order_by(OrgResultArtefact.created_at.desc())
+            ).all()
+            if artefact_ids
+            else []
+        )
+        return AgentActivityResponse(
+            agent_id=agent_id,
+            agent_name=next(iter(names)),
+            recent_runs=[
+                AgentActivityRun(
+                    run_id=r.id,
+                    status=r.status,
+                    started_at=r.started_at,
+                    ended_at=r.ended_at,
+                )
+                for r in runs
+            ],
+            recent_tasks=[
+                AgentActivityTask(
+                    task_id=t.id,
+                    run_id=t.run_id,
+                    capability=t.capability,
+                    status=t.status,
+                    objective=t.objective,
+                    result_artefact_id=t.result_artefact_id,
+                )
+                for t in tasks
+            ],
+            recent_outputs=[
+                AgentActivityArtefact(
+                    artefact_id=a.id,
+                    artefact_type=a.artefact_type,
+                    disposition=a.disposition,
+                    created_at=a.created_at,
+                )
+                for a in outputs
+            ],
+        )
 
 
 # --- Trigger a real run ---------------------------------------------------------------------

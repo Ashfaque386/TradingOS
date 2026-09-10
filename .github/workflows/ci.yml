@@ -29,6 +29,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
 
+      # US5 / FR-089 / BUG-G: the Organization Command Center must render real, backend-sourced
+      # status -- never fabricate one. Fail CI when a run/task/agent status string is *assigned*
+      # (`status: "Running"`, `const s = "Idle"`, `useState("Waiting")`) in the console code.
+      # Comparing a real backend `x.status === "Failed"` is fine and not matched.
+      - name: No fabricated status literals in the console
+        run: |
+          if grep -rnE '([Ss]tatus\s*[:=]\s*|useState(<[^>]*>)?\(\s*)"(Running|Idle|Waiting|Blocked|Failed|Completed|Planning|Stalled|Never run)"' \
+              frontend/src/components/console frontend/src/hooks frontend/src/app/'(app)'/console \
+              --include='*.ts' --include='*.tsx' 2>/dev/null; then
+            echo "::error::fabricated status literal in the console -- derive it from backend state (FR-089)"
+            exit 1
+          fi
+
       - name: Build app image
         run: docker compose build app
 
