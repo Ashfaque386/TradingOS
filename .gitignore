@@ -50,6 +50,11 @@ tests/perf/results*.csv
 .vscode/
 .idea/
 
+# Coding-agent workspace (Spec Kit init installs .claude/skills/speckit-* here).
+# Excluded because agents may write credentials/auth tokens into this folder;
+# the shared Spec Kit assets live in .specify/, which stays tracked.
+.claude/
+
 # Node (frontend, added in Phase 4)
 node_modules/
 .next/
