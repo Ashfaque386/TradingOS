@@ -75,6 +75,7 @@ from src.engine.sandbox.strategy_factory import run_strategy_factory_pipeline
 from src.memory.redis_client import get_redis_client, publish_agent_log
 from src.models.account import Account, AccountEquitySnapshot
 from src.models.agent import AgentControlState, AgentLog, AgentRun
+from src.models.approval import ApprovalRequest
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
@@ -631,13 +632,67 @@ def _persist_strategy_progress(
             result_row.deployment_rationale = rec.rationale
         strategy_row = session.get(Strategy, tracking.strategy_id)
         if strategy_row is not None:
-            # "Live" is never written here or anywhere in this pipeline -- that transition is
-            # permanently reserved for the RBAC-gated /strategies/{id}/promote endpoint
-            # (Business Rule 3, human-in-the-loop).
-            strategy_row.status = (
-                "PaperTrading" if rec.recommended_status == "PaperTrading" else "Deprecated"
-            )
+            if rec.recommended_status == "PaperTrading":
+                # US3 (FR-052): the pipeline no longer auto-promotes to Paper Trading. It parks
+                # the strategy in `PendingPaperApproval` and opens a real human approval gate
+                # (src/orchestration/approvals.py). "Live" remains behind /strategies/{id}/promote.
+                strategy_row.status = "PendingPaperApproval"
+                _open_paper_approval_request(
+                    session,
+                    strategy=strategy_row,
+                    strategy_version_id=(
+                        result_row.strategy_version_id if result_row is not None else None
+                    ),
+                    rationale=rec.rationale,
+                )
+            else:
+                strategy_row.status = "Deprecated"
         return
+
+
+def _open_paper_approval_request(
+    session: Session,
+    *,
+    strategy: Strategy,
+    strategy_version_id: uuid.UUID | None,
+    rationale: str,
+) -> None:
+    """US3 (T045): open the real pre-Paper-Trading human approval gate for a strategy the
+    research graph just recommended for Paper Trading. The legacy graph has no ``OrganizationRun``
+    so ``run_id`` is left null; the decision is made via ``POST
+    /api/v1/organization/approvals/{id}/approve|reject`` (SystemAdministrator / PortfolioManager
+    only). Idempotent: never opens a second pending request for the same strategy."""
+    existing = session.scalars(
+        select(ApprovalRequest).where(
+            ApprovalRequest.strategy_id == strategy.id,
+            ApprovalRequest.status == "pending",
+        )
+    ).first()
+    if existing is not None:
+        return
+    request = ApprovalRequest(
+        run_id=None,
+        strategy_id=strategy.id,
+        strategy_version_id=strategy_version_id,
+        recommendation_artefact_id=None,
+        status="pending",
+        created_at=datetime.now(UTC),
+    )
+    session.add(request)
+    session.flush()
+    write_audit_entry(
+        session,
+        actor_type="AI Agent",
+        actor_id="deployment_agent",
+        action="APPROVAL_REQUESTED",
+        entity_type="ApprovalRequest",
+        entity_id=request.id,
+        after_state={
+            "strategy_id": str(strategy.id),
+            "strategy_status": "PendingPaperApproval",
+            "rationale": rationale,
+        },
+    )
 
 
 def _fetch_account_capital() -> float | None:
@@ -1562,10 +1617,9 @@ class AgentRunSummary(BaseModel):
     status: str
     started_at: datetime
     ended_at: datetime | None
-    # REL-011 E11.4b: AgentRun.human_decision (REL-010 E10.8d) was never serialized onto this
-    # response model -- only HitlDecisionResponse (the approve/reject mutation's own return
-    # value) carried it, so a reloaded run detail view had no way to show "already
-    # approved/rejected" state. Additive field, not a new mutation.
+    # REL-011 E11.4b: AgentRun.human_decision (REL-010 E10.8d). The old run-level approve/reject
+    # handlers that wrote it were removed in US3 (superseded by the real ApprovalRequest gate in
+    # approvals.py); the column + this field remain for historical rows.
     human_decision: str | None = None
     # REL-062 (API-073): AgentRun.langsmith_trace_url has been real and persisted since REL-009
     # E9.2 (_execute_graph_run resolves it via fetch_langsmith_trace_url() on every node), but
@@ -1749,12 +1803,10 @@ class RetryResponse(BaseModel):
 
 @router.post("/runs/{run_id}/retry", response_model=RetryResponse, status_code=202)
 def retry_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> RetryResponse:
-    """API-024 (previously mislabeled "API-021" here, which is actually
-    `/orchestrator/runs/{run_id}/resume`, still No -- see approve_run()'s note on why no
-    pause/resume state machine exists). Valid only for a run that genuinely ended `"Failed"` --
-    dispatches a fresh end-to-end graph run via the same detached-thread machinery as
-    `/research/trigger`, with `retried_from_run_id` linking it back to the run a human asked to
-    retry."""
+    """API-024. Valid only for a run that genuinely ended `"Failed"` -- dispatches a fresh
+    end-to-end graph run via the same detached-thread machinery as `/research/trigger`, with
+    `retried_from_run_id` linking it back to the run a human asked to retry. (There is no
+    pause/resume state machine in this pipeline, so no `/resume` counterpart exists.)"""
     with get_session() as session:
         failed = session.get(AgentRun, run_id)
         if failed is None:
@@ -1786,111 +1838,11 @@ def retry_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> Ret
     )
 
 
-def _strategy_from_run_lineage(session: Session, run_id: uuid.UUID) -> Strategy | None:
-    """Walks the real DB-012 lineage from a root AgentRun to whichever Strategy its graph thread
-    produced the most recent BacktestResult for. BacktestResult.agent_run_id points at the
-    "backtesting" node's own per-node child AgentRun (see `_persist_strategy_progress` above),
-    not the root run -- so this looks up that child first, rather than assuming `run_id` itself
-    is what BacktestResult references."""
-    backtesting_run_ids = list(
-        session.scalars(
-            select(AgentRun.id).where(
-                AgentRun.parent_run_id == run_id, AgentRun.agent_name == "backtesting"
-            )
-        )
-    )
-    if not backtesting_run_ids:
-        return None
-    result = session.scalars(
-        select(BacktestResult)
-        .where(BacktestResult.agent_run_id.in_(backtesting_run_ids))
-        .order_by(BacktestResult.created_at.desc())
-    ).first()
-    if result is None:
-        return None
-    version = session.get(StrategyVersion, result.strategy_version_id)
-    if version is None:
-        return None
-    return session.get(Strategy, version.strategy_id)
-
-
-class HitlDecisionResponse(BaseModel):
-    run_id: uuid.UUID
-    human_decision: str
-    strategy_id: uuid.UUID | None = None
-    strategy_status: str | None = None
-
-
-@router.post("/runs/{run_id}/approve", response_model=HitlDecisionResponse)
-def approve_run(run_id: uuid.UUID, _user: User = Depends(_can_manage_hitl)) -> HitlDecisionResponse:
-    """API-022. Records a human's real, audited sign-off on this run's deployment
-    recommendation. No further state change: an auto-`"PaperTrading"` recommendation was already
-    applied by `_persist_strategy_progress` when the run completed -- there is no mid-graph pause
-    state machine to resume (no such feature exists in this pipeline), so approval here is a
-    durable record of agreement, not a trigger."""
-    with get_session() as session:
-        run = session.get(AgentRun, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        run.human_decision = "Approved"
-        write_audit_entry(
-            session,
-            actor_type="Human",
-            actor_id=_user.email,
-            action="AGENT_RUN_APPROVED",
-            entity_type="AgentRun",
-            entity_id=run_id,
-            after_state={"human_decision": "Approved"},
-        )
-        session.commit()
-        return HitlDecisionResponse(run_id=run_id, human_decision="Approved")
-
-
-class RejectRunRequest(BaseModel):
-    reason: str
-
-
-@router.post("/runs/{run_id}/reject", response_model=HitlDecisionResponse)
-def reject_run(
-    run_id: uuid.UUID, body: RejectRunRequest, _user: User = Depends(_can_manage_hitl)
-) -> HitlDecisionResponse:
-    """API-023. The real human-override mechanism (Business Rule 3): if this run's thread
-    produced a Strategy that reached `"PaperTrading"` automatically, a reject overrides it to
-    `"Deprecated"` -- a required `reason` is captured in the audit trail, never silently
-    dropped."""
-    with get_session() as session:
-        run = session.get(AgentRun, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        run.human_decision = "Rejected"
-
-        strategy = _strategy_from_run_lineage(session, run_id)
-        strategy_status = None
-        if strategy is not None and strategy.status == "PaperTrading":
-            strategy.status = "Deprecated"
-            strategy_status = strategy.status
-
-        write_audit_entry(
-            session,
-            actor_type="Human",
-            actor_id=_user.email,
-            action="AGENT_RUN_REJECTED",
-            entity_type="AgentRun",
-            entity_id=run_id,
-            after_state={
-                "human_decision": "Rejected",
-                "reason": body.reason,
-                "strategy_id": str(strategy.id) if strategy is not None else None,
-                "strategy_status": strategy_status,
-            },
-        )
-        session.commit()
-        return HitlDecisionResponse(
-            run_id=run_id,
-            human_decision="Rejected",
-            strategy_id=strategy.id if strategy is not None else None,
-            strategy_status=strategy_status,
-        )
+# NOTE (US3 / BUG-B): the post-hoc no-op `POST /runs/{run_id}/approve` and `/reject` handlers
+# were removed here. A deployment recommendation now parks the strategy in
+# `PendingPaperApproval` and opens a real `ApprovalRequest`; the decision is made via
+# `src/api/routers/approvals.py` (`POST /api/v1/organization/approvals/{id}/approve|reject`,
+# SystemAdministrator / PortfolioManager only). `POST /runs/{run_id}/retry` above is unchanged.
 
 
 # --- Prompt registry (Prompt Management Interface) -------------------------------------------

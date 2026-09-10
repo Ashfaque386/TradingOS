@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 
 from src.agents.scheduler import build_scheduler
 from src.api.routers.agents import router as agents_router
+from src.api.routers.approvals import router as approvals_router
 from src.api.routers.audit import observability_router
 from src.api.routers.audit import router as audit_router
 from src.api.routers.auth import router as auth_router
@@ -138,6 +139,7 @@ app.include_router(portfolio_router)
 app.include_router(risk_limits_router)
 app.include_router(agents_router)
 app.include_router(organization_router)
+app.include_router(approvals_router)
 app.include_router(strategies_router)
 app.include_router(settings_router)
 app.include_router(chat_router)

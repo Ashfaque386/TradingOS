@@ -22,10 +22,18 @@ from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
 from src.core.db import get_session
+from src.models.approval import ApprovalRequest
 from src.models.orchestration import OrganizationRun, Task
 from src.models.tenant import DEFAULT_TENANT_ID
 from src.orchestration import events
-from src.orchestration.enums import RunSource, RunStatus, TaskStatus
+from src.orchestration.enums import ApprovalStatus, RunSource, RunStatus, TaskStatus
+
+_TERMINAL_RUN_STATUSES = (
+    RunStatus.COMPLETED.value,
+    RunStatus.FAILED.value,
+    RunStatus.CANNOT_PLAN.value,
+    RunStatus.CANCELLED.value,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -136,6 +144,60 @@ def _plan_run(run_id: uuid.UUID) -> None:
                 run.status = RunStatus.FAILED.value
                 run.ended_at = datetime.now(UTC)
                 session.commit()
+
+
+def has_pending_approval(session: Session, run_id: uuid.UUID) -> bool:
+    """FR-052: a run that produced an ``ApprovalRequest`` may not reach ``completed`` until a
+    human with an allowed role decides it."""
+    return bool(
+        session.scalar(
+            select(func.count(ApprovalRequest.id)).where(
+                ApprovalRequest.run_id == run_id,
+                ApprovalRequest.status == ApprovalStatus.PENDING.value,
+            )
+        )
+    )
+
+
+def settle_run_after_approval(session: Session, run_id: uuid.UUID) -> None:
+    """Called once an ``ApprovalRequest`` is decided. If nothing else is holding the run open
+    (no other pending approval, no non-terminal task) the waiting run now completes."""
+    run = session.get(OrganizationRun, run_id)
+    if run is None or run.status in _TERMINAL_RUN_STATUSES:
+        return
+    if has_pending_approval(session, run_id):
+        return
+    open_tasks = session.scalar(
+        select(func.count(Task.id)).where(
+            Task.run_id == run_id,
+            Task.status.notin_(
+                (
+                    TaskStatus.COMPLETED.value,
+                    TaskStatus.FAILED.value,
+                    TaskStatus.BLOCKED.value,
+                    TaskStatus.CANCELLED.value,
+                    TaskStatus.SUPERSEDED.value,
+                )
+            ),
+        )
+    )
+    if open_tasks:
+        return
+    now = datetime.now(UTC)
+    run.status = RunStatus.COMPLETED.value
+    run.ended_at = now
+    run.updated_at = now
+    events.emit(
+        session,
+        run_id=run_id,
+        event_type="organization.run.completed",
+        subject_type="run",
+        subject_id=run_id,
+        payload={"settled_by": "approval_decision"},
+        audited=True,
+    )
+    session.flush()
+    logger.info("organization_run_settled_after_approval", run_id=str(run_id))
 
 
 def promote_queued() -> None:

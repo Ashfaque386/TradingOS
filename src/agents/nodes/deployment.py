@@ -1,10 +1,10 @@
 """Deployment Agent node (AGT-012, PMPT-036/037) — REL-005 Epic E5.5. Terminal node of the graph.
 
-Owns only the `Backtesting -> PaperTrading` recommendation. Never itself recommends or writes
-`Strategy.status = "Live"` -- Business Rule 3 (human-in-the-loop) remains permanently behind the
-RBAC-gated `/strategies/{id}/promote` endpoint (src/api/routers/strategies.py), which this node
-never calls. `Strategy.status` writes for the statuses this node DOES own happen in
-src/api/routers/agents.py's `_persist_strategy_progress`, not here -- like every other node in
+Owns only the `Backtesting -> PaperTrading` *recommendation*. It never writes `Strategy.status`:
+a "PaperTrading" recommendation now parks the strategy in `PendingPaperApproval` behind a real
+human approval gate (US3 -- src/orchestration/approvals.py, opened from
+src/api/routers/agents.py's `_persist_strategy_progress`), and "Live" stays permanently behind
+the RBAC-gated `/strategies/{id}/promote` endpoint (Business Rule 3). Like every other node in
 this package, this is a pure function of `TradingOSGraphState` with no DB session.
 """
 

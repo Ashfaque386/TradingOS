@@ -20,8 +20,10 @@ from src.models.base import Base, UUIDPKMixin
 class ApprovalRequest(Base, UUIDPKMixin):
     __tablename__ = "approval_requests"
 
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organization_runs.id"), nullable=False
+    # Nullable: a deployment recommendation from the legacy research graph (no OrganizationRun)
+    # also opens a real gate; org-led runs set this so `run_manager` can hold the run `waiting`.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organization_runs.id")
     )
     strategy_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("strategies.id"), nullable=False

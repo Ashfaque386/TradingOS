@@ -1,5 +1,155 @@
-"""approvals -- CEO-led organisation layer.
+"""The real pre-Paper-Trading human approval gate (spec T048, FR-052..057, clarify Q1).
 
-See specs/001-ceo-led-trading-org/plan.md + data-model.md. Implemented by later /speckit-implement
-tasks; this stub keeps the package importable.
+A deployment recommendation leaves the subject strategy in ``PendingPaperApproval`` and opens an
+``ApprovalRequest``. This module performs the *decision*:
+
+- ``approve`` -> ``Strategy.status: PendingPaperApproval -> PaperTrading``
+- ``reject``  -> ``Strategy.status: PendingPaperApproval -> Deprecated`` (``reason`` required)
+
+Every decision is written to the ``audit_log`` hash chain (actor + time) and, when the request
+belongs to an ``OrganizationRun``, emits an organisation event and lets ``run_manager`` settle
+the waiting run. There is deliberately **no timeout path** (FR-057): a request stays ``pending``
+until a human with an allowed role decides it. RBAC (``SystemAdministrator`` /
+``PortfolioManager`` only) is enforced at the router with an audited denial on any other role.
 """
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+import structlog
+from sqlalchemy.orm import Session
+
+from src.core.audit import write_audit_entry
+from src.models.approval import ApprovalRequest
+from src.models.strategy import Strategy
+from src.orchestration import events, run_manager
+from src.orchestration.enums import ApprovalStatus
+
+logger = structlog.get_logger(__name__)
+
+_PENDING_PAPER = "PendingPaperApproval"
+_PAPER_TRADING = "PaperTrading"
+_DEPRECATED = "Deprecated"
+
+
+class ApprovalNotFoundError(LookupError):
+    """No ``ApprovalRequest`` with that id."""
+
+
+class ApprovalAlreadyDecidedError(RuntimeError):
+    """The request is not ``pending`` -- a decided request is never silently re-decided."""
+
+
+class RejectionReasonRequiredError(ValueError):
+    """FR-053: a rejection must carry a human-written reason."""
+
+
+def _load_pending(session: Session, request_id: uuid.UUID) -> ApprovalRequest:
+    request = session.get(ApprovalRequest, request_id)
+    if request is None:
+        raise ApprovalNotFoundError(str(request_id))
+    if request.status != ApprovalStatus.PENDING.value:
+        raise ApprovalAlreadyDecidedError(f"approval {request_id} is already '{request.status}'")
+    return request
+
+
+def approve(session: Session, *, request_id: uuid.UUID, actor_id: str) -> ApprovalRequest:
+    """Record an allowed human's approval and move the strategy into Paper Trading."""
+    request = _load_pending(session, request_id)
+    now = datetime.now(UTC)
+
+    strategy = session.get(Strategy, request.strategy_id)
+    before_status = strategy.status if strategy is not None else None
+    if strategy is not None and strategy.status == _PENDING_PAPER:
+        strategy.status = _PAPER_TRADING
+
+    request.status = ApprovalStatus.APPROVED.value
+    request.decided_by = actor_id
+    request.decided_at = now
+
+    entry = write_audit_entry(
+        session,
+        actor_type="Human",
+        actor_id=actor_id,
+        action="APPROVAL_APPROVED",
+        entity_type="ApprovalRequest",
+        entity_id=request_id,
+        before_state={"strategy_status": before_status},
+        after_state={
+            "strategy_id": str(request.strategy_id),
+            "strategy_status": strategy.status if strategy is not None else None,
+        },
+    )
+    request.audit_reference = entry.id
+
+    if request.run_id is not None:
+        events.emit(
+            session,
+            run_id=request.run_id,
+            event_type="approval.approved",
+            subject_type="approval",
+            subject_id=request_id,
+            payload={"strategy_id": str(request.strategy_id), "decided_by": actor_id},
+        )
+    session.flush()
+    if request.run_id is not None:
+        run_manager.settle_run_after_approval(session, request.run_id)
+    logger.info("approval_approved", request_id=str(request_id), actor=actor_id)
+    return request
+
+
+def reject(
+    session: Session, *, request_id: uuid.UUID, actor_id: str, reason: str
+) -> ApprovalRequest:
+    """Record an allowed human's rejection (``reason`` required) and deprecate the strategy."""
+    if not reason or not reason.strip():
+        raise RejectionReasonRequiredError("a rejection reason is required (FR-053)")
+    request = _load_pending(session, request_id)
+    now = datetime.now(UTC)
+
+    strategy = session.get(Strategy, request.strategy_id)
+    before_status = strategy.status if strategy is not None else None
+    if strategy is not None and strategy.status == _PENDING_PAPER:
+        strategy.status = _DEPRECATED
+
+    request.status = ApprovalStatus.REJECTED.value
+    request.decided_by = actor_id
+    request.decided_at = now
+    request.reason = reason.strip()
+
+    entry = write_audit_entry(
+        session,
+        actor_type="Human",
+        actor_id=actor_id,
+        action="APPROVAL_REJECTED",
+        entity_type="ApprovalRequest",
+        entity_id=request_id,
+        before_state={"strategy_status": before_status},
+        after_state={
+            "strategy_id": str(request.strategy_id),
+            "strategy_status": strategy.status if strategy is not None else None,
+            "reason": request.reason,
+        },
+    )
+    request.audit_reference = entry.id
+
+    if request.run_id is not None:
+        events.emit(
+            session,
+            run_id=request.run_id,
+            event_type="approval.rejected",
+            subject_type="approval",
+            subject_id=request_id,
+            payload={
+                "strategy_id": str(request.strategy_id),
+                "decided_by": actor_id,
+                "reason": request.reason,
+            },
+        )
+    session.flush()
+    if request.run_id is not None:
+        run_manager.settle_run_after_approval(session, request.run_id)
+    logger.info("approval_rejected", request_id=str(request_id), actor=actor_id)
+    return request

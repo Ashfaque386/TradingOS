@@ -192,6 +192,12 @@ def _handle_task_failure(run_id: uuid.UUID, task_id: uuid.UUID, exc: Exception) 
         session.commit()
 
 
+def _has_pending_approval(session: Session, run_id: uuid.UUID) -> bool:
+    from src.orchestration.run_manager import has_pending_approval
+
+    return has_pending_approval(session, run_id)
+
+
 def _finalize(run_id: uuid.UUID) -> bool:
     """Returns True if the run reached a terminal state. Sets ``dependency_wait_seconds`` /
     ``ran_concurrently`` on the tasks and blocks completion while any artefact is
@@ -244,6 +250,14 @@ def _finalize(run_id: uuid.UUID) -> bool:
             # complete (SC-004). MVP: artefacts are persisted as `informational`, so this is
             # normally 0; guard anyway.
             run.status = RunStatus.WAITING.value
+            session.commit()
+            return False
+        elif _has_pending_approval(session, run_id):
+            # FR-052 (US3): a run that produced an ApprovalRequest parks in `waiting` until a
+            # human with an allowed role decides it -- `approvals.settle_run_after_approval`
+            # then completes the run. No timeout auto-resolves it (FR-057).
+            run.status = RunStatus.WAITING.value
+            run.updated_at = now
             session.commit()
             return False
         else:
