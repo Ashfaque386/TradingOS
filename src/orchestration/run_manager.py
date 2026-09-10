@@ -110,28 +110,21 @@ def _dispatch_planning(run_id: uuid.UUID) -> None:
 
 def _plan_run(run_id: uuid.UUID) -> None:
     from src.orchestration.planner import generate_plan  # deferred: planner imports models/router
+    from src.orchestration.task_engine import run_scheduler_loop
 
     try:
+        planned = False
         with get_session() as session:
             run = session.get(OrganizationRun, run_id)
             if run is None or run.status != RunStatus.PLANNING.value:
                 return
-            generate_plan(session, run)
-            # No task engine yet in this MVP increment -- a validated plan parks the run in
-            # `waiting`; `cannot_plan` is set inside generate_plan on failure.
+            generate_plan(session, run)  # commits internally; sets cannot_plan on failure
             session.refresh(run)
-            if run.status == RunStatus.PLANNING.value:
-                run.status = RunStatus.WAITING.value
-                run.updated_at = datetime.now(UTC)
-                events.emit(
-                    session,
-                    run_id=run.id,
-                    event_type="organization.run.waiting",
-                    subject_type="run",
-                    subject_id=run.id,
-                    payload={"note": "plan validated; task execution is the next phase"},
-                )
-            session.commit()
+            planned = run.status == RunStatus.PLANNING.value
+        if planned:
+            # US2: the task engine now drives the plan to completion (parallel independent
+            # tasks, dependency-aware waiting, lifecycle, events).
+            run_scheduler_loop(run_id)
     except Exception as exc:  # noqa: BLE001 -- always close out the run row
         logger.error("organization_plan_run_failed", run_id=str(run_id), error=str(exc))
         with get_session() as session:

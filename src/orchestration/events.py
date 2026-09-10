@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from src.core.audit import write_audit_entry
@@ -31,6 +31,14 @@ logger = structlog.get_logger(__name__)
 
 
 def _next_sequence(session: Session, run_id: uuid.UUID) -> int:
+    # Serialise per-run sequence allocation: parallel task workers each emit events inside their
+    # own transaction, and ``max(sequence) + 1`` would otherwise race two inserts onto the same
+    # value (violating ``uq_org_event_run_sequence``). The xact-scoped advisory lock is released
+    # on the caller's commit/rollback and only ever contends with other emitters for this run.
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+        {"k": f"org-event-seq:{run_id}"},
+    )
     current = session.scalar(
         select(func.coalesce(func.max(OrganizationalEvent.sequence), 0)).where(
             OrganizationalEvent.run_id == run_id

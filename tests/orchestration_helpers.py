@@ -12,9 +12,97 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
+
+from src.core.db import get_session
+from src.models.orchestration import (
+    OrganizationalPlan,
+    OrganizationRun,
+    Task,
+    TaskDependency,
+)
+from src.models.tenant import DEFAULT_TENANT_ID
+from src.orchestration.capability_registry import is_concurrency_safe
+
+
+def seed_run_with_tasks(
+    task_specs: list[dict[str, object]],
+) -> tuple[uuid.UUID, dict[str, uuid.UUID]]:
+    """Insert an OrganizationRun + OrganizationalPlan + Task rows (status ``planned``) directly,
+    bypassing the LLM planner. ``task_specs`` items: ``{key, capability, assigned_agent,
+    expected_output?, depends_on?}``. Returns ``(run_id, {key: task_id})``."""
+    now = datetime.now(UTC)
+    run_id = uuid.uuid4()
+    with get_session() as session:
+        run = OrganizationRun(
+            id=run_id,
+            tenant_id=uuid.UUID(DEFAULT_TENANT_ID),
+            objective="seeded test run",
+            source="api",
+            status="planning",
+            thread_id=f"org-seed-{run_id}",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(run)
+        session.flush()
+        plan = OrganizationalPlan(
+            run_id=run_id,
+            objective_classification="test",
+            departments=[],
+            constraints={},
+            safety_requirements={},
+            approval_required=False,
+            created_at=now,
+        )
+        session.add(plan)
+        session.flush()
+        run.plan_id = plan.id
+
+        key_to_id: dict[str, uuid.UUID] = {}
+        for spec in task_specs:
+            cap = str(spec["capability"])
+            task = Task(
+                plan_id=plan.id,
+                run_id=run_id,
+                tenant_id=uuid.UUID(DEFAULT_TENANT_ID),
+                objective=f"task {spec['key']}",
+                assigned_agent=str(spec["assigned_agent"]),
+                assigned_by="ceo_agent",
+                capability=cap,
+                priority=5,
+                dependency_policy="all",
+                required_inputs=[],
+                received_inputs=[],
+                expected_output=str(spec.get("expected_output", "AdHocAnalysis")),
+                status="planned",
+                is_concurrency_safe=is_concurrency_safe(cap),
+                timeout_seconds=300,
+                correlation_id=run.thread_id,
+                created_at=now,
+            )
+            session.add(task)
+            session.flush()
+            key_to_id[str(spec["key"])] = task.id
+
+        for spec in task_specs:
+            for dep_key in spec.get("depends_on", []):  # type: ignore[union-attr]
+                session.add(
+                    TaskDependency(
+                        plan_id=plan.id,
+                        dependent_task_id=key_to_id[str(spec["key"])],
+                        prerequisite_task_id=key_to_id[str(dep_key)],
+                        required_artefact_type="Artefact",
+                        policy="hard",
+                        state="unsatisfied",
+                        created_at=now,
+                    )
+                )
+        session.commit()
+    return run_id, key_to_id
 
 
 @contextmanager

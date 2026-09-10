@@ -262,6 +262,9 @@ class Settings(BaseSettings):
     org_task_default_timeout_seconds: int = 300
     org_research_task_timeout_seconds: int = 1800
     llm_call_timeout_seconds: int = 120
+    # US2: simulated per-task work in the placeholder capability handler (0 in prod; a small
+    # value in the concurrency test so parallel task windows deterministically overlap).
+    org_placeholder_task_delay_seconds: float = 0.0
 
 
 @lru_cache
