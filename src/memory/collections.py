@@ -10,7 +10,17 @@ from qdrant_client.models import Distance, VectorParams
 
 from src.memory.embeddings import get_embedding_dim
 
-COLLECTIONS = ["trading_strategies", "agent_memory", "news_sentiment", "code_templates"]
+# spec 001-ceo-led-trading-org T021 / research R13: `organization_memory` holds past plans,
+# CEO decisions, conflict resolutions, and rejected/failed-strategy summaries the CEO planner
+# queries before planning. Same embedding infra as the others -- no second memory platform
+# (constitution V; spec FR-032).
+COLLECTIONS = [
+    "trading_strategies",
+    "agent_memory",
+    "news_sentiment",
+    "code_templates",
+    "organization_memory",
+]
 
 
 def bootstrap_collections(

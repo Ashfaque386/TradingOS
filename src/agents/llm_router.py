@@ -282,6 +282,10 @@ def complete(task_type: TaskType, messages: list[dict[str, str]], **kwargs: Any)
     last_error: Exception | None = None
     for pm in chain:
         call_kwargs = dict(kwargs)
+        # spec 001-ceo-led-trading-org T018 / audit AR-2: a hard per-call wall-clock cap so an
+        # unresponsive provider cannot hang a worker thread indefinitely (the "zombie AgentRun"
+        # pattern). Caller-supplied `timeout` still wins.
+        call_kwargs.setdefault("timeout", settings.llm_call_timeout_seconds)
         if pm.provider == "huggingface":
             # Real usage-optimization guard (REL-009, 2026-07-30): caps a single call's own cost
             # unless the caller already asked for a specific max_tokens -- prevents one

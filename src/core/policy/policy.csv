@@ -166,3 +166,6 @@ p, RiskManager, /api/v1/scheduled-jobs/{job_id}, PUT
 p, SystemAdministrator, /api/v1/scheduled-jobs/{job_id}/run-now, POST
 p, PortfolioManager, /api/v1/scheduled-jobs/{job_id}/run-now, POST
 p, RiskManager, /api/v1/scheduled-jobs/{job_id}/run-now, POST
+p, SystemAdministrator, /api/v1/organization/runs, POST
+p, PortfolioManager, /api/v1/organization/runs, POST
+p, RiskManager, /api/v1/organization/runs, POST

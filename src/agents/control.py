@@ -58,6 +58,14 @@ class AgentDescriptor:
     display_name: str
     kind: AgentKind
     enforced: bool
+    # spec 001-ceo-led-trading-org T019 -- organisation metadata for the CEO capability
+    # registry. Defaulted so every existing positional `AgentDescriptor(...)` construction is
+    # unchanged; the authoritative per-agent values live in
+    # `src/orchestration/capability_registry.py::AGENT_META` (merged into `snapshot()`).
+    department: str = "Operations"
+    capabilities: tuple[str, ...] = ()
+    is_llm_backed: bool = True
+    concurrency_limit: int = 1
 
 
 KNOWN_AGENTS: tuple[AgentDescriptor, ...] = (

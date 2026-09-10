@@ -50,6 +50,7 @@ from src.engine.live.tick_listener import get_async_redis_client
 from src.engine.risk.ws_latency_guard_service import get_latency_guard
 from src.memory.redis_client import AGENT_LOG_CHANNEL, ORDER_EVENT_CHANNEL, TICK_CHANNEL_PREFIX
 from src.observability.metrics import WS_STREAM_LATENCY_SECONDS
+from src.orchestration.events import ORGANIZATION_EVENT_CHANNEL
 
 _PORTFOLIO_POLL_INTERVAL_SECONDS = 3.0
 
@@ -141,6 +142,45 @@ async def stream_order_events(websocket: WebSocket) -> None:
     """API-093 (REL-061). Same thin verbatim-relay shape as /agents/logs above."""
     await websocket.accept()
     await _serve(websocket, _channel_relay(websocket, ORDER_EVENT_CHANNEL))
+
+
+@router.websocket("/organization")
+async def stream_organization_events(websocket: WebSocket) -> None:
+    """spec 001-ceo-led-trading-org T015 / contracts/websocket.md. Relays the
+    ``organization:events`` Redis channel to the Organization Command Center. Optional
+    ``?run_id=<uuid>`` (repeatable) filters to those runs; omit for all active runs. Read-only
+    -- no mutation over the socket (RBAC stays on the REST endpoints). The console treats each
+    frame as a hint to refetch/patch and backfills missed events via
+    ``GET /organization/runs/{id}/events?after_sequence=`` on reconnect (FR-088)."""
+    await websocket.accept()
+    run_ids = {rid for rid in websocket.query_params.getlist("run_id") if rid}
+    await _serve(websocket, _organization_relay(websocket, run_ids))
+
+
+def _organization_relay(websocket: WebSocket, run_ids: set[str]) -> Callable[[], Awaitable[None]]:
+    async def relay() -> None:
+        client = get_async_redis_client()
+        pubsub = client.pubsub()
+        await pubsub.subscribe(ORGANIZATION_EVENT_CHANNEL)
+        try:
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                if run_ids:
+                    try:
+                        if json.loads(message["data"]).get("run_id") not in run_ids:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+                await websocket.send_text(message["data"])
+        except Exception:
+            pass
+        finally:
+            await pubsub.unsubscribe(ORGANIZATION_EVENT_CHANNEL)
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
+            await client.aclose()
+
+    return relay
 
 
 def _channel_relay(websocket: WebSocket, channel: str) -> Callable[[], Awaitable[None]]:

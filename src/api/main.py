@@ -20,6 +20,7 @@ from src.api.routers.memory import router as memory_router
 from src.api.routers.metrics import router as metrics_router
 from src.api.routers.mfa import router as mfa_router
 from src.api.routers.orders import router as orders_router
+from src.api.routers.organization import router as organization_router
 from src.api.routers.paper_trading import router as paper_trading_router
 from src.api.routers.portfolio import router as portfolio_router
 from src.api.routers.risk_limits import router as risk_limits_router
@@ -76,6 +77,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # HTTPS-only) doesn't run a second copy of the daily research cycle alongside the primary
     # `app` service -- both processes share the same Postgres/Redis, so a double-fire would be a
     # real duplicate-trigger bug, not just wasted work.
+    # spec 001-ceo-led-trading-org T018 / FR-019: re-enter any organisation run left
+    # non-terminal by a previous process; completed tasks keep their artefacts.
+    try:
+        from src.orchestration.run_manager import reap_incomplete_runs
+
+        reap_incomplete_runs()
+    except Exception as exc:  # noqa: BLE001 -- a reaper failure must not block boot
+        logger.error("organisation run reaper failed at startup: %s", exc)
+
     scheduler = None
     if get_settings().run_scheduler:
         scheduler = build_scheduler()
@@ -127,6 +137,7 @@ app.include_router(metrics_router)
 app.include_router(portfolio_router)
 app.include_router(risk_limits_router)
 app.include_router(agents_router)
+app.include_router(organization_router)
 app.include_router(strategies_router)
 app.include_router(settings_router)
 app.include_router(chat_router)
