@@ -220,6 +220,16 @@ def set_agent_control_state(
             + (f": {body.reason}" if body.reason else ""),
         )
         session.commit()
+        # US9 (FR-120/121): a real, structured agent.disabled/agent.enabled event -- the audit
+        # entry above is the durable record; this is what the console's own logs correlate
+        # against. Not run-scoped (agent control is global, not per-OrganizationRun), so this
+        # isn't an OrganizationalEvent -- same convention as freshness.record_ingestion_result.
+        logger.info(
+            "agent.disabled" if not body.enabled else "agent.enabled",
+            agent_name=agent_name,
+            actor=user.email,
+            reason=body.reason,
+        )
         return AgentControlEntry(
             agent_name=agent.name,
             agent_id=agent.agent_id,

@@ -732,6 +732,25 @@ def _finish_run(run_id: uuid.UUID, result: JobResult) -> None:
             session.commit()
 
 
+def _run_if_scheduler_enabled(func: Callable[[], JobResult]) -> JobResult:
+    """US9 (FR-120): the top-level Scheduler Agent (AGT-025) gates every cron/manual job fire --
+    disabling it is a real, whole-scheduler kill switch, not just a stored toggle. Each job's
+    own agent (e.g. `data_ingestion_agent`) is still checked separately inside `func` itself."""
+    with get_session() as session:
+        if not is_agent_enabled(session, "scheduler_agent"):
+            logger.info("scheduler_job_skipped_scheduler_agent_disabled")
+            return JobResult("Skipped", "scheduler_agent disabled")
+    return func()
+
+
+async def _run_async_if_scheduler_enabled(func: Callable[[], Awaitable[JobResult]]) -> JobResult:
+    with get_session() as session:
+        if not is_agent_enabled(session, "scheduler_agent"):
+            logger.info("scheduler_job_skipped_scheduler_agent_disabled")
+            return JobResult("Skipped", "scheduler_agent disabled")
+    return await func()
+
+
 def _tracked(
     job_id: str,
     trigger_source: Literal["cron", "manual"],
@@ -748,7 +767,7 @@ def _tracked(
     def run() -> None:
         actual_run_id = run_id if run_id is not None else _start_run(job_id, trigger_source)
         try:
-            result = func()
+            result = _run_if_scheduler_enabled(func)
         except Exception as exc:  # noqa: BLE001 -- a real escape past the function's own catch-all
             result = JobResult("Failed", f"unhandled exception: {exc}")
         _finish_run(actual_run_id, result)
@@ -768,7 +787,7 @@ def _tracked_async(
     async def run() -> None:
         actual_run_id = run_id if run_id is not None else _start_run(job_id, trigger_source)
         try:
-            result = await func()
+            result = await _run_async_if_scheduler_enabled(func)
         except Exception as exc:  # noqa: BLE001
             result = JobResult("Failed", f"unhandled exception: {exc}")
         _finish_run(actual_run_id, result)

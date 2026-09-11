@@ -108,26 +108,43 @@ KNOWN_AGENTS: tuple[AgentDescriptor, ...] = (
     # same pattern as the other scheduled entries above -- an operator can halt the paper
     # account's autonomous daily trading without redeploying.
     AgentDescriptor("paper_trading_engine", "AGT-027", "Paper Trading Engine", "scheduled", True),
-    # Non-graph agents invoked via API/skill dispatch -- real, toggleable state; call-site
-    # enforcement not yet wired this pass (see module docstring).
-    AgentDescriptor("execution_agent", "AGT-010", "Execution Agent (Live)", "registry_only", False),
+    # Non-graph agents invoked via API/skill dispatch. US9 (spec 001-ceo-led-trading-org,
+    # FR-120/121/122): all 7 flipped to `enforced=True` this pass -- each now has a real call
+    # site checking `is_agent_enabled` before it acts:
+    #   execution_agent              -> src/engine/live/execution_agent.py::execute_signal
+    #   portfolio_manager_agent      -> src/orchestration/agent_invoker.py::dispatch (the
+    #                                    generic org-task-engine gate every assigned agent goes
+    #                                    through, incl. this one via the portfolio_read/
+    #                                    capital_allocation capabilities)
+    #   audit_agent                  -> src/agents/control.py::set_agent_enabled's own hard
+    #                                    refusal (FR-122): it can never actually be disabled, so
+    #                                    the enabled path is unconditionally, trivially real
+    #   notification_agent           -> src/api/routers/webhooks.py's `_on_complete` (outbound
+    #                                    notify_omni_channel dispatch)
+    #   skill_registry_manager_agent -> src/api/routers/skills.py's grant/revoke/enable/
+    #                                    disable/delete mutation endpoints
+    #   scheduler_agent               -> src/agents/scheduler.py's `_tracked`/`_tracked_async`
+    #                                    (a real whole-scheduler kill switch: every cron/manual
+    #                                    job fire is gated here, on top of each job's own agent)
+    #   ceo_agent_chat                -> src/api/routers/chat.py::generate_and_store_reply
+    AgentDescriptor("execution_agent", "AGT-010", "Execution Agent (Live)", "registry_only", True),
     AgentDescriptor(
-        "portfolio_manager_agent", "AGT-016", "Portfolio Manager Agent", "registry_only", False
+        "portfolio_manager_agent", "AGT-016", "Portfolio Manager Agent", "registry_only", True
     ),
-    AgentDescriptor(AUDIT_AGENT_NAME, "AGT-021", "Audit Agent", "registry_only", False),
+    AgentDescriptor(AUDIT_AGENT_NAME, "AGT-021", "Audit Agent", "registry_only", True),
     AgentDescriptor(
-        "notification_agent", "AGT-022", "Notification / Omni-Channel Agent", "registry_only", False
+        "notification_agent", "AGT-022", "Notification / Omni-Channel Agent", "registry_only", True
     ),
     AgentDescriptor(
         "skill_registry_manager_agent",
         "AGT-023",
         "Skill Registry Manager Agent",
         "registry_only",
-        False,
+        True,
     ),
-    AgentDescriptor("scheduler_agent", "AGT-025", "Scheduler Agent", "registry_only", False),
+    AgentDescriptor("scheduler_agent", "AGT-025", "Scheduler Agent", "registry_only", True),
     AgentDescriptor(
-        "ceo_agent_chat", "AGT-026", "CEO Agent (Chat Interface)", "registry_only", False
+        "ceo_agent_chat", "AGT-026", "CEO Agent (Chat Interface)", "registry_only", True
     ),
 )
 

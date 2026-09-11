@@ -35,6 +35,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
+from src.agents.control import is_agent_enabled
 from src.agents.tools.registry import get_skill_registry
 from src.agents.tools.skills import SkillNotImplementedError
 from src.core import vault
@@ -169,6 +170,11 @@ def _record_event_and_route(
     def _on_complete(reply: str, status: str) -> None:
         if status != "Completed" or not reply:
             return
+        with get_session() as session:
+            if not is_agent_enabled(session, "notification_agent"):
+                # US9 (FR-120): a disabled Notification Agent means no outbound delivery --
+                # the reply stays real and persisted (above), it just isn't sent out.
+                return
         try:
             get_skill_registry().execute("notify_omni_channel", text=reply, **notify_kwargs)
         except SkillNotImplementedError:

@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from src.agents.control import is_agent_enabled
 from src.agents.tools.registry import SkillNotFoundError, get_skill_registry
 from src.api.deps import require_role
 from src.core.db import get_session
@@ -43,6 +44,15 @@ from src.models.user import User
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
 
 _admin_only = require_role(ROLE_SYSTEM_ADMINISTRATOR, audit_denials=True)
+
+
+def _require_skill_registry_agent_enabled(session: Session) -> None:
+    """US9 (FR-120): the Skill Registry Manager Agent gates every real registry mutation
+    (grant/revoke/enable/disable/delete) -- reads (list/get/schema) are unaffected."""
+    if not is_agent_enabled(session, "skill_registry_manager_agent"):
+        raise HTTPException(
+            status_code=409, detail="skill_registry_manager_agent is administratively disabled"
+        )
 
 
 class SkillSummary(BaseModel):
@@ -118,6 +128,7 @@ def grant_skill_to_agent(
     the sheet mentions agent-skill grants) -- previously mislabeled "API-030" here, which is
     actually `POST /skills/{skill_id}/disable` (see disable_skill() below)."""
     with get_session() as session:
+        _require_skill_registry_agent_enabled(session)
         skill = _get_skill_row_or_404(session, body.skill_name)
         existing = session.scalar(
             select(AgentSkillMap).where(
@@ -145,6 +156,7 @@ def revoke_skill_from_agent(grant_id: uuid.UUID, _user: User = Depends(_admin_on
     actually `DELETE /skills/{skill_id}` (still No in the ERDTM -- only the reversible disable
     toggle exists; `SkillRegistry.unregister()` has no route calling it)."""
     with get_session() as session:
+        _require_skill_registry_agent_enabled(session)
         grant = session.get(AgentSkillMap, grant_id)
         if grant is None:
             raise HTTPException(status_code=404, detail="Grant not found")
@@ -174,6 +186,8 @@ def get_skill_schema(name: str) -> dict[str, Any]:
 def enable_skill(name: str, _user: User = Depends(_admin_only)) -> SkillSummary:
     """API-029 (previously mislabeled "API-027" here, which is actually `GET /skills` -- see
     list_skills() above)."""
+    with get_session() as session:
+        _require_skill_registry_agent_enabled(session)
     try:
         get_skill_registry().enable(name, persist=True)
     except SkillNotFoundError as exc:
@@ -186,6 +200,8 @@ def enable_skill(name: str, _user: User = Depends(_admin_only)) -> SkillSummary:
 def disable_skill(name: str, _user: User = Depends(_admin_only)) -> SkillSummary:
     """API-030 (previously mislabeled "API-028" here, which is actually `POST /skills/install`,
     still No -- see the module docstring)."""
+    with get_session() as session:
+        _require_skill_registry_agent_enabled(session)
     try:
         get_skill_registry().disable(name, persist=True)
     except SkillNotFoundError as exc:
@@ -212,6 +228,7 @@ def delete_skill(skill_id: uuid.UUID, _user: User = Depends(_admin_only)) -> Non
     .../disable` already has -- the DB row (what every real read endpoint reports) stays
     correctly disabled either way."""
     with get_session() as session:
+        _require_skill_registry_agent_enabled(session)
         skill = session.get(Skill, skill_id)
         if skill is None:
             raise HTTPException(status_code=404, detail="Skill not found")

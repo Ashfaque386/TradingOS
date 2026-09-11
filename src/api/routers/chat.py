@@ -37,6 +37,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
+from src.agents.control import is_agent_enabled
 from src.agents.llm_router import NoProviderAvailableError, complete
 from src.agents.prompt_registry import get_active_prompt
 from src.core.db import get_session
@@ -142,6 +143,18 @@ def generate_and_store_reply(
     `on_complete(reply_text, status)` fires (in this same background thread) once the row update
     has committed -- webhooks.py uses it to dispatch the real outbound notify skill and update
     the originating WebhookEvent row; this module has no knowledge of webhooks.py itself."""
+    with get_session() as session:
+        if not is_agent_enabled(session, "ceo_agent_chat"):
+            # US9 (FR-120): a disabled CEO Agent (Chat Interface) never makes the call.
+            assistant_message = session.get(ChatMessage, assistant_message_id)
+            if assistant_message is not None:
+                assistant_message.status = "Failed"
+                assistant_message.error = "ceo_agent_chat is administratively disabled"
+                assistant_message.content = ""
+                session.commit()
+            if on_complete is not None:
+                on_complete("", "Failed")
+            return
     try:
         response = complete("chat", messages=_build_messages(history, user_content))
         reply = response.choices[0].message.content

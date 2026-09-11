@@ -150,6 +150,9 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
     except agent_invoker.DataStaleError as exc:
         logger.warning("org_task_data_stale", task_id=str(task_id), dataset=exc.dataset)
         _handle_data_stale(run_id, task_id, exc)
+    except agent_invoker.AgentUnavailable as exc:
+        logger.warning("org_task_agent_unavailable", task_id=str(task_id), error=str(exc))
+        _handle_agent_unavailable(run_id, task_id, exc)
     except Exception as exc:  # noqa: BLE001 -- classify -> retry or fail; never leave 'running'
         logger.warning(
             "org_task_execution_error",
@@ -183,6 +186,77 @@ def _handle_data_stale(
             audited=True,
         )
         dependency_resolver.mark_unsatisfiable(session, task, f"data stale: {exc.dataset}")
+        session.commit()
+
+
+def _handle_agent_unavailable(
+    run_id: uuid.UUID, task_id: uuid.UUID, exc: agent_invoker.AgentUnavailable
+) -> None:
+    """US9 (FR-005/017/120, SC-013): the CEO's unavailable-capability policy. The disabled/
+    unknown agent is never dispatched. If another *enabled* agent declares the same capability,
+    the task is reassigned to it (a real ``reassign`` decision); otherwise there is nothing to
+    fall back to, so the task is ``blocked`` (propagating to its dependents, same as a permanent
+    task failure) and the CEO records a real human escalation -- never silently dropped."""
+    from src.orchestration import decisions
+    from src.orchestration.capability_registry import find_by_capability
+    from src.orchestration.enums import DecisionType
+
+    with get_session() as session:
+        task = session.get(Task, task_id)
+        run = session.get(OrganizationRun, run_id)
+        if task is None or run is None:
+            return
+        old_agent = task.assigned_agent
+        candidates = [a for a in find_by_capability(session, task.capability) if a != old_agent]
+        if candidates:
+            new_agent = candidates[0]
+            task.assigned_agent = new_agent
+            task.status = TaskStatus.READY.value
+            task.started_at = None
+            events.emit(
+                session,
+                run_id=run_id,
+                event_type="task.reassigned",
+                subject_type="task",
+                subject_id=task_id,
+                payload={"from_agent": old_agent, "to_agent": new_agent, "reason": str(exc)},
+                audited=True,
+            )
+            decisions.record_decision(
+                session,
+                run,
+                decision_type=DecisionType.REASSIGN,
+                summary=f"Reassigned '{task.capability}' from {old_agent} to {new_agent}.",
+                reason=str(exc),
+                supporting_agents=[old_agent, new_agent],
+                include_portfolio_inputs=False,
+            )
+            session.commit()
+            return
+
+        task.status = TaskStatus.BLOCKED.value
+        task.blocked_reason = f"agent unavailable: {exc}"
+        task.completed_at = datetime.now(UTC)
+        events.emit(
+            session,
+            run_id=run_id,
+            event_type="task.blocked",
+            subject_type="task",
+            subject_id=task_id,
+            payload={"blocked_reason": task.blocked_reason, "agent": old_agent},
+            audited=True,
+        )
+        decisions.record_decision(
+            session,
+            run,
+            decision_type=DecisionType.ESCALATE_HUMAN,
+            summary=f"No available agent for capability '{task.capability}'.",
+            reason=str(exc),
+            escalated_to_role="SystemAdministrator",
+            supporting_agents=[old_agent],
+            include_portfolio_inputs=False,
+        )
+        dependency_resolver.mark_unsatisfiable(session, task, f"agent unavailable: {exc}")
         session.commit()
 
 

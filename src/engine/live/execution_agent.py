@@ -31,6 +31,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.agents.control import is_agent_enabled
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderResponse
 from src.core.audit import write_audit_entry
 from src.models.trading import Order as OrderModel
@@ -57,6 +58,12 @@ class ExecutionFailed(Exception):
     """All retries exhausted without a successful order acknowledgement from the broker."""
 
 
+class ExecutionAgentDisabled(ExecutionFailed):
+    """US9 (FR-120): the Execution Agent is administratively disabled -- never places the
+    order. Distinct from a broker-side failure so a caller (and the audit trail) can tell the
+    two apart."""
+
+
 class ExecutionAgent:
     def __init__(
         self,
@@ -80,6 +87,11 @@ class ExecutionAgent:
     ) -> ExecutionResult:
         """Places `order`, persists the resulting Order row, and -- if the order comes back
         partially filled -- spawns a background task tracking it to completion."""
+        with self.session_factory() as session:
+            if not is_agent_enabled(session, "execution_agent"):
+                raise ExecutionAgentDisabled(
+                    "execution_agent is administratively disabled -- order not placed"
+                )
         with _tracer.start_as_current_span("execution_agent.execute_signal") as span:
             span.set_attribute("symbol", order.symbol)
             span.set_attribute("side", order.side)
