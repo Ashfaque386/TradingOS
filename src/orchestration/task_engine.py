@@ -11,6 +11,7 @@ Task status, run status, agent status and approval status stay distinct concepts
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,27 @@ from src.orchestration import agent_invoker, artefact_store, dependency_resolver
 from src.orchestration.enums import RunStatus, TaskStatus
 
 logger = structlog.get_logger(__name__)
+
+
+def _notify_human_of_task_failure(task: Task, reason: str) -> None:
+    """T106 (brief §82, quickstart Scenario 9, SC-017): a task failing permanently (retries
+    exhausted, or timed out) is real operational news, not just a database row -- reuses the
+    same real Telegram/Discord/Slack ops-alert channel `freshness.py`'s own `_alert()` already
+    sends dataset-staleness alerts through (REL-031/SEC-040), rather than inventing a second
+    notification path. Best-effort: `send_ops_alert` itself never raises, and this is wrapped
+    again defensively so a notification-delivery hiccup can never leave a task stuck mid-failure
+    handling."""
+    try:
+        from src.core.ops_alerts import send_ops_alert
+
+        asyncio.run(
+            send_ops_alert(
+                f"TradingOS task failed: capability={task.capability} "
+                f"agent={task.assigned_agent} run={task.run_id} reason={reason}"
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 -- an alert-delivery hiccup must never break the run
+        logger.warning("task_failure_alert_failed", task_id=str(task.id), error=str(exc))
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -243,6 +265,7 @@ def _handle_task_timeout(run_id: uuid.UUID, task_id: uuid.UUID, timeout_seconds:
         )
         dependency_resolver.mark_unsatisfiable(session, task, task.failure_reason)
         session.commit()
+        _notify_human_of_task_failure(task, task.failure_reason)
 
 
 def _handle_data_stale(
@@ -375,6 +398,7 @@ def _handle_task_failure(run_id: uuid.UUID, task_id: uuid.UUID, exc: Exception) 
         )
         dependency_resolver.mark_unsatisfiable(session, task, "failed after exhausting retries")
         session.commit()
+        _notify_human_of_task_failure(task, task.failure_reason)
 
 
 def _has_pending_approval(session: Session, run_id: uuid.UUID) -> bool:
