@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Gated } from "@/components/ui/gated";
 import { cn } from "@/lib/utils";
 
 const NONE = "text-[11px] text-text-faint italic";
@@ -130,49 +131,54 @@ export function ApprovalQueue() {
             <li key={a.id} className="rounded-lg border border-card-edge p-2">
               <div className="text-xs font-medium">strategy {a.strategy_id.slice(0, 8)}</div>
               <div className={NONE}>opened {a.created_at ?? "—"}</div>
-              {rejectId === a.id ? (
-                <div className="mt-1.5 flex flex-col gap-1.5">
-                  <textarea
-                    className="w-full rounded-md border border-card-edge bg-bg p-1.5 text-xs"
-                    placeholder="Reason (required)"
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                  />
-                  <div className="flex gap-1.5">
+              <Gated
+                permission="manageOrgApprovals"
+                fallback={<p className={cn(NONE, "mt-1.5")}>view only</p>}
+              >
+                {rejectId === a.id ? (
+                  <div className="mt-1.5 flex flex-col gap-1.5">
+                    <textarea
+                      className="w-full rounded-md border border-card-edge bg-bg p-1.5 text-xs"
+                      placeholder="Reason (required)"
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                    />
+                    <div className="flex gap-1.5">
+                      <button
+                        className="rounded-md bg-destructive/10 px-2 py-1 text-[11px] text-destructive disabled:opacity-50"
+                        disabled={!reason.trim() || decide.isPending}
+                        onClick={() =>
+                          decide.mutate({ id: a.id, action: "reject", reason })
+                        }
+                      >
+                        Confirm reject
+                      </button>
+                      <button
+                        className="rounded-md border border-card-edge px-2 py-1 text-[11px]"
+                        onClick={() => setRejectId(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-1.5 flex gap-1.5">
                     <button
-                      className="rounded-md bg-destructive/10 px-2 py-1 text-[11px] text-destructive disabled:opacity-50"
-                      disabled={!reason.trim() || decide.isPending}
-                      onClick={() =>
-                        decide.mutate({ id: a.id, action: "reject", reason })
-                      }
+                      className="rounded-md bg-primary px-2 py-1 text-[11px] text-primary-foreground disabled:opacity-50"
+                      disabled={decide.isPending}
+                      onClick={() => decide.mutate({ id: a.id, action: "approve" })}
                     >
-                      Confirm reject
+                      Approve → Paper
                     </button>
                     <button
                       className="rounded-md border border-card-edge px-2 py-1 text-[11px]"
-                      onClick={() => setRejectId(null)}
+                      onClick={() => setRejectId(a.id)}
                     >
-                      Cancel
+                      Reject
                     </button>
                   </div>
-                </div>
-              ) : (
-                <div className="mt-1.5 flex gap-1.5">
-                  <button
-                    className="rounded-md bg-primary px-2 py-1 text-[11px] text-primary-foreground disabled:opacity-50"
-                    disabled={decide.isPending}
-                    onClick={() => decide.mutate({ id: a.id, action: "approve" })}
-                  >
-                    Approve → Paper
-                  </button>
-                  <button
-                    className="rounded-md border border-card-edge px-2 py-1 text-[11px]"
-                    onClick={() => setRejectId(a.id)}
-                  >
-                    Reject
-                  </button>
-                </div>
-              )}
+                )}
+              </Gated>
             </li>
           ))}
         </ul>

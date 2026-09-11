@@ -65,6 +65,12 @@ export const PERMISSIONS = {
   // src/api/routers/scheduled_jobs.py:_can_manage_scheduled_jobs -- POST
   // /scheduled-jobs/{job_id}/run-now (REL-081). Same gate as manageScheduledJobs.
   runScheduledJobNow: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
+  // src/api/routers/approvals.py -- POST /organization/approvals/{id}/approve|reject (spec
+  // 001-ceo-led-trading-org US3, T047, clarify Q1). RiskManager deliberately excluded here
+  // (unlike manageHitl's legacy-graph equivalent) -- a real Business Rule, not an oversight; see
+  // approvals.py's own docstring. Console's ApprovalQueue (T051) uses this to fully hide the
+  // approve/reject controls for an ineligible role rather than show-then-403.
+  manageOrgApprovals: [ROLES.SystemAdministrator, ROLES.PortfolioManager],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
