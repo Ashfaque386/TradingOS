@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from src.core.db import get_session
 from src.models.agent import AgentRun
@@ -34,6 +34,28 @@ def _seed_task():
         assert task is not None
         session.expunge(task)
     return run_id, task
+
+
+def _cleanup_agent_runs(task) -> None:
+    """T113b's handler creates real `agent_runs` rows keyed by `graph_thread_id=f"org-task-
+    {task.id}"` -- an entirely separate table from the org `tasks`/`organization_runs` rows
+    `cleanup_run` (orchestration_helpers) deletes, linked only by this naming convention, not a
+    real FK. Found live: an earlier test run here left orphaned rows that `GET /agents/runs`
+    (ordered by recency) then surfaced as "the most recent run" to an unrelated Cypress spec
+    (`hitl_panel.cy.ts`), which got a real 404 instead of 403 forging an action against it."""
+    thread_id = f"org-task-{task.id}"
+    with get_session() as session:
+        session.execute(
+            text(
+                "DELETE FROM agent_logs WHERE agent_run_id IN "
+                "(SELECT id FROM agent_runs WHERE graph_thread_id = :tid)"
+            ),
+            {"tid": thread_id},
+        )
+        session.execute(
+            text("DELETE FROM agent_runs WHERE graph_thread_id = :tid"), {"tid": thread_id}
+        )
+        session.commit()
 
 
 def test_strategy_research_reads_back_the_graphs_real_final_output():
@@ -85,6 +107,7 @@ def test_strategy_research_reads_back_the_graphs_real_final_output():
             assert root is not None
             assert root.status == "Completed"
     finally:
+        _cleanup_agent_runs(task)
         cleanup_run(run_id)
 
 
@@ -114,6 +137,7 @@ def test_strategy_research_threads_the_research_context_into_the_graph():
 
         assert captured["research_context"] == upstream_context.payload
     finally:
+        _cleanup_agent_runs(task)
         cleanup_run(run_id)
 
 
@@ -139,6 +163,7 @@ def test_strategy_research_degrades_honestly_when_nothing_recognizable_was_produ
         assert artefact_type == "AdHocAnalysis"
         assert "Failed" in payload["answer"]
     finally:
+        _cleanup_agent_runs(task)
         cleanup_run(run_id)
 
 
@@ -181,4 +206,5 @@ def test_strategy_research_degrades_honestly_on_a_schema_mismatch():
         assert artefact_type == "AdHocAnalysis"
         assert "re-validation" in payload["answer"]
     finally:
+        _cleanup_agent_runs(task)
         cleanup_run(run_id)

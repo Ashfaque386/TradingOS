@@ -59,7 +59,7 @@ describe("Agent Settings", () => {
     login();
     cy.visit("/settings/agents/python_validator_agent");
     cy.contains("deterministic").should("be.visible");
-    cy.contains("There is no model to configure").should("exist");
+    cy.contains("there is no model to configure").should("exist");
     cy.contains("label", "CUSTOM").should("not.exist");
   });
 });

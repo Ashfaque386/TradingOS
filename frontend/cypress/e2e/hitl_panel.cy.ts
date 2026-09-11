@@ -78,7 +78,12 @@ describe("HITL panel role gating", () => {
     cy.contains("Reject").should("not.exist");
   });
 
-  it("the real API 403s a forged retry/approve/reject call from ReadOnlyAuditor", () => {
+  it("the real API 403s a forged retry call from ReadOnlyAuditor", () => {
+    // BUG-B / T046 (US3): the legacy no-op POST /agents/runs/{id}/approve|reject routes this
+    // test used to target were removed -- a deployment recommendation now opens a real
+    // ApprovalRequest instead, decided via POST /organization/approvals/{id}/approve|reject
+    // (covered by approval_gate.cy.ts's own real 403 checks for RiskManager/ReadOnlyAuditor).
+    // retry_run is the one route named in this describe block that's still real here.
     if (!anyRunId) {
       cy.log("No real run id available -- skipping the forged-call check (nothing to target).");
       return;
@@ -87,7 +92,7 @@ describe("HITL panel role gating", () => {
       const headers = { Authorization: `Bearer ${token}` };
       cy.request({
         method: "POST",
-        url: `${API_URL}/api/v1/agents/runs/${anyRunId}/approve`,
+        url: `${API_URL}/api/v1/agents/runs/${anyRunId}/retry`,
         headers,
         failOnStatusCode: false,
       })
