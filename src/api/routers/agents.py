@@ -956,10 +956,25 @@ def _tracking_from_snapshot(data: dict[str, Any]) -> _StrategyTracking:
     )
 
 
-def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID, resume: bool = False) -> None:
+def _execute_graph_run(
+    *,
+    thread_id: str,
+    root_run_id: uuid.UUID,
+    resume: bool = False,
+    research_context: dict[str, Any] | None = None,
+) -> None:
     """Runs in a detached `threading.Thread` (dispatched after the trigger/resume endpoint
-    already returned). Synchronous end-to-end because every graph node (src/agents/nodes/*.py)
-    and `graph.stream()` itself are synchronous.
+    already returned) -- or, for the org task engine's `strategy_research` capability (T113b),
+    synchronously inside that task's own bounded-timeout dispatch thread (T108); either way every
+    graph node (src/agents/nodes/*.py) and `graph.stream()` itself are synchronous, so this
+    function's own body is identical for both callers.
+
+    `research_context` (T113b, FR-042/153): the org layer's assembled `ResearchContext` (US4's
+    `context_assembly` output), threaded into the graph's initial state so
+    `strategy_generator_node`'s already-existing, additive read of `state.research_context`
+    (T055) is actually populated at runtime for an org-driven run -- `None` (the manual
+    `trigger_research` path's own shape, unchanged) leaves that node's prompt exactly as it was
+    before this parameter existed.
 
     REL-060: always runs with a real Postgres-backed checkpointer (`config={"configurable":
     {"thread_id": thread_id}}`) so a pause has somewhere real to resume from -- `resume=False`
@@ -991,6 +1006,7 @@ def _execute_graph_run(*, thread_id: str, root_run_id: uuid.UUID, resume: bool =
             thread_id=thread_id,
             account_capital=_fetch_account_capital(),
             existing_portfolio_equity_curve=_fetch_existing_portfolio_equity_curve(),
+            research_context=research_context,
         )
         tracking = _StrategyTracking()
 

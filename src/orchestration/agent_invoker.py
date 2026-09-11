@@ -12,11 +12,11 @@ scheduled ``run_news_sentiment_cycle`` job writes to the ``news_sentiment`` Qdra
 runs every 30 minutes and make an org task wait on network I/O it doesn't own); ``portfolio_read``
 queries the real ``portfolio_positions`` table for the seeded Paper account. ``synthesize`` /
 ``orchestrate`` / ``context_assembly`` / ``adhoc_synthesis`` were already real (T035/T054/T146).
-Still an honest placeholder: the composite ``strategy_research`` capability (running the full
-``build_graph()`` sub-graph synchronously from inside a task is a materially bigger, safety-
-adjacent integration -- constitution IV's safety-ordering still applies unchanged inside that
-sub-graph either way, but doing it correctly needs its own reviewed task, not a drive-by addition
-here) -- tracked as tasks.md T113b for a dedicated pass.
+T113b: ``strategy_research`` now runs the real ``build_graph()`` sub-graph too -- synchronously,
+already inside the task engine's own bounded-timeout dispatch thread (T108), so no second thread
+is spawned. Constitution IV's safety-ordering is untouched: the sub-graph's own internal node
+order (validate -> comply -> backtest -> evaluate -> risk) is exactly `build_graph()`'s existing,
+unmodified order.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from src.agents.control import is_agent_enabled
 from src.agents.llm_router import NoProviderAvailableError, complete, pop_last_call_info
 from src.agents.nodes.common import extract_json
+from src.core.db import get_session
 from src.models.orchestration import ResultArtefact, Task, TaskDependency
 from src.orchestration import artefact_store, events, freshness
 from src.orchestration.capability_registry import AGENT_META
@@ -470,6 +471,124 @@ def _coerce_or_adhoc(schema_type: str, payload: dict[str, Any]) -> str:
         return "AdHocAnalysis"
 
 
+# T113b: maps a graph node's real output-state field name to the artefact type already
+# registered for it in artefact_schemas.ARTEFACT_SCHEMA_REGISTRY -- every one of these models is
+# reused verbatim from src/agents/state.py, so a node's own already-validated output re-validates
+# cleanly here (no separate shape invented for the org layer).
+_GRAPH_NODE_OUTPUT_TO_ARTEFACT_TYPE: dict[str, str] = {
+    "deployment_recommendation": "DeploymentRecommendation",
+    "risk_assessment": "RiskReport",
+    "evaluation_verdict": "EvaluationReport",
+    "optimization_result": "OptimizationReport",
+    "backtest_metrics": "BacktestMetrics",
+    "validation_result": "ValidationReport",
+    "compliance_verdict": "ComplianceReport",
+    "python_code": "PythonCode",
+    "strategy_logic": "StrategyLogic",
+    "market_context": "MarketContext",
+    "research_directive": "ResearchDirective",
+}
+
+
+def _strategy_research_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """T113b: runs the real ``build_graph()`` sub-graph as this task's dispatch. Already running
+    inside `_execute_task`'s own bounded-timeout thread (T108 -- 1800s default for this
+    capability, `planner._task_timeout_seconds`), so this calls `_execute_graph_run` directly
+    rather than spawning a second thread. A task-stable `thread_id` (`f"org-task-{task.id}"`)
+    means a retry of the *same* task starts the graph over from its real entry point -- matching
+    the existing manual `POST /agents/runs/{id}/retry` endpoint's own "start fresh" precedent
+    rather than inventing new checkpoint-reuse-across-retries semantics (a genuinely different,
+    larger design question left for a future task if graph-level resume-on-retry is ever wanted).
+
+    The task's own assembled `ResearchContext` (US4's `context_assembly` output, when this run
+    scaffolded one) is threaded into the graph's initial state so `strategy_generator_node`'s
+    already-existing, additive read of `state.research_context` (T055) is actually populated at
+    runtime for an org-driven run, not just structurally supported.
+
+    The result artefact is whichever real typed output the graph's *last* node actually produced
+    (`_GRAPH_NODE_OUTPUT_TO_ARTEFACT_TYPE`), read back from the real `AgentRun` rows this run
+    just wrote, keyed by `graph_thread_id` -- never a fabricated `DeploymentRecommendation` when
+    the run stopped earlier (a compliance block, a halted disabled node, an escalation)."""
+    from src.api.routers.agents import GRAPH_ROOT_AGENT_NAME, _execute_graph_run
+    from src.models.agent import AgentRun
+
+    research_context = next(
+        (a.payload for a in upstream if a.artefact_type == "ResearchContext"), None
+    )
+
+    thread_id = f"org-task-{task.id}"
+    with get_session() as own_session:
+        root = AgentRun(
+            graph_thread_id=thread_id,
+            agent_name=GRAPH_ROOT_AGENT_NAME,
+            status="Running",
+            started_at=datetime.now(UTC),
+        )
+        own_session.add(root)
+        own_session.commit()
+        root_run_id = root.id
+
+    _execute_graph_run(
+        thread_id=thread_id, root_run_id=root_run_id, research_context=research_context
+    )
+
+    with get_session() as own_session:
+        finished_root = own_session.get(AgentRun, root_run_id)
+        root_status = finished_root.status if finished_root is not None else "Unknown"
+        children = list(
+            own_session.scalars(
+                select(AgentRun)
+                .where(
+                    AgentRun.graph_thread_id == thread_id,
+                    AgentRun.parent_run_id == root_run_id,
+                )
+                .order_by(AgentRun.started_at.desc())
+            ).all()
+        )
+        for child in children:
+            output = child.output_state or {}
+            for field_name, artefact_type in _GRAPH_NODE_OUTPUT_TO_ARTEFACT_TYPE.items():
+                if field_name not in output:
+                    continue
+                real_payload = output[field_name]
+                try:
+                    from src.orchestration.artefact_schemas import validate_payload
+
+                    validate_payload(artefact_type, real_payload)
+                    return artefact_type, real_payload, {"tools_used": ["build_graph"]}
+                except Exception as exc:  # noqa: BLE001 -- an honest AdHocAnalysis beats a crash
+                    logger.warning(
+                        "strategy_research_artefact_revalidation_failed",
+                        task_id=str(task.id),
+                        artefact_type=artefact_type,
+                        error=str(exc),
+                    )
+                    payload = {
+                        "question": task.objective,
+                        "answer": (
+                            f"the graph's real '{field_name}' output failed re-validation as "
+                            f"{artefact_type}: {exc}"
+                        ),
+                        "supporting_data": {"raw": real_payload},
+                    }
+                    return "AdHocAnalysis", payload, {"tools_used": ["build_graph"]}
+
+    # No node produced a recognisable typed output at all (halted before market_analyst, or a
+    # compliance block before strategy_generator) -- an honest AdHocAnalysis naming the graph's
+    # real terminal status, never a fabricated StrategyLogic/DeploymentRecommendation.
+    payload = {
+        "question": task.objective,
+        "answer": (
+            f"strategy_research ended with graph status '{root_status}' before producing a "
+            "usable result."
+        ),
+        "supporting_data": {"root_status": root_status},
+    }
+    return "AdHocAnalysis", payload, {"tools_used": ["build_graph"]}
+
+
 CAPABILITY_HANDLERS: dict[str, Handler] = {
     "synthesize": _synthesize_handler,
     "orchestrate": _synthesize_handler,
@@ -479,6 +598,7 @@ CAPABILITY_HANDLERS: dict[str, Handler] = {
     "news_ingestion": _news_ingestion_handler,
     "sentiment_analysis": _sentiment_analysis_handler,
     "portfolio_read": _portfolio_read_handler,
+    "strategy_research": _strategy_research_handler,
 }
 
 

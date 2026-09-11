@@ -143,8 +143,20 @@ def validate_payload(artefact_type: str, payload: dict[str, Any]) -> dict[str, A
 
     Raises ``UnknownArtefactTypeError`` for an unregistered type and ``pydantic.ValidationError``
     for a payload that does not match the schema (FR-030).
+
+    T113b (real, confirmed bug): reused models from ``state.py`` are ``StrictModel``
+    (``strict=True``) -- correct for their original job of catching a hallucinated LLM field, but
+    wrong here. Every payload reaching this function is already JSON-shaped (from
+    ``model_dump(mode="json")``, a request body, or a DB JSONB read) -- never a live object with a
+    real ``datetime``/``date`` instance -- so strict-mode validation rejects a schema's own
+    genuinely-valid ISO date string (confirmed live: re-validating a real, already-produced
+    ``ResearchDirective``/``BacktestMetrics`` payload raised `"Input should be a valid datetime"`
+    for their own real `generated_at`/`data_retrieved_at` fields). ``strict=False`` here only
+    relaxes *type coercion* (a JSON string is an acceptable datetime representation); it does not
+    relax which fields are allowed -- every model's own ``extra="forbid"`` still rejects an
+    unexpected field regardless of this parameter.
     """
     model = ARTEFACT_SCHEMA_REGISTRY.get(artefact_type)
     if model is None:
         raise UnknownArtefactTypeError(artefact_type)
-    return model.model_validate(payload).model_dump(mode="json")
+    return model.model_validate(payload, strict=False).model_dump(mode="json")

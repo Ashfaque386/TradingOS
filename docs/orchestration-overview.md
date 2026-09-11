@@ -85,8 +85,10 @@ Three lifecycle concepts are kept strictly distinct (a recurring audit finding, 
 | `market_analysis` | real, standalone `market_analyst_node` call | T113 (Polish) |
 | `news_ingestion` / `sentiment_analysis` | real reads of the `news_sentiment` Qdrant collection the scheduled `run_news_sentiment_cycle` job populates | T113 (Polish) |
 | `portfolio_read` | real `portfolio_positions` query for the seeded Paper account | T113 (Polish) |
-| `strategy_research` (composite) | **honest placeholder** — see §6 | — |
+| `strategy_research` (composite) | real — runs `build_graph()` synchronously, see §6 | T113b (Polish) |
 | anything else | honest, typed placeholder artefact (`_placeholder_handler`) | — |
+
+Every real capability is now bound — there is no longer an outstanding handler-binding gap; `_placeholder_handler` only ever fires for a capability the CEO planner invents that has no handler registered at all.
 
 Every real LLM-backed handler routes through `agent_invoker._record_llm_provenance()` (T105), which reads the actual `(provider, model, fell_back)` the LLM router just used (`llm_router.pop_last_call_info()`) so `ResultArtefact.provenance.provider_used`/`model_used` name the real provider — never a generic label — and emits a real, audited `agent.fallback` event when the chain had to route around a failed provider.
 
@@ -99,9 +101,16 @@ Two additions beyond the original contract, both closing real gaps found during 
 - `agent.fallback`'s actual payload is `{failed_providers: [...], provider_used, model_used}` (T105) rather than the contract's originally-sketched `{agent, from, to, reason}` shape — the real implementation needed to name *every* failed provider in the chain, not just one `from`.
 - `organization.run.stalled` (already in the catalogue) is now actually emitted — nothing wrote it before T108.
 
-## 6. Known deferral: `strategy_research`
+## 6. `strategy_research`: running the real sub-graph as a task (T113b)
 
-The composite `strategy_research` capability — which should run the full `build_graph()` sub-graph (Market Analyst → Strategy Generator → Code Gen → Validator → Backtest → Evaluate → Risk, the safety-ordered chain constitution IV protects) as one task — is **still an honest placeholder**, tracked as **T113b**. This is the single largest piece of real per-agent-handler wiring left. It is not a small task: it needs `_execute_graph_run` extended with an optional `research_context` parameter (the state field already exists, `strategy_generator_node` already reads it — only the runtime population is missing), a decision on how the task engine's own timeout/cancel semantics interact with the graph's existing pause/resume/checkpointer model, and a way to read back the graph's terminal state (via `AgentRun.graph_thread_id`) as the task's result artefact. Until it lands, an organisation plan that reaches strategy generation produces a clearly-labelled placeholder artefact rather than a fabricated one — never a silent gap.
+The composite `strategy_research` capability runs the full `build_graph()` sub-graph (Market Analyst → Strategy Generator → Code Gen → Validator → Backtest → Evaluate → Risk, the safety-ordered chain constitution IV protects) as one task, via `agent_invoker._strategy_research_handler`:
+
+1. Creates a real root `AgentRun` keyed by a **task-stable** `thread_id` (`f"org-task-{task.id}"`) — a retry of the same task starts the graph fresh from its real entry point, matching the existing manual `POST /agents/runs/{id}/retry` endpoint's own "start fresh" precedent, not a new checkpoint-reuse-across-retries design.
+2. Calls `_execute_graph_run` **directly**, synchronously — it's already running inside `_execute_task`'s own T108 bounded-timeout thread, so no second thread is spawned. This is also the answer to "how does pause/cancel/timeout interact with the task engine's lifecycle": it doesn't need special-casing, because this task's lifecycle *is* every other task's lifecycle — the same 1800s timeout (`planner._task_timeout_seconds`) bounds it the same way.
+3. Threads the task's own assembled `ResearchContext` (US4's `context_assembly` output, when this run scaffolded one) into the graph's initial state, so `strategy_generator_node`'s existing, additive `state.research_context` read (T055) is actually populated at runtime.
+4. Reads back whichever real typed output the graph's *last* node actually produced (`_GRAPH_NODE_OUTPUT_TO_ARTEFACT_TYPE`, keyed by `graph_thread_id`) — never a fabricated `DeploymentRecommendation` when the run stopped earlier (a compliance block, a halted disabled node, a provider outage partway through). A node output that fails re-validation degrades to an honest `AdHocAnalysis` naming why, never a crash and never a silently-wrong type label.
+
+**A real bug found and fixed while building this**: `artefact_schemas.validate_payload` re-validated an already-real, JSON-shaped payload (`model_dump(mode="json")`) against its source `StrictModel` (`strict=True`), which rejects that same model's own genuinely-valid ISO datetime string — confirmed live against a real `ResearchDirective` produced by an actual graph run (`ceo_agent` succeeded; `market_analyst` then failed against this dev environment's broken LLM providers, an unrelated, pre-existing condition). Fixed with `strict=False` on re-validation only — `extra="forbid"` and required-field enforcement are untouched, confirmed by `tests/unit/test_artefact_schemas.py`.
 
 ## 7. Safety invariants (unchanged, still enforced)
 
