@@ -32,10 +32,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.agents.control import is_agent_enabled
-from src.agents.llm_router import NoProviderAvailableError, complete
+from src.agents.llm_router import NoProviderAvailableError, complete, pop_last_call_info
 from src.agents.nodes.common import extract_json
 from src.models.orchestration import ResultArtefact, Task, TaskDependency
-from src.orchestration import artefact_store, freshness
+from src.orchestration import artefact_store, events, freshness
 from src.orchestration.capability_registry import AGENT_META
 from src.orchestration.enums import ArtefactDisposition
 
@@ -77,6 +77,33 @@ def _upstream_artefacts(session: Session, task: Task) -> list[ResultArtefact]:
     )
 
 
+def _record_llm_provenance(session: Session, task: Task) -> tuple[str | None, str | None]:
+    """T105 (brief §84, quickstart Scenario 10, SC-018): reads the real (provider, model,
+    fell_back) `complete()` just recorded (`llm_router.pop_last_call_info`) and returns the
+    *actual* provider/model used for this handler's provenance -- never the old hardcoded
+    ``"orchestration-chain"``/``"research-chain"`` placeholder labels. When the chain had to fall
+    back past an earlier failed provider, emits a real, audited ``agent.fallback`` event naming
+    which provider(s) failed and which one actually served the call."""
+    info = pop_last_call_info()
+    if info is None:
+        return None, None
+    if info.fell_back:
+        events.emit(
+            session,
+            run_id=task.run_id,
+            event_type="agent.fallback",
+            subject_type="task",
+            subject_id=task.id,
+            payload={
+                "failed_providers": info.failed_providers,
+                "provider_used": info.provider,
+                "model_used": info.model,
+            },
+            audited=True,
+        )
+    return info.provider, info.model
+
+
 def _synthesize_handler(
     session: Session, task: Task, upstream: list[ResultArtefact]
 ) -> HandlerResult:
@@ -104,7 +131,7 @@ def _synthesize_handler(
         )
         payload = json.loads(extract_json(response.choices[0].message.content))
         payload.setdefault("summary", task.objective)
-        provider_used = "orchestration-chain"
+        provider_used, model_used = _record_llm_provenance(session, task)
     except (NoProviderAvailableError, ValueError, KeyError) as exc:
         logger.warning("synthesize_fallback", task_id=str(task.id), error=str(exc))
         payload = {
@@ -116,8 +143,12 @@ def _synthesize_handler(
             "key_findings": [a.artefact_type for a in upstream],
             "next_step": None,
         }
-        provider_used = None
-    return "CeoSynthesis", payload, {"provider_used": provider_used, "tools_used": []}
+        provider_used, model_used = None, None
+    return (
+        "CeoSynthesis",
+        payload,
+        {"provider_used": provider_used, "model_used": model_used, "tools_used": []},
+    )
 
 
 def _adhoc_synthesis_handler(
@@ -148,7 +179,7 @@ def _adhoc_synthesis_handler(
         parsed = json.loads(extract_json(response.choices[0].message.content))
         answer = str(parsed.get("answer", "")) or "No answer produced."
         supporting = parsed.get("supporting_points", [])
-        provider_used: str | None = "orchestration-chain"
+        provider_used, model_used = _record_llm_provenance(session, task)
     except (NoProviderAvailableError, ValueError, KeyError) as exc:
         logger.warning("adhoc_synthesis_fallback", task_id=str(task.id), error=str(exc))
         answer = (
@@ -156,7 +187,7 @@ def _adhoc_synthesis_handler(
             f"{len(upstream)} upstream artefact(s) were collected."
         )
         supporting = [a.artefact_type for a in upstream]
-        provider_used = None
+        provider_used, model_used = None, None
     payload = {
         "question": task.objective,
         "answer": answer,
@@ -165,7 +196,11 @@ def _adhoc_synthesis_handler(
             "upstream_types": [a.artefact_type for a in upstream],
         },
     }
-    return "AdHocAnalysis", payload, {"provider_used": provider_used, "tools_used": []}
+    return (
+        "AdHocAnalysis",
+        payload,
+        {"provider_used": provider_used, "model_used": model_used, "tools_used": []},
+    )
 
 
 def _placeholder_handler(
@@ -209,7 +244,7 @@ def _market_analysis_handler(
     try:
         result = market_analyst_node(TradingOSGraphState(thread_id=f"org-task-{task.id}"))
         payload = result["market_context"].model_dump(mode="json")
-        provider_used: str | None = "research-chain"
+        provider_used, model_used = _record_llm_provenance(session, task)
     except Exception as exc:  # noqa: BLE001 -- an honest failed-analysis artefact beats a crash
         logger.warning("market_analysis_handler_failed", task_id=str(task.id), error=str(exc))
         payload = {
@@ -220,12 +255,13 @@ def _market_analysis_handler(
             "confidence_score": 0.0,
             "insights": [],
         }
-        provider_used = None
+        provider_used, model_used = None, None
     return (
         "MarketContext",
         payload,
         {
             "provider_used": provider_used,
+            "model_used": model_used,
             "tools_used": ["market_analyst_node"],
         },
     )
@@ -471,6 +507,7 @@ def dispatch(session: Session, task: Task) -> ResultArtefact:
         task_id=task.id,
         run_id=task.run_id,
         provider_used=prov_extra.get("provider_used"),
+        model_used=prov_extra.get("model_used"),
         tools_used=prov_extra.get("tools_used", []),
         inputs=[str(a.id) for a in upstream],
     )

@@ -151,6 +151,82 @@ class _HFUsageTracker:
 _hf_usage_tracker = _HFUsageTracker()
 
 
+class _ProviderFailureTracker:
+    """T105 (research finding, brief §84): a real, process-local record of each provider's most
+    recent `complete()` failure -- the same lock-guarded pattern as `_HFUsageTracker` above, since
+    many org task-engine worker threads call `complete()` concurrently. `GET /providers/health`
+    (provider_models.py) uses this to report a provider `unreachable` from real recent traffic,
+    not just "a key happens to be configured" -- a configured-but-broken key (confirmed live this
+    session: HuggingFace credits depleted, OpenCode no payment method) previously showed
+    `connected` regardless of whether it actually worked."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_failure_at: dict[str, datetime] = {}
+        # Whether this provider's most recent successful call was itself reached only after an
+        # earlier provider in that call's chain failed first -- distinct from `_last_failure_at`
+        # (this provider failing) since `in_fallback` describes the *chain's* behaviour around
+        # this provider, not this provider's own health.
+        self._last_success_was_fallback: dict[str, bool] = {}
+
+    def record_failure(self, provider: str) -> None:
+        with self._lock:
+            self._last_failure_at[provider] = datetime.now(UTC)
+
+    def record_success(self, provider: str, *, fell_back: bool) -> None:
+        with self._lock:
+            self._last_failure_at.pop(provider, None)
+            self._last_success_was_fallback[provider] = fell_back
+
+    def snapshot(self) -> dict[str, datetime]:
+        with self._lock:
+            return dict(self._last_failure_at)
+
+    def fallback_snapshot(self) -> dict[str, bool]:
+        with self._lock:
+            return dict(self._last_success_was_fallback)
+
+
+_provider_failures = _ProviderFailureTracker()
+
+
+def get_provider_failure_status() -> dict[str, datetime]:
+    """Every provider's most recent real `complete()` failure timestamp, if any -- read by
+    `GET /providers/health`."""
+    return _provider_failures.snapshot()
+
+
+def get_provider_fallback_status() -> dict[str, bool]:
+    """Whether each provider's most recent successful `complete()` call was itself reached via
+    fallback (an earlier provider in that call's chain failed first) -- read by
+    `GET /providers/health`'s `in_fallback` field."""
+    return _provider_failures.fallback_snapshot()
+
+
+# T105: the (provider, model, whether the chain fell back) `complete()` last actually used --
+# read+cleared by the org layer's LLM-calling handlers (agent_invoker.py) right after their call,
+# same ContextVar-per-call pattern as `_last_langsmith_run_id` above (thread/task-local, so
+# concurrent callers never see each other's result).
+@dataclass(frozen=True)
+class LastCallInfo:
+    provider: str
+    model: str
+    fell_back: bool
+    failed_providers: list[str]
+
+
+_last_call_info: ContextVar["LastCallInfo | None"] = ContextVar("_last_call_info", default=None)
+
+
+def pop_last_call_info() -> "LastCallInfo | None":
+    """Reads and clears the routing outcome `complete()` last recorded. `None` when the caller
+    made no `complete()` call at all; callers can't and don't need to tell that apart from a
+    call that somehow left nothing set."""
+    info = _last_call_info.get()
+    _last_call_info.set(None)
+    return info
+
+
 TaskType = Literal["coding", "orchestration", "sentiment", "research", "chat"]
 
 PROVIDERS = ("ollama", "openai", "anthropic", "deepseek", "gemini", "huggingface", "opencode")
@@ -301,6 +377,7 @@ def complete(
         kwargs["metadata"] = metadata
 
     last_error: Exception | None = None
+    failed_providers: list[str] = []
     for pm in chain:
         call_kwargs = dict(kwargs)
         # spec 001-ceo-led-trading-org T018 / audit AR-2: a hard per-call wall-clock cap so an
@@ -327,6 +404,15 @@ def complete(
                     _hf_usage_tracker.record(total_tokens)
             if settings.langsmith_api_key:
                 _last_langsmith_run_id.set(run_id)
+            _provider_failures.record_success(pm.provider, fell_back=bool(failed_providers))
+            _last_call_info.set(
+                LastCallInfo(
+                    provider=pm.provider,
+                    model=pm.model,
+                    fell_back=bool(failed_providers),
+                    failed_providers=list(failed_providers),
+                )
+            )
             return response
         except Exception as exc:  # noqa: BLE001 - deliberately broad: fall through to next provider
             logger.warning(
@@ -336,6 +422,8 @@ def complete(
                 model=pm.model,
                 error=str(exc),
             )
+            _provider_failures.record_failure(pm.provider)
+            failed_providers.append(pm.provider)
             last_error = exc
 
     raise NoProviderAvailableError(
