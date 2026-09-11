@@ -147,6 +147,9 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
             )
             dependency_resolver.evaluate_on_completion(session, task)
             session.commit()
+    except agent_invoker.DataStaleError as exc:
+        logger.warning("org_task_data_stale", task_id=str(task_id), dataset=exc.dataset)
+        _handle_data_stale(run_id, task_id, exc)
     except Exception as exc:  # noqa: BLE001 -- classify -> retry or fail; never leave 'running'
         logger.warning(
             "org_task_execution_error",
@@ -155,6 +158,32 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
             error_type=type(exc).__name__,
         )
         _handle_task_failure(run_id, task_id, exc)
+
+
+def _handle_data_stale(
+    run_id: uuid.UUID, task_id: uuid.UUID, exc: agent_invoker.DataStaleError
+) -> None:
+    """FR-062: never retried (staleness will not resolve itself within this run) and never
+    fabricated -- the task and everything depending on it are `blocked` with a clear reason
+    while independent tasks keep running."""
+    with get_session() as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            return
+        task.status = TaskStatus.BLOCKED.value
+        task.blocked_reason = f"data stale: {exc.dataset}"
+        task.completed_at = datetime.now(UTC)
+        events.emit(
+            session,
+            run_id=run_id,
+            event_type="task.blocked",
+            subject_type="task",
+            subject_id=task_id,
+            payload={"blocked_reason": task.blocked_reason, "dataset": exc.dataset},
+            audited=True,
+        )
+        dependency_resolver.mark_unsatisfiable(session, task, f"data stale: {exc.dataset}")
+        session.commit()
 
 
 def _handle_task_failure(run_id: uuid.UUID, task_id: uuid.UUID, exc: Exception) -> None:

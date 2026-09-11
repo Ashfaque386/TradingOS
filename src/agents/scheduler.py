@@ -64,6 +64,7 @@ from src.engine.paper_trading.daily_signal_job import run_daily_paper_trading_cy
 from src.engine.paper_trading.equity_snapshot import take_daily_snapshot
 from src.engine.paper_trading.paper_account import get_paper_account
 from src.models.scheduled_job import ScheduledJobConfig, ScheduledJobRun
+from src.orchestration import freshness
 
 logger = structlog.get_logger(__name__)
 
@@ -149,9 +150,29 @@ def run_corporate_actions_ingestion() -> JobResult:
         with get_session() as session:
             written = CorporateActionsWriter().write(session, rows)
         logger.info("scheduler_corporate_actions_ingestion_completed", rows_written=written)
+        with get_session() as session:
+            freshness.record_ingestion_result(
+                session,
+                "corporate_actions",
+                success=True,
+                checksum_ok=True,
+                has_data=True,
+                detail=f"{written} row(s) written",
+            )
+            session.commit()
         return JobResult("Completed", f"{written} row(s) written")
     except Exception as exc:  # noqa: BLE001 - a failed ingestion run must not crash the app
         logger.warning("scheduler_corporate_actions_ingestion_failed", error=str(exc))
+        with get_session() as session:
+            freshness.record_ingestion_result(
+                session,
+                "corporate_actions",
+                success=False,
+                checksum_ok=False,
+                has_data=False,
+                detail=str(exc),
+            )
+            session.commit()
         return JobResult("Failed", str(exc))
 
 
@@ -180,6 +201,24 @@ def run_market_data_ingestion() -> JobResult:
             topped_up=len(summary.symbols_topped_up),
             failed=len(summary.symbols_failed),
         )
+        # T086/FR-064: "checksum" here is a real structural check -- the run completed with no
+        # per-symbol failures. A partial failure never gets to claim `fresh` (no synthetic
+        # backfill on this path, FR-063).
+        clean = not summary.symbols_failed
+        with get_session() as session:
+            freshness.record_ingestion_result(
+                session,
+                "ohlcv_daily",
+                success=True,
+                checksum_ok=clean,
+                has_data=clean,
+                detail=(
+                    f"backfilled={len(summary.symbols_backfilled)} "
+                    f"topped_up={len(summary.symbols_topped_up)} "
+                    f"failed={len(summary.symbols_failed)}"
+                ),
+            )
+            session.commit()
         return JobResult(
             "Completed",
             f"backfilled={len(summary.symbols_backfilled)} "
@@ -187,6 +226,16 @@ def run_market_data_ingestion() -> JobResult:
         )
     except Exception as exc:  # noqa: BLE001 - a failed ingestion run must not crash the app
         logger.warning("scheduler_market_data_ingestion_failed", error=str(exc))
+        with get_session() as session:
+            freshness.record_ingestion_result(
+                session,
+                "ohlcv_daily",
+                success=False,
+                checksum_ok=False,
+                has_data=False,
+                detail=str(exc),
+            )
+            session.commit()
         return JobResult("Failed", str(exc))
 
 

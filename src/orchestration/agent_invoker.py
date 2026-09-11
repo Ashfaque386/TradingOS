@@ -27,7 +27,7 @@ from src.agents.control import is_agent_enabled
 from src.agents.llm_router import NoProviderAvailableError, complete
 from src.agents.nodes.common import extract_json
 from src.models.orchestration import ResultArtefact, Task, TaskDependency
-from src.orchestration import artefact_store
+from src.orchestration import artefact_store, freshness
 from src.orchestration.capability_registry import AGENT_META
 from src.orchestration.enums import ArtefactDisposition
 
@@ -41,6 +41,15 @@ class AgentUnavailable(RuntimeError):
     """The assigned agent cannot take the task now (disabled / unknown capability). The CEO
     unavailable-capability policy (US9) handles this; the task engine surfaces it as a failure
     for the MVP."""
+
+
+class DataStaleError(RuntimeError):
+    """FR-062: a required dataset is not fresh. The task engine blocks this task (never retries
+    it, never fabricates data) while independent tasks continue (US7)."""
+
+    def __init__(self, dataset: str):
+        self.dataset = dataset
+        super().__init__(f"data stale: {dataset}")
 
 
 def _upstream_artefacts(session: Session, task: Task) -> list[ResultArtefact]:
@@ -232,6 +241,10 @@ def dispatch(session: Session, task: Task) -> ResultArtefact:
         raise AgentUnavailable(f"unknown agent '{task.assigned_agent}'")
     if not is_agent_enabled(session, task.assigned_agent):
         raise AgentUnavailable(f"agent '{task.assigned_agent}' is administratively disabled")
+
+    for dataset in task.required_datasets or []:
+        if not freshness.is_fresh(session, dataset):
+            raise DataStaleError(dataset)
 
     upstream = _upstream_artefacts(session, task)
     for a in upstream:

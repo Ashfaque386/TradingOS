@@ -11,4 +11,5 @@ export {
   AttentionQueue,
   DepartmentView,
   ArtefactList,
+  DataFreshnessPanel,
 } from "./panels";

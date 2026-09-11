@@ -137,3 +137,33 @@ def test_resolve_decision_rbac_and_idempotency():
                     OrganizationalDecision.id == decision_id
                 ).delete()
                 session.commit()
+
+
+def test_run_detail_and_attention_surface_dataset_freshness():
+    """T088: staleness is visible at both the run level and the cross-run attention queue."""
+    run_id, _keys = seed_run_with_tasks(
+        [
+            {
+                "key": "a",
+                "capability": "market_analysis",
+                "assigned_agent": "market_analyst",
+                "required_datasets": ["ohlcv_daily"],
+            }
+        ]
+    )
+    uid, headers = _reader()
+    try:
+        r = client.get(f"/api/v1/organization/runs/{run_id}", headers=headers)
+        assert r.status_code == 200
+        assert "ohlcv_daily" in r.json()["dataset_freshness"]
+
+        a = client.get("/api/v1/organization/attention", headers=headers)
+        assert a.status_code == 200
+        assert "stale_datasets" in a.json()
+
+        f = client.get("/api/v1/organization/freshness", headers=headers)
+        assert f.status_code == 200
+        assert any(d["dataset_name"] == "ohlcv_daily" for d in f.json())
+    finally:
+        cleanup_user(uid)
+        cleanup_run(run_id)

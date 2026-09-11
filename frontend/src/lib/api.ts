@@ -1095,6 +1095,15 @@ export interface OrgRunDetail extends OrgRunSummary {
   pending_approvals: number;
   produced_strategy_id: string | null;
   result_summary: Record<string, unknown> | null;
+  dataset_freshness: Record<string, string>;
+}
+
+export interface OrgDatasetFreshness {
+  dataset_name: string;
+  cadence: string;
+  status: string;
+  last_successful_update: string | null;
+  last_checksum_ok: boolean | null;
 }
 
 export interface OrgPlannedTask {
@@ -1192,6 +1201,7 @@ export interface OrgAttention {
   }[];
   escalated_decisions: OrgDecision[];
   pending_approvals: number;
+  stale_datasets: OrgDatasetFreshness[];
 }
 
 export interface OrgApproval {
@@ -1552,6 +1562,7 @@ export const api = {
       `/api/v1/organization/runs/${runId}/events${toQuery({ after_sequence: afterSequence })}`,
     ),
   orgAttention: () => get<OrgAttention>("/api/v1/organization/attention"),
+  orgFreshness: () => get<OrgDatasetFreshness[]>("/api/v1/organization/freshness"),
   orgResolveDecision: (decisionId: string, note: string) =>
     post<OrgDecision>(`/api/v1/organization/decisions/${decisionId}/resolve`, { note }),
   orgApprovals: (status = "pending") =>

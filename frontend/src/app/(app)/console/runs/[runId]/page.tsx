@@ -71,6 +71,11 @@ export default function RunWorkspace({ params }: { params: Promise<{ runId: stri
                 {s}: {n}
               </Badge>
             ))}
+            {Object.entries(run.dataset_freshness).map(([d, s]) => (
+              <Badge key={d} variant={s === "fresh" ? "secondary" : "destructive"}>
+                {d}: {s}
+              </Badge>
+            ))}
           </div>
         ) : (
           <div className="h-8 animate-pulse rounded bg-bg" />

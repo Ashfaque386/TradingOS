@@ -97,6 +97,7 @@ class RunDetailOut(RunSummary):
     pending_approvals: int
     produced_strategy_id: uuid.UUID | None
     result_summary: dict[str, object] | None
+    dataset_freshness: dict[str, str]
 
 
 class AttentionRunOut(BaseModel):
@@ -115,11 +116,20 @@ class AttentionTaskOut(BaseModel):
     blocked_reason: str | None
 
 
+class DatasetFreshnessOut(BaseModel):
+    dataset_name: str
+    cadence: str
+    status: str
+    last_successful_update: str | None
+    last_checksum_ok: bool | None
+
+
 class AttentionOut(BaseModel):
     stalled_runs: list[AttentionRunOut]
     blocked_tasks: list[AttentionTaskOut]
     escalated_decisions: list[DecisionOut]
     pending_approvals: int
+    stale_datasets: list[DatasetFreshnessOut]
 
 
 class ResolveDecisionRequest(BaseModel):
@@ -182,6 +192,7 @@ def list_runs(
 @router.get("/runs/{run_id}", response_model=RunDetailOut)
 def get_run(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> RunDetailOut:
     from src.models.approval import ApprovalRequest
+    from src.orchestration import freshness
 
     with get_session() as session:
         run = session.get(OrganizationRun, run_id)
@@ -201,6 +212,13 @@ def get_run(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> RunDe
             )
             or 0
         )
+        required: set[str] = set()
+        for (rd,) in session.execute(
+            select(Task.required_datasets).where(Task.run_id == run_id)
+        ).all():
+            required.update(rd or [])
+        all_freshness = {row["dataset_name"]: row["status"] for row in freshness.snapshot(session)}
+        dataset_freshness = {d: all_freshness.get(d, "unavailable") for d in required}
         return RunDetailOut(
             run_id=run.id,
             objective=run.objective,
@@ -210,6 +228,7 @@ def get_run(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> RunDe
             plan_id=run.plan_id,
             created_at=run.created_at.isoformat(),
             ended_at=run.ended_at.isoformat() if run.ended_at else None,
+            dataset_freshness=dataset_freshness,
             task_counts=counts,
             pending_approvals=int(pending),
             produced_strategy_id=run.produced_strategy_id,
@@ -490,6 +509,7 @@ def get_attention(_user: User = Depends(get_current_user)) -> AttentionOut:
     tasks ``blocked``/``escalated``, unresolved escalated decisions, and the pending-approval
     count."""
     from src.models.approval import ApprovalRequest
+    from src.orchestration import freshness
 
     with get_session() as session:
         stalled = session.scalars(
@@ -497,6 +517,7 @@ def get_attention(_user: User = Depends(get_current_user)) -> AttentionOut:
             .where(OrganizationRun.status == RunStatus.STALLED.value)
             .order_by(OrganizationRun.updated_at.desc())
         ).all()
+        stale = [row for row in freshness.snapshot(session) if row["status"] != "fresh"]
         blocked = session.scalars(
             select(Task)
             .where(Task.status.in_((TaskStatus.BLOCKED.value, TaskStatus.ESCALATED.value)))
@@ -543,7 +564,35 @@ def get_attention(_user: User = Depends(get_current_user)) -> AttentionOut:
             ],
             escalated_decisions=[_decision_out(d) for d in escalated],
             pending_approvals=int(pending),
+            stale_datasets=[
+                DatasetFreshnessOut(
+                    dataset_name=row["dataset_name"],
+                    cadence=row["cadence"],
+                    status=row["status"],
+                    last_successful_update=row["last_successful_update"],
+                    last_checksum_ok=row["last_checksum_ok"],
+                )
+                for row in stale
+            ],
         )
+
+
+@router.get("/freshness", response_model=list[DatasetFreshnessOut])
+def get_freshness(_user: User = Depends(get_current_user)) -> list[DatasetFreshnessOut]:
+    """Every tracked dataset's current freshness (T088/T089) -- the console's freshness panel."""
+    from src.orchestration import freshness
+
+    with get_session() as session:
+        return [
+            DatasetFreshnessOut(
+                dataset_name=row["dataset_name"],
+                cadence=row["cadence"],
+                status=row["status"],
+                last_successful_update=row["last_successful_update"],
+                last_checksum_ok=row["last_checksum_ok"],
+            )
+            for row in freshness.snapshot(session)
+        ]
 
 
 @router.post("/decisions/{decision_id}/resolve", response_model=DecisionOut)

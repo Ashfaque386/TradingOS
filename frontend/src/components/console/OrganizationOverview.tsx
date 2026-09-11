@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ApprovalQueue, AttentionQueue } from "./panels";
+import { ApprovalQueue, AttentionQueue, DataFreshnessPanel } from "./panels";
 
 const ACTIVE = ["planning", "running", "waiting", "stalled", "queued"];
 
@@ -53,6 +53,8 @@ export function OrganizationOverview() {
         <ApprovalQueue />
         <AttentionQueue />
       </div>
+
+      <DataFreshnessPanel />
 
       <Card eyebrow="Runs" title="Recent runs" density="dense">
         {runs.length === 0 ? (

@@ -281,6 +281,41 @@ export function ArtefactList({ artefacts }: { artefacts: OrgArtefact[] }) {
   );
 }
 
+/** T089 (FR-060..064, BUG-A): per-dataset freshness -- staleness is a visible organisational
+ * fact, never a silent backtest rejection. */
+export function DataFreshnessPanel() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["org-freshness"],
+    queryFn: api.orgFreshness,
+    refetchInterval: 30_000,
+  });
+  return (
+    <Card eyebrow="Data" title="Freshness" density="dense">
+      {isLoading ? (
+        <div className="h-10 animate-pulse rounded bg-bg" />
+      ) : !data || data.length === 0 ? (
+        <p className={NONE}>No datasets tracked yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-xs">
+          {data.map((d) => (
+            <li key={d.dataset_name} className="flex items-center gap-2">
+              <Badge variant={d.status === "fresh" ? "secondary" : "destructive"}>
+                {d.status}
+              </Badge>
+              <span className="font-medium">{d.dataset_name}</span>
+              <span className="ml-auto text-text-faint">
+                {d.last_successful_update
+                  ? new Date(d.last_successful_update).toLocaleString()
+                  : "never updated"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 export function dot(status: string): string {
   if (["completed", "satisfied"].includes(status)) return "bg-emerald-500";
   if (["failed", "blocked", "cancelled"].includes(status)) return "bg-destructive";

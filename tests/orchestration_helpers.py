@@ -77,6 +77,7 @@ def seed_run_with_tasks(
                 dependency_policy="all",
                 required_inputs=[],
                 received_inputs=[],
+                required_datasets=spec.get("required_datasets") or None,  # type: ignore[arg-type]
                 expected_output=str(spec.get("expected_output", "AdHocAnalysis")),
                 status="planned",
                 is_concurrency_safe=is_concurrency_safe(cap),
