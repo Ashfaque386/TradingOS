@@ -221,10 +221,17 @@ def promote_queued() -> None:
 
 
 def reap_incomplete_runs() -> None:
-    """Startup hook (FR-019). Any non-terminal run left over from a previous process is
-    re-entered; a ``running`` task is reset to ``ready`` (concurrency-safe) or ``failed``."""
+    """Startup hook (FR-019, T104/SC-023). Any non-terminal run left over from a previous process
+    is re-entered; a ``running`` task is reset to ``ready`` (concurrency-safe) or ``failed`` --
+    never a false ``completed``, and an already-``completed`` task's artefact is never touched or
+    regenerated. Resetting task rows alone isn't "automatic resume" though -- `run_scheduler_loop`
+    is synchronous and only ever runs when explicitly invoked (no periodic sweep picks up a
+    freshly-``ready`` task on its own), so each reaped run's execution is explicitly re-entered
+    here in its own detached thread (same pattern `create_run` already uses), genuinely continuing
+    the run rather than leaving patched-up rows sitting idle until some unrelated later trigger."""
     from src.orchestration.capability_registry import is_concurrency_safe
 
+    resumable_run_ids: list[uuid.UUID] = []
     with get_session() as session:
         stuck_runs = session.scalars(
             select(OrganizationRun).where(OrganizationRun.status.in_(_ACTIVE_STATUSES))
@@ -246,5 +253,28 @@ def reap_incomplete_runs() -> None:
                 status=run.status,
                 reset_tasks=len(running_tasks),
             )
+            resumable_run_ids.append(run.id)
         session.commit()
+
+    for run_id in resumable_run_ids:
+        threading.Thread(target=_resume_reaped_run, args=(run_id,), daemon=True).start()
     promote_queued()
+
+
+def _resume_reaped_run(run_id: uuid.UUID) -> None:
+    from src.orchestration.task_engine import run_scheduler_loop
+
+    try:
+        with get_session() as session:
+            run = session.get(OrganizationRun, run_id)
+            status = run.status if run is not None else None
+        if status == RunStatus.PLANNING.value:
+            # Planning itself was interrupted -- re-enter via _plan_run so a genuinely missing
+            # plan is (re)generated before task execution resumes.
+            _plan_run(run_id)
+        elif status in (RunStatus.RUNNING.value, RunStatus.WAITING.value, RunStatus.STALLED.value):
+            # A plan already exists; resume driving it to completion.
+            run_scheduler_loop(run_id)
+    except Exception as exc:  # noqa: BLE001 -- a resume failure must not crash the app or the
+        # other reaped runs' own resume threads.
+        logger.error("organization_run_resume_failed", run_id=str(run_id), error=str(exc))
