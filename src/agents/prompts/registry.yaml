@@ -89,3 +89,6 @@ ceo_planner:
 ceo_planner_task:
   prompt_id: PMPT-049
   active_version: 1
+adhoc_classifier:
+  prompt_id: PMPT-050
+  active_version: 1

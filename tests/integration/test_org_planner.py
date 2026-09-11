@@ -132,7 +132,12 @@ def test_valid_objective_produces_a_persisted_validated_plan():
 
 def test_two_different_objectives_produce_distinct_plans():
     plan_b = json.loads(json.dumps(_VALID_PLAN))
-    plan_b["objective_classification"] = "portfolio_analysis"
+    # Deliberately not "portfolio_analysis" (or any of the other US8 ad-hoc-analysis
+    # classifications) -- those now deterministically grow the plan via
+    # planner.ensure_adhoc_scaffold, which would break this test's single-task assertion below
+    # for a reason unrelated to what this test actually checks (two objectives -> two distinct,
+    # independently-sized plans).
+    plan_b["objective_classification"] = "single_task_smoke_test"
     plan_b["tasks"] = [plan_b["tasks"][0]]  # single-task plan
     run_a = _run_and_wait("Research a momentum strategy", _fake_response(_VALID_PLAN))
     run_b = _run_and_wait("Analyse my portfolio concentration", _fake_response(plan_b))
@@ -141,7 +146,7 @@ def test_two_different_objectives_produce_distinct_plans():
             pa = session.get(OrganizationalPlan, session.get(OrganizationRun, run_a).plan_id)
             pb = session.get(OrganizationalPlan, session.get(OrganizationRun, run_b).plan_id)
             assert pa.id != pb.id
-            assert pb.objective_classification == "portfolio_analysis"
+            assert pb.objective_classification == "single_task_smoke_test"
             assert session.query(Task).filter(Task.plan_id == pb.id).count() == 1
     finally:
         _cleanup(run_a)

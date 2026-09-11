@@ -29,7 +29,6 @@ an `on_complete` callback rather than reimplementing the LLM-call/pending-row/th
 pre-REL-010 test/call site) is unchanged.
 """
 
-import threading
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -44,6 +43,7 @@ from src.core.db import get_session
 from src.engine.risk import kill_switch_service
 from src.models.chat import ChatMessage
 from src.models.strategy import Strategy
+from src.orchestration.adhoc import start_classify_and_dispatch
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -203,15 +203,16 @@ def send_message(body: SendMessageRequest) -> ChatMessageResponse:
         session.commit()
         assistant_id = assistant_message.id
 
-    threading.Thread(
-        target=generate_and_store_reply,
-        kwargs={
-            "assistant_message_id": assistant_id,
-            "history": history,
-            "user_content": body.content,
-        },
-        daemon=True,
-    ).start()
+    # US8 (FR-130/132/133): classified (in the background -- never on this request thread) into
+    # either a real OrganizationRun (actionable objective) or the existing direct-reply pipeline
+    # (a pure lookup, no run created).
+    start_classify_and_dispatch(
+        assistant_message_id=assistant_id,
+        text=body.content,
+        channel="Web",
+        requested_by=None,
+        history=history,
+    )
 
     with get_session() as session:
         assistant_row = session.get(ChatMessage, assistant_id)

@@ -131,6 +131,44 @@ def ensure_research_scaffold(plan: _GeneratedPlan) -> None:
             t.depends_on.append(assembly_key)
 
 
+def ensure_adhoc_scaffold(plan: _GeneratedPlan) -> None:
+    """T093 (FR-130): a portfolio-analysis / risk-ranking / drawdown-explanation /
+    strategy-failure-explanation / rerun-decision objective always gets a ``portfolio_read``
+    task feeding a terminal ``adhoc_synthesis`` task (real data, real synthesis, an
+    ``AdHocAnalysis`` artefact with full provenance) -- never a free-form guess presented as if
+    the organisation had done the work."""
+    from src.orchestration.adhoc import ADHOC_OBJECTIVE_KINDS
+
+    if plan.objective_classification not in ADHOC_OBJECTIVE_KINDS:
+        return
+
+    if not any(t.capability == "portfolio_read" for t in plan.tasks):
+        plan.tasks.append(
+            _PlannedTask(
+                key="adhoc_portfolio",
+                objective="Read current portfolio state for this analysis.",
+                capability="portfolio_read",
+                assigned_agent="portfolio_manager_agent",
+                priority=3,
+                expected_output="PortfolioRiskReport",
+            )
+        )
+
+    if any(t.capability == "adhoc_synthesis" for t in plan.tasks):
+        return
+    plan.tasks.append(
+        _PlannedTask(
+            key="adhoc_synthesis",
+            objective=plan.tasks[0].objective if plan.tasks else "Answer the objective.",
+            capability="adhoc_synthesis",
+            assigned_agent="ceo_agent",
+            priority=1,
+            expected_output="AdHocAnalysis",
+            depends_on=[t.key for t in plan.tasks],
+        )
+    )
+
+
 def _validate(plan: _GeneratedPlan, known: dict[str, set[str]]) -> None:
     """``known`` maps agent name -> its declared capabilities. Raises PlanValidationError."""
     if not plan.tasks:
@@ -327,6 +365,7 @@ def generate_plan(session: Session, run: OrganizationRun) -> OrganizationalPlan 
         try:
             _validate(plan, known)
             ensure_research_scaffold(plan)  # T053: deterministic context coverage
+            ensure_adhoc_scaffold(plan)  # T093: deterministic ad-hoc analysis coverage
             _validate(plan, known)  # the injected scaffold must satisfy the same invariants
         except PlanValidationError as exc:
             last_error = str(exc)

@@ -112,6 +112,54 @@ def _synthesize_handler(
     return "CeoSynthesis", payload, {"provider_used": provider_used, "tools_used": []}
 
 
+def _adhoc_synthesis_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """US8 (FR-130): a real LLM call turns the upstream artefacts (e.g. the current portfolio
+    snapshot) into a direct answer to the user's ad-hoc objective -- an ``AdHocAnalysis``
+    artefact with full provenance, never a free-form guess presented as organisation output."""
+    context = [{"type": a.artefact_type, "payload": a.payload} for a in upstream]
+    try:
+        response = complete(
+            "orchestration",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the CEO Agent of TradingOS, answering a user's ad-hoc analysis "
+                        "request using the real department data collected below. Return ONLY "
+                        'JSON: {"answer": "...", "supporting_points": ["..."]}'
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps({"question": task.objective, "context": context}),
+                },
+            ],
+        )
+        parsed = json.loads(extract_json(response.choices[0].message.content))
+        answer = str(parsed.get("answer", "")) or "No answer produced."
+        supporting = parsed.get("supporting_points", [])
+        provider_used: str | None = "orchestration-chain"
+    except (NoProviderAvailableError, ValueError, KeyError) as exc:
+        logger.warning("adhoc_synthesis_fallback", task_id=str(task.id), error=str(exc))
+        answer = (
+            f"Unable to complete a full analysis ({exc}); "
+            f"{len(upstream)} upstream artefact(s) were collected."
+        )
+        supporting = [a.artefact_type for a in upstream]
+        provider_used = None
+    payload = {
+        "question": task.objective,
+        "answer": answer,
+        "supporting_data": {
+            "points": supporting,
+            "upstream_types": [a.artefact_type for a in upstream],
+        },
+    }
+    return "AdHocAnalysis", payload, {"provider_used": provider_used, "tools_used": []}
+
+
 # Minimal schema-valid payloads per context capability, so the placeholder path still produces
 # *correctly typed* NewsDigest / SentimentReport / PortfolioRiskReport artefacts (their real
 # per-agent handlers are wired in a later phase -- US6). Provenance still links every source.
@@ -231,6 +279,7 @@ CAPABILITY_HANDLERS: dict[str, Handler] = {
     "synthesize": _synthesize_handler,
     "orchestrate": _synthesize_handler,
     "context_assembly": _context_assembly_handler,
+    "adhoc_synthesis": _adhoc_synthesis_handler,
 }
 
 

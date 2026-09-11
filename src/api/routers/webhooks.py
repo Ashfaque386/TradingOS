@@ -27,7 +27,6 @@ routed to the CEO Agent. The read-mostly-Q&A authority ceiling this docstring us
 of that, not instead of it.
 """
 
-import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -38,7 +37,6 @@ from sqlalchemy import select
 
 from src.agents.tools.registry import get_skill_registry
 from src.agents.tools.skills import SkillNotImplementedError
-from src.api.routers.chat import generate_and_store_reply
 from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
@@ -53,6 +51,7 @@ from src.memory.redis_client import get_redis_client
 from src.models.chat import ChatMessage
 from src.models.user import NotificationChannel, User
 from src.models.webhook import WebhookEvent
+from src.orchestration.adhoc import start_classify_and_dispatch
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
@@ -121,6 +120,7 @@ def _record_event_and_route(
     user_text: str,
     external_metadata: dict[str, Any],
     notify_kwargs: dict[str, Any],
+    requested_by: str,
 ) -> uuid.UUID:
     """Shared by the Telegram and Discord handlers (REL-010 E10.1). Mirrors
     src/api/routers/chat.py::send_message's own save-user-row/save-pending-row/dispatch-thread
@@ -177,16 +177,18 @@ def _record_event_and_route(
             return
         _mark_event_response_sent(event_id, reply)
 
-    threading.Thread(
-        target=generate_and_store_reply,
-        kwargs={
-            "assistant_message_id": assistant_id,
-            "history": history,
-            "user_content": user_text,
-            "on_complete": _on_complete,
-        },
-        daemon=True,
-    ).start()
+    # US8 (FR-130/132/133): classified (in the background -- this handler must ack fast,
+    # Discord's own 3-second deadline in particular) into either a real OrganizationRun (an
+    # actionable objective from this verified channel identity) or the existing direct-reply
+    # pipeline (a pure lookup, no run created).
+    start_classify_and_dispatch(
+        assistant_message_id=assistant_id,
+        text=user_text,
+        channel=channel,
+        requested_by=requested_by,
+        history=history,
+        on_complete=_on_complete,
+    )
     return event_id
 
 
@@ -223,7 +225,8 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
         _record_event("Telegram", body)
         return {"ok": True}
 
-    if _resolve_sender("Telegram", chat_id) is None:
+    sender = _resolve_sender("Telegram", chat_id)
+    if sender is None:
         # SEC-030: a real, signature-verified Telegram message, but from a chat ID with no
         # verified NotificationChannel binding -- recorded for audit, never routed to the CEO
         # Agent. Acks normally rather than erroring, matching Telegram's own expectation that a
@@ -238,6 +241,7 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
         user_text=text,
         external_metadata={"chat_id": chat_id},
         notify_kwargs={"channel": "telegram", "chat_id": chat_id},
+        requested_by=sender.email,
     )
     return {"ok": True}
 
@@ -297,7 +301,8 @@ async def discord_webhook(request: Request) -> dict[str, Any]:
         body.get("member", {}).get("user", {}).get("id")
         or body.get("user", {}).get("id", "unknown")
     )
-    if _resolve_sender("Discord", discord_user_id) is None:
+    discord_sender = _resolve_sender("Discord", discord_user_id)
+    if discord_sender is None:
         # SEC-030: see the Telegram handler's matching check above.
         _record_event("Discord", body)
         return {"type": 4, "data": {"content": ""}}
@@ -319,6 +324,7 @@ async def discord_webhook(request: Request) -> dict[str, Any]:
             "application_id": application_id,
             "interaction_token": interaction_token,
         },
+        requested_by=discord_sender.email,
     )
     # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE -- Discord requires an ack within 3 seconds; the real
     # LLM call (which can take minutes on this host, see chat.py's own docstring) happens in the
@@ -381,7 +387,8 @@ async def slack_webhook(request: Request) -> dict[str, Any]:
         return {"ok": True}
 
     slack_user_id = str(event.get("user", "unknown"))
-    if _resolve_sender("Slack", slack_user_id) is None:
+    slack_sender = _resolve_sender("Slack", slack_user_id)
+    if slack_sender is None:
         # SEC-030: see the Telegram handler's matching check above.
         _record_event("Slack", body)
         return {"ok": True}
@@ -393,5 +400,6 @@ async def slack_webhook(request: Request) -> dict[str, Any]:
         user_text=text,
         external_metadata={"channel_id": channel_id, "slack_user_id": slack_user_id},
         notify_kwargs={"channel": "slack", "channel_id": channel_id},
+        requested_by=slack_sender.email,
     )
     return {"ok": True}
