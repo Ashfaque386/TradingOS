@@ -27,8 +27,16 @@ const nextConfig: NextConfig = {
   // looking at both side by side. Permanent (308) redirect, not a client-side page, so a
   // bookmarked /paper-trading link never flashes the old page's shell before landing on the
   // merged one.
+  // Retirement of the standalone "Agent Console" page: its content (agent registry, legacy
+  // graph execution state, analytics) moved into the Organization Command Center as tabs
+  // (frontend/src/app/(app)/console/page.tsx) rather than staying a second, similarly-named
+  // top-level destination. Permanent (308) redirect so a bookmarked /agents link lands on the
+  // merged page without flashing the old shell first, matching the /paper-trading precedent.
   async redirects() {
-    return [{ source: "/paper-trading", destination: "/account", permanent: true }];
+    return [
+      { source: "/paper-trading", destination: "/account", permanent: true },
+      { source: "/agents", destination: "/console", permanent: true },
+    ];
   },
 };
 

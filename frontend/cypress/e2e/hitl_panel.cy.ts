@@ -2,7 +2,8 @@
 // manageHitl-eligible roles (SA/PM/RM), and the real server-side gate behind it holds even for a
 // forged direct call. Extends agent_runs.cy.ts's real-run-history convention -- reads whatever
 // real runs already exist rather than triggering a new (real, LLM-costing) research cycle just
-// for this spec.
+// for this spec. Post /agents -> /console consolidation, this panel lives under the Organization
+// Command Center's "Agents & Legacy Graph" tab rather than at its own top-level route.
 
 export {};
 
@@ -50,7 +51,8 @@ describe("HITL panel role gating", () => {
 
   it("SystemAdministrator sees HITL controls or decision state when a run exists", () => {
     loginViaUi(Cypress.env("adminEmail"), Cypress.env("adminPassword"));
-    cy.visit("/agents");
+    cy.visit("/console");
+    cy.get('[role="tab"]').contains("Agents & Legacy Graph").click();
     cy.contains("Live Execution State").should("be.visible");
 
     if (anyRunId) {
@@ -71,7 +73,8 @@ describe("HITL panel role gating", () => {
 
   it("ReadOnlyAuditor never sees HITL controls, regardless of run state", () => {
     loginViaUi(auditorEmail, auditorPassword);
-    cy.visit("/agents");
+    cy.visit("/console");
+    cy.get('[role="tab"]').contains("Agents & Legacy Graph").click();
     cy.contains("Live Execution State").should("be.visible");
     cy.contains("Retry Failed Run").should("not.exist");
     cy.contains("Approve").should("not.exist");

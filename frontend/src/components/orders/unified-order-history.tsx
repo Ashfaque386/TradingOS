@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -38,7 +38,11 @@ export function UnifiedOrderHistory({
   live: BrokerOrder[];
 }) {
   const paperRows: UnifiedRow[] = [...paper]
-    .sort((a, b) => new Date(b.executed_at).getTime() - new Date(a.executed_at).getTime())
+    .sort(
+      (a, b) =>
+        parseBackendTimestamp(b.executed_at).getTime() -
+        parseBackendTimestamp(a.executed_at).getTime(),
+    )
     .map((t) => ({
       key: `paper-${t.id}`,
       source: "Paper" as const,
@@ -95,7 +99,7 @@ export function UnifiedOrderHistory({
               </TableCell>
               <TableCell className="px-0 py-row-dense whitespace-nowrap font-mono-tabular text-text-faint">
                 {row.time
-                  ? new Date(row.time).toLocaleString("en-IN", {
+                  ? parseBackendTimestamp(row.time).toLocaleString("en-IN", {
                       timeZone: "Asia/Kolkata",
                       day: "2-digit",
                       month: "short",

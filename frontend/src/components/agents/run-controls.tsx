@@ -1,11 +1,8 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { Gated } from "@/components/ui/gated";
-import { Button } from "@/components/ui/button";
 import type { AgentRunSummary } from "@/lib/api";
 
 const STATUS_DOT: Record<string, string> = {
@@ -30,7 +27,7 @@ const STATUS_TEXT: Record<string, string> = {
 };
 
 function relativeTime(iso: string): string {
-  const deltaMs = Date.now() - new Date(iso).getTime();
+  const deltaMs = Date.now() - parseBackendTimestamp(iso).getTime();
   const minutes = Math.round(deltaMs / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
@@ -41,12 +38,20 @@ function relativeTime(iso: string): string {
 
 function duration(run: AgentRunSummary): string | null {
   if (!run.ended_at) return null;
-  const ms = new Date(run.ended_at).getTime() - new Date(run.started_at).getTime();
+  const ms =
+    parseBackendTimestamp(run.ended_at).getTime() -
+    parseBackendTimestamp(run.started_at).getTime();
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.round(ms / 60_000)}m`;
 }
 
+/** Real, read-only history of legacy single-thread graph runs (the `trigger_research()` path).
+ * Its own "Trigger Research Cycle" button was removed when the CEO-led org run (POST
+ * /organization/runs, console/OrganizationOverview's NewObjectivePanel) became the one real way
+ * to start work from the UI -- keeping both would mean two competing entry points into two
+ * different pipelines. `trigger_research()` itself is unchanged and still reachable directly
+ * (POST /agents/research/trigger) for anything that still calls it outside this UI. */
 export function RunControls({
   selectedRunId,
   onSelectRun,
@@ -54,37 +59,16 @@ export function RunControls({
   selectedRunId: string | null;
   onSelectRun: (runId: string) => void;
 }) {
-  const queryClient = useQueryClient();
   const runsQuery = useQuery({
     queryKey: ["agent-runs"],
     queryFn: api.runs,
     refetchInterval: 5_000,
   });
 
-  const trigger = useMutation({
-    mutationFn: api.triggerResearch,
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ["agent-runs"] });
-      onSelectRun(res.run_id);
-    },
-  });
-
   const runs = runsQuery.data ?? [];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <Gated permission="triggerResearch">
-          <Button onClick={() => trigger.mutate()} disabled={trigger.isPending} className="px-4 py-2 text-xs">
-            <Play className="h-3.5 w-3.5" />
-            {trigger.isPending ? "Starting…" : "Trigger Research Cycle"}
-          </Button>
-        </Gated>
-        {trigger.isError && (
-          <span className="text-[11px] text-down">Failed to start — is the backend up?</span>
-        )}
-      </div>
-
       {runs.length === 0 ? (
         <p className="text-[11px] text-text-faint">No runs yet.</p>
       ) : (
@@ -123,7 +107,10 @@ export function RunControls({
                         )}
                       </div>
                       <div className="font-mono-tabular text-[10px] text-text-faint">
-                        {new Date(run.started_at).toLocaleTimeString("en-IN", { hour12: false })} ·{" "}
+                        {parseBackendTimestamp(run.started_at).toLocaleTimeString("en-IN", {
+                          hour12: false,
+                        })}{" "}
+                        ·{" "}
                         {relativeTime(run.started_at)}
                       </div>
                     </div>

@@ -1546,6 +1546,8 @@ export const api = {
     post<{ job_run_id: string; status: string }>(`/api/v1/scheduled-jobs/${jobId}/run-now`),
 
   // --- Organization Command Center (spec 001-ceo-led-trading-org, US5) --------------------
+  orgCreateRun: (objective: string) =>
+    post<OrgRunSummary>("/api/v1/organization/runs", { objective, source: "web" }),
   orgRuns: (status?: string) =>
     get<OrgRunSummary[]>(`/api/v1/organization/runs${toQuery({ status })}`),
   orgRun: (runId: string) => get<OrgRunDetail>(`/api/v1/organization/runs/${runId}`),

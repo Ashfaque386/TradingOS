@@ -45,10 +45,11 @@ describe("RBAC gating -- ReadOnlyAuditor sees/triggers nothing mutating", () => 
     cy.contains("Slide to confirm").should("not.exist");
   });
 
-  it("Agent Console: Trigger Research Cycle and prompt hot-swap controls are absent", () => {
+  it("Organization Command Center: Trigger Research Cycle and prompt hot-swap controls are absent (retired from this page for every role)", () => {
     loginViaUi(auditorEmail, auditorPassword);
-    cy.visit("/agents");
-    cy.contains("Research Cycle").should("be.visible");
+    cy.visit("/console");
+    cy.get('[role="tab"]').contains("Agents & Legacy Graph").click();
+    cy.contains("Legacy Graph").should("be.visible");
     cy.contains("Trigger Research Cycle").should("not.exist");
     cy.contains(/Make v\d+ active/).should("not.exist");
   });

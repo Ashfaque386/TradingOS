@@ -1,17 +1,19 @@
-// REL-009 E9.6: the Agent Console (/agents) renders real data from the real
-// GET /api/v1/agents/runs endpoint, not a fabricated/mocked list.
+// REL-009 E9.6 + the /agents -> /console consolidation: the old standalone Agent Console page
+// was retired in favour of the Organization Command Center's "Agents & Legacy Graph" tab, with
+// /agents now a permanent redirect to /console (next.config.ts). This still renders real data
+// from the real GET /api/v1/agents/runs endpoint, not a fabricated/mocked list.
 
 export {};
 
 const API_URL = Cypress.env("apiUrl");
 
-describe("Agent Console", () => {
+describe("Agent Console retirement -- /agents redirects into the Organization Command Center", () => {
   it("redirects an unauthenticated visitor to /login", () => {
     cy.visit("/agents");
     cy.url().should("include", "/login");
   });
 
-  it("renders the real graph topology and real run history once authenticated", () => {
+  it("/agents lands on /console, which renders the real graph topology and real run history once authenticated", () => {
     cy.visit("/login");
     cy.get("input[type=email]").type(Cypress.env("adminEmail"));
     cy.get("input[type=password]").type(Cypress.env("adminPassword"));
@@ -32,12 +34,15 @@ describe("Agent Console", () => {
           const realRuns = response.body as Array<{ run_id: string; agent_name: string }>;
 
           cy.visit("/agents");
-          // Scoped to the nav specifically -- an unscoped cy.contains("Agent Console") matches
-          // the FIRST element anywhere on the page with that text, which is now TopNav's own
-          // status subtitle (usePageStatus("Agent Console", ...) sets that exact string), not
-          // the nav link this assertion actually means to check.
-          cy.get("nav").contains("Agent Console").should("be.visible");
-          cy.contains("Research Cycle").should("be.visible");
+          cy.url().should("include", "/console");
+          // Scoped to the nav specifically -- an unscoped cy.contains("Organization") could
+          // match content elsewhere on the page, not the nav link this assertion actually
+          // means to check.
+          cy.get("nav").contains("Organization").should("be.visible");
+          cy.get("nav").contains("Agent Console").should("not.exist");
+
+          cy.get('[role="tab"]').contains("Agents & Legacy Graph").click();
+          cy.contains("Legacy Graph").should("be.visible");
 
           if (realRuns.length > 0) {
             // Every real run this API returned really is a TradingOSGraph root run (see

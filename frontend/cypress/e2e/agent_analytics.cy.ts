@@ -1,4 +1,5 @@
-// REL-068: the Agent Console's new Analytics tab against the real running stack -- real login,
+// REL-068 + the /agents -> /console consolidation: the Organization Command Center's Analytics
+// tab (formerly the standalone Agent Console's) against the real running stack -- real login,
 // real GET /agents/analytics/summary + GET /agents/analytics/trend, real seeded AgentRun data
 // already confirmed non-empty in this dev DB (compliance/python_code_generator/etc. each have
 // dozens of real rows). No mocking.
@@ -13,18 +14,18 @@ function login() {
   cy.url().should("eq", Cypress.config().baseUrl + "/");
 }
 
-describe("Agent Console -- Analytics tab", () => {
-  it("Console tab is still the default after the Tabs wrap", () => {
+describe("Organization Command Center -- Analytics tab", () => {
+  it("Organization tab is the default, with the legacy graph and analytics tabs alongside it", () => {
     login();
-    cy.visit("/agents");
-    cy.contains("Research Cycle").should("be.visible");
-    cy.get('[role="tab"]').contains("Console").should("be.visible");
+    cy.visit("/console");
+    cy.get('[role="tab"]').contains("Organization").should("be.visible");
+    cy.get('[role="tab"]').contains("Agents & Legacy Graph").should("be.visible");
     cy.get('[role="tab"]').contains("Analytics").should("be.visible");
   });
 
   it("Analytics tab renders real per-agent stats and a real run-volume chart", () => {
     login();
-    cy.visit("/agents");
+    cy.visit("/console");
     cy.get('[role="tab"]').contains("Analytics").click();
 
     cy.contains("Daily Runs (Completed vs. Failed)").should("be.visible");
@@ -44,7 +45,7 @@ describe("Agent Console -- Analytics tab", () => {
 
   it("the day-range selector changes the real data requested", () => {
     login();
-    cy.visit("/agents");
+    cy.visit("/console");
     cy.get('[role="tab"]').contains("Analytics").click();
 
     // 30d is the default -- confirm it, then switch and confirm the real UI state actually

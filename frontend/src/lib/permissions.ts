@@ -16,9 +16,6 @@ export const PERMISSIONS = {
   manageHitl: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
   // src/api/routers/audit.py:_can_read_audit -- GET /audit/*.
   readAudit: [ROLES.SystemAdministrator, ROLES.ReadOnlyAuditor],
-  // src/api/routers/agents.py:_can_manage_hitl -- POST /agents/research/trigger (REL-011
-  // E10.11.0 closed this route's previously-nonexistent auth dependency).
-  triggerResearch: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
   // src/api/routers/agents.py:_can_manage_hitl -- PUT /agents/prompts/{slug}/active-version
   // (REL-011 E10.11.0).
   swapActivePrompt: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
@@ -71,6 +68,12 @@ export const PERMISSIONS = {
   // approvals.py's own docstring. Console's ApprovalQueue (T051) uses this to fully hide the
   // approve/reject controls for an ineligible role rather than show-then-403.
   manageOrgApprovals: [ROLES.SystemAdministrator, ROLES.PortfolioManager],
+  // src/api/routers/organization.py:_can_create_run -- POST /organization/runs. The Organization
+  // Command Center's own "submit a new objective" control, added when /agents (the legacy
+  // trigger-research page) was retired in favour of this console being the one place to start
+  // real work. Same role set _can_manage_hitl used to gate the old page's trigger control with,
+  // a deliberately equivalent-weight action under the new org-run model.
+  createOrgRun: [ROLES.SystemAdministrator, ROLES.PortfolioManager, ROLES.RiskManager],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

@@ -58,8 +58,8 @@ export default function StrategiesPage() {
               <Sparkles className="h-4 w-4 text-text-faint" />
             </IconBadge>
             <p className="text-xs text-text-faint">
-              No strategies yet — trigger a research cycle from the Agent Console to generate
-              one.
+              No strategies yet — submit an objective from the Organization command center to
+              generate one.
             </p>
           </div>
         ) : (

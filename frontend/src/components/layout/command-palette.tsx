@@ -7,12 +7,16 @@
 // Portfolio page rather than tripping it directly from here -- that gesture is a deliberate
 // friction the app already designed in for this exact safety-critical action, and a command
 // palette shouldn't bypass it.
+//
+// Retirement of the standalone Agent Console: its own "Trigger Research Cycle" quick action
+// (api.triggerResearch) was removed here too, for the same reason it was removed from
+// run-controls.tsx -- the CEO-led org run (the Organization tab's "New objective" panel) is now
+// the one real way to start work from the UI, and this palette's own stated design principle is
+// to surface only actions that still exist as one-click buttons elsewhere in the app.
 
 import { useEffect } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { LayoutGrid, LogOut, Play, ShieldAlert } from "lucide-react";
-import { api } from "@/lib/api";
+import { LayoutGrid, LogOut, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { usePermission } from "@/lib/usePermission";
 import { visibleLinks } from "@/lib/nav-links";
@@ -31,17 +35,7 @@ export function CommandPalette() {
   const { open, setOpen } = useCommandPaletteStore();
   const { user, logout } = useAuth();
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const canTriggerResearch = usePermission("triggerResearch");
   const canKillSwitch = usePermission("killSwitch");
-
-  const trigger = useMutation({
-    mutationFn: api.triggerResearch,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agent-runs"] });
-      router.push("/agents");
-    },
-  });
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -82,17 +76,6 @@ export function CommandPalette() {
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Quick Actions">
-          {canTriggerResearch && (
-            <CommandItem
-              onSelect={() => {
-                trigger.mutate();
-                setOpen(false);
-              }}
-            >
-              <Play className="h-3.5 w-3.5" />
-              Trigger Research Cycle
-            </CommandItem>
-          )}
           {canKillSwitch && (
             <CommandItem onSelect={() => go("/")}>
               <ShieldAlert className="h-3.5 w-3.5" />

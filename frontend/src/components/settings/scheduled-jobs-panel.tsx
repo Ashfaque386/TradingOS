@@ -13,7 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import { Gated } from "@/components/ui/gated";
 import { usePermission } from "@/lib/usePermission";
 import { ScheduleBuilder } from "@/components/settings/schedule-builder";
@@ -57,7 +57,7 @@ const HISTORY_PAGE_SIZE = 10;
  * covers both directions rather than one past-only helper (run-controls.tsx's own `relativeTime`)
  * plus a second future-only one. */
 function relativeToNow(iso: string): string {
-  const deltaMs = new Date(iso).getTime() - Date.now();
+  const deltaMs = parseBackendTimestamp(iso).getTime() - Date.now();
   const future = deltaMs >= 0;
   const abs = Math.abs(deltaMs);
   const minutes = Math.round(abs / 60_000);
@@ -72,7 +72,9 @@ function relativeToNow(iso: string): string {
 
 function duration(run: ScheduledJobRunEntry): string | null {
   if (!run.ended_at) return null;
-  const ms = new Date(run.ended_at).getTime() - new Date(run.started_at).getTime();
+  const ms =
+    parseBackendTimestamp(run.ended_at).getTime() -
+    parseBackendTimestamp(run.started_at).getTime();
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.round(ms / 60_000)}m`;
@@ -402,7 +404,9 @@ function ScheduledJobDetailPanel({ job }: { job: ScheduledJobSummary }) {
                   <div className="flex items-center justify-between gap-2">
                     <RunStatusBadge status={run.status} />
                     <span className="font-mono-tabular text-[9px] text-text-faint">
-                      {new Date(run.started_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
+                      {parseBackendTimestamp(run.started_at).toLocaleString("en-IN", {
+                        timeZone: "Asia/Kolkata",
+                      })}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 text-[10px] text-text-faint">

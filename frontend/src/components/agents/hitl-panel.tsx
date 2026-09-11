@@ -11,8 +11,9 @@ import { slideUp } from "@/lib/motion";
 import type { AgentRunDetail } from "@/lib/api";
 
 /** REL-011 E11.4b: retry/approve/reject for the Orchestrator HITL endpoints (REL-010 E10.8d) --
- * mounted inside the Agent Console's run-detail view (app/agents/page.tsx), next to the
- * read-only GraphFlowchart/ThoughtStream this run detail already renders. */
+ * mounted inside the Organization Command Center's "Agents & Legacy Graph" tab
+ * (app/console/page.tsx), next to the read-only GraphFlowchart/ThoughtStream this run detail
+ * already renders. */
 export function HitlPanel({ run }: { run: AgentRunDetail | null }) {
   const queryClient = useQueryClient();
   const [rejecting, setRejecting] = useState(false);

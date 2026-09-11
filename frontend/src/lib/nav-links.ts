@@ -8,7 +8,6 @@ import type { Role } from "@/lib/api";
 export const NAV_LINKS: { href: string; label: string; permission?: PermissionKey }[] = [
   { href: "/", label: "Portfolio & Risk" },
   { href: "/market-analysis", label: "Market Analysis" },
-  { href: "/agents", label: "Agent Console" },
   { href: "/console", label: "Organization" },
   { href: "/strategies", label: "Strategies" },
   { href: "/backtests", label: "Backtests" },

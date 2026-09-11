@@ -14,8 +14,8 @@ const DAY_RANGES = [7, 30, 90] as const;
 /** REL-068: real agent-execution analytics -- success rate, duration percentiles, and daily run
  * volume, all computed from the real AgentRun ledger (src/agents/analytics.py), scoped to what
  * the existing Grafana dashboard doesn't already show (infra/WS/order latency). Deliberately
- * lives as a tab within the existing Agent Console rather than a new top-level nav entry -- this
- * is exactly where a user would already look for agent-execution insight. */
+ * lives as a tab within the Organization Command Center rather than a new top-level nav entry --
+ * this is exactly where a user would already look for agent-execution insight. */
 export function AgentAnalyticsPanel() {
   const [days, setDays] = useState<(typeof DAY_RANGES)[number]>(30);
 

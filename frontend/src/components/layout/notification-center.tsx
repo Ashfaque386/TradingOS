@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bell } from "lucide-react";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { usePermission } from "@/lib/usePermission";
 import {
   Popover,
@@ -22,7 +23,7 @@ import type { AuditLogEntry } from "@/lib/api";
 const LAST_SEEN_KEY = "tradingos_notifications_last_seen";
 
 function relativeTime(iso: string): string {
-  const deltaMs = Date.now() - new Date(iso).getTime();
+  const deltaMs = Date.now() - parseBackendTimestamp(iso).getTime();
   const minutes = Math.round(deltaMs / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
