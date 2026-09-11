@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from src.agents.llm_router import complete
 from src.agents.nodes.common import extract_json
 from src.agents.prompt_registry import get_active_prompt
+from src.core.config import get_settings
 from src.models.orchestration import (
     OrganizationalDecision,
     OrganizationalPlan,
@@ -247,6 +248,17 @@ def _assert_safety_order(plan: _GeneratedPlan) -> None:
             )
 
 
+# T108 (research R20): the composite `strategy_research` task drives the whole research
+# sub-graph (multiple real LLM calls in series) and legitimately needs longer than every other
+# capability's single real call/query -- every task previously got a flat hardcoded 300s
+# regardless of shape, which is what let a hung `strategy_research` task sit unenforced.
+def _task_timeout_seconds(capability: str) -> int:
+    settings = get_settings()
+    if capability == "strategy_research":
+        return settings.org_research_task_timeout_seconds
+    return settings.org_task_default_timeout_seconds
+
+
 def _persist(session: Session, run: OrganizationRun, plan: _GeneratedPlan) -> OrganizationalPlan:
     now = datetime.now(UTC)
     plan_row = OrganizationalPlan(
@@ -282,7 +294,7 @@ def _persist(session: Session, run: OrganizationRun, plan: _GeneratedPlan) -> Or
             expected_output=t.expected_output[:80],
             status=TaskStatus.PLANNED.value,
             is_concurrency_safe=is_concurrency_safe(t.capability),
-            timeout_seconds=300,
+            timeout_seconds=_task_timeout_seconds(t.capability),
             correlation_id=run.thread_id,
             created_at=now,
         )

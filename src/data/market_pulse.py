@@ -39,6 +39,24 @@ def fetch_sector_history(ticker: str) -> pd.DataFrame:
     return cast(pd.DataFrame, yfinance.Ticker(ticker).history(period="5d", interval="1d"))
 
 
+# T100/BUG-D: global overnight cues for the Market Analyst Agent's `fetch_global_indices` skill --
+# S&P 500, Nasdaq Composite, Nikkei 225, WTI crude front-month future, and USD/INR, the same five
+# named in the task's own spec. Real yfinance tickers, confirmed working the same way
+# fetch_india_vix_history/fetch_sector_history already are; no new vendor/API key.
+GLOBAL_INDEX_TICKERS = {
+    "S&P 500": "^GSPC",
+    "Nasdaq Composite": "^IXIC",
+    "Nikkei 225": "^N225",
+    "Crude Oil (WTI)": "CL=F",
+    "USD/INR": "INR=X",
+}
+
+
+def fetch_global_index_history(ticker: str) -> pd.DataFrame:
+    """Real global-index/future/FX 5-day daily history via yfinance for one ticker."""
+    return cast(pd.DataFrame, yfinance.Ticker(ticker).history(period="5d", interval="1d"))
+
+
 @dataclass(frozen=True)
 class IndexPulse:
     name: str

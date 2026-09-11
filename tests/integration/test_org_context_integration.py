@@ -9,11 +9,16 @@ Scenario 4, SC-004/005, FR-042/043/044).
 - a `PortfolioRiskReport` artefact id is folded into a CEO decision's supporting inputs (FR-043).
 """
 
+from datetime import UTC, datetime
+
+from qdrant_client import QdrantClient
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.db import get_session
+from src.memory.news_memory import ingest_news_sentiment
 from src.models.orchestration import OrganizationRun, ResultArtefact, Task
-from src.orchestration import decisions, task_engine
+from src.orchestration import decisions, freshness, task_engine
 from src.orchestration.enums import DecisionType, TaskStatus
 from tests.orchestration_helpers import cleanup_run, seed_run_with_tasks
 
@@ -74,6 +79,24 @@ def _artefacts(run_id):
 
 
 def test_research_context_is_assembled_and_threaded_into_the_strategy_task():
+    # T113: `news_ingestion`/`sentiment_analysis` are real handlers now (real Qdrant reads of
+    # `news_sentiment` + the real "news" freshness record) -- seed both so this "everything
+    # available" happy path genuinely earns `coverage="full"` rather than a hardcoded one.
+    with get_session() as session:
+        freshness.record_ingestion_result(
+            session, "news", success=True, checksum_ok=True, has_data=True
+        )
+        session.commit()
+    point_id = ingest_news_sentiment(
+        title="Nifty IT index rallies on strong Q1 earnings",
+        summary="IT majors reported better-than-expected quarterly results.",
+        source="test-seed",
+        url="https://example.invalid/article",
+        published_at=datetime.now(UTC),
+        sentiment="Bullish",
+        confidence=0.85,
+        symbols_mentioned=["INFY"],
+    )
     run_id, keys = seed_run_with_tasks(_FULL_PLAN)
     try:
         task_engine.run_scheduler_loop(run_id)
@@ -114,6 +137,9 @@ def test_research_context_is_assembled_and_threaded_into_the_strategy_task():
             assert portfolio_id in decision.supporting_input_artefact_ids
     finally:
         cleanup_run(run_id)
+        QdrantClient(url=get_settings().qdrant_url).delete(
+            collection_name="news_sentiment", points_selector=[point_id]
+        )
 
 
 def test_missing_news_marks_the_context_reduced_with_the_gap_named():

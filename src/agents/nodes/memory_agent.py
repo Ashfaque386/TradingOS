@@ -1,10 +1,12 @@
 """Memory Agent v1 (AGT-009, PMPT-009) — Phase 2 Epic E2.4.
 
-Per Phase_4_AI_Agent_Design.md §9, this agent "runs asynchronously every weekend" -- no
-scheduler exists yet (Temporal is deferred; see Phase_14 REL-002 E2.2 notes), so these are
-plain callables a future scheduled job will invoke, not a LangGraph node wired into the main
-research graph. "Never delete critical historical knowledge without archival" (§9): low-
-confidence memories are marked `status="archived"` in place, never hard-deleted.
+Per Phase_4_AI_Agent_Design.md §9, this agent "runs asynchronously every weekend" -- these are
+plain callables, not a LangGraph node wired into the main research graph, invoked by the real
+weekend job `src.agents.scheduler::run_weekend_memory_consolidation` (REL-081, APScheduler; BUG-H
+correction -- this docstring previously said "no scheduler exists yet", which was true when
+written but is stale as of REL-081). "Never delete critical historical knowledge without
+archival" (§9): low-confidence memories are marked `status="archived"` in place, never
+hard-deleted.
 """
 
 from typing import Any

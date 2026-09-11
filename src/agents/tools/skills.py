@@ -16,12 +16,13 @@ Real, working skills (backed by infrastructure that already exists from Phase 1/
     working tickers, no new vendor/API key.
   - query_news_sentiment: real Qdrant semantic search over the news_sentiment collection
     (REL-010 E10.3).
+  - fetch_global_indices: real S&P 500/Nasdaq/Nikkei 225/WTI crude/USD-INR closes via the same
+    yfinance adapter (T100/BUG-D), the IndiaVixSkill pattern applied to 5 tickers instead of 1.
 
-Honestly-stubbed skills (no live data source wired up yet -- each raises SkillNotImplementedError
-rather than fabricating market data): fetch_global_indices, query_macro_calendar. These need a
-market-data vendor decision (fetch_global_indices) or a confirmed free structured source
-(query_macro_calendar -- no free public RBI policy-calendar feed could be confirmed as of
-REL-010 implementation time), not yet made/found as of this docstring's last update.
+Honestly-stubbed skills (no live data source wired up yet -- raises SkillNotImplementedError
+rather than fabricating market data): query_macro_calendar. No free public RBI policy-calendar
+feed could be confirmed as of REL-010 implementation time, still true as of this docstring's last
+update -- needs a confirmed structured source before it can be real.
 """
 
 import ast
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import black
+import structlog
 from qdrant_client import QdrantClient
 
 from src.agents.tools.base import BaseSkill
@@ -43,10 +45,18 @@ from src.agents.tools.notifiers import (
 from src.core import vault
 from src.core.config import get_settings
 from src.core.db import get_session
-from src.data.market_pulse import SECTOR_TICKERS, fetch_india_vix_history, fetch_sector_history
+from src.data.market_pulse import (
+    GLOBAL_INDEX_TICKERS,
+    SECTOR_TICKERS,
+    fetch_global_index_history,
+    fetch_india_vix_history,
+    fetch_sector_history,
+)
 from src.engine.sandbox.runner import execute_in_sandbox
 from src.memory.embeddings import embed_text
 from src.models.trading import PortfolioPosition
+
+logger = structlog.get_logger(__name__)
 
 BANNED_AST_CALLS = {"eval", "exec", "compile", "__import__", "setattr"}
 BANNED_IMPORT_MODULES = {"os", "subprocess", "socket", "shutil", "sys", "ctypes"}
@@ -290,12 +300,34 @@ class PortfolioStatusSkill(BaseSkill):
 
 class GlobalIndicesSkill(BaseSkill):
     name = "fetch_global_indices"
-    description = "STUB: SGX Nifty / NASDAQ overnight cues -- no market-data vendor wired yet."
+    description = (
+        "Real S&P 500 / Nasdaq / Nikkei 225 / WTI crude / USD-INR closes via the "
+        "already-integrated yfinance adapter (T100/BUG-D) -- no new vendor/API key."
+    )
+    version = "1.0.0"
 
     def execute(self, **kwargs: Any) -> Any:
-        raise SkillNotImplementedError(
-            "fetch_global_indices needs a global-indices data vendor decision (not yet made)"
-        )
+        results: dict[str, dict[str, Any]] = {}
+        for name, ticker in GLOBAL_INDEX_TICKERS.items():
+            try:
+                history = fetch_global_index_history(ticker)
+            except Exception as exc:  # noqa: BLE001 -- one bad ticker must not sink the others
+                logger.warning("fetch_global_indices_ticker_failed", ticker=ticker, error=str(exc))
+                continue
+            if history.empty:
+                continue
+            last_row = history.iloc[-1]
+            results[name] = {
+                "ticker": ticker,
+                "date": history.index[-1].date().isoformat(),
+                "close": float(last_row["Close"]),
+            }
+        if not results:
+            raise SkillNotImplementedError(
+                "fetch_global_indices: yfinance returned no data for any of "
+                f"{list(GLOBAL_INDEX_TICKERS.values())}"
+            )
+        return results
 
 
 class IndiaVixSkill(BaseSkill):

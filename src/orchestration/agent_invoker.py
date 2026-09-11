@@ -4,12 +4,19 @@
 known), gathers the upstream artefacts the task depends on, invokes the capability handler, and
 persists the result as a typed ``ResultArtefact`` with provenance.
 
-MVP scope: the ``synthesize`` capability makes a real ``complete()`` call; every other
-capability currently produces an honestly-labelled placeholder artefact so the *engine*
-(parallelism, dependency-aware waiting, lifecycle, events) is fully exercisable end to end. The
-real per-agent handlers (market/news/sentiment via the existing node functions, the composite
-``strategy_research`` sub-graph via ``build_graph()``) are wired by the US4/US6 phases -- the
-handler table below is the single seam for that.
+T113 (closing the US4/US6 handler-binding deferral that T036/T055/T077 each chained onto the
+next story without ever landing): ``market_analysis`` calls the real ``market_analyst_node``
+standalone; ``news_ingestion``/``sentiment_analysis`` read the real, already-scored data the
+scheduled ``run_news_sentiment_cycle`` job writes to the ``news_sentiment`` Qdrant collection
+(never re-run ingestion synchronously inside a task -- that would duplicate a job that already
+runs every 30 minutes and make an org task wait on network I/O it doesn't own); ``portfolio_read``
+queries the real ``portfolio_positions`` table for the seeded Paper account. ``synthesize`` /
+``orchestrate`` / ``context_assembly`` / ``adhoc_synthesis`` were already real (T035/T054/T146).
+Still an honest placeholder: the composite ``strategy_research`` capability (running the full
+``build_graph()`` sub-graph synchronously from inside a task is a materially bigger, safety-
+adjacent integration -- constitution IV's safety-ordering still applies unchanged inside that
+sub-graph either way, but doing it correctly needs its own reviewed task, not a drive-by addition
+here) -- tracked as tasks.md T113b for a dedicated pass.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -160,45 +168,17 @@ def _adhoc_synthesis_handler(
     return "AdHocAnalysis", payload, {"provider_used": provider_used, "tools_used": []}
 
 
-# Minimal schema-valid payloads per context capability, so the placeholder path still produces
-# *correctly typed* NewsDigest / SentimentReport / PortfolioRiskReport artefacts (their real
-# per-agent handlers are wired in a later phase -- US6). Provenance still links every source.
-_CONTEXT_PLACEHOLDERS: dict[str, tuple[str, dict[str, Any]]] = {
-    "news_ingestion": (
-        "NewsDigest",
-        {"headlines": [], "source_count": 1, "reduced_coverage": False},
-    ),
-    "sentiment_analysis": ("SentimentReport", {"per_symbol": {}, "per_sector": {}}),
-    "portfolio_read": ("PortfolioRiskReport", {"exposures": {}, "notes": "placeholder snapshot"}),
-    "market_analysis": (
-        "MarketContext",
-        {
-            "market_regime": "Sideways",
-            "sector_rankings": [],
-            "volatility_assessment": "unknown (placeholder)",
-            "macro_outlook": "unknown (placeholder)",
-            "confidence_score": 0.0,
-            "insights": [],
-        },
-    ),
-}
-
-
 def _placeholder_handler(
     session: Session, task: Task, upstream: list[ResultArtefact]
 ) -> HandlerResult:
     """Honestly-labelled placeholder artefact of the task's declared type -- keeps the engine
-    exercisable while the real handler for this capability is a later phase."""
+    exercisable while the real handler for this capability doesn't exist yet (currently just
+    ``strategy_research``, T113 -- see its module docstring)."""
     from src.core.config import get_settings
 
     delay = get_settings().org_placeholder_task_delay_seconds
     if delay > 0:
         time.sleep(delay)
-
-    typed = _CONTEXT_PLACEHOLDERS.get(task.capability)
-    if typed is not None:
-        artefact_type, typed_payload = typed
-        return artefact_type, dict(typed_payload), {"tools_used": []}
 
     schema_type = task.expected_output or "AdHocAnalysis"
     payload: dict[str, Any] = {
@@ -211,6 +191,185 @@ def _placeholder_handler(
     }
     # Fall back to the AdHocAnalysis shape if the declared type has a stricter schema.
     return _coerce_or_adhoc(schema_type, payload), payload, {"tools_used": []}
+
+
+# --- real per-agent handlers (T113) ---------------------------------------------------------------
+
+
+def _market_analysis_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """Real Market Analyst Agent call. A minimal ``TradingOSGraphState`` is enough --
+    ``market_analyst_node`` only reads ``state.research_directive``, which is ``None`` here
+    exactly as it is on the graph's own first node in `trigger_research`'s entry state (not a
+    synthetic input invented for this seam)."""
+    from src.agents.nodes.market_analyst import market_analyst_node
+    from src.agents.state import TradingOSGraphState
+
+    try:
+        result = market_analyst_node(TradingOSGraphState(thread_id=f"org-task-{task.id}"))
+        payload = result["market_context"].model_dump(mode="json")
+        provider_used: str | None = "research-chain"
+    except Exception as exc:  # noqa: BLE001 -- an honest failed-analysis artefact beats a crash
+        logger.warning("market_analysis_handler_failed", task_id=str(task.id), error=str(exc))
+        payload = {
+            "market_regime": "Sideways",
+            "sector_rankings": [],
+            "volatility_assessment": f"unavailable: {exc}",
+            "macro_outlook": f"unavailable: {exc}",
+            "confidence_score": 0.0,
+            "insights": [],
+        }
+        provider_used = None
+    return (
+        "MarketContext",
+        payload,
+        {
+            "provider_used": provider_used,
+            "tools_used": ["market_analyst_node"],
+        },
+    )
+
+
+def _recent_news_sentiment_points(limit: int = 200) -> list[dict[str, Any]]:
+    """Real, unfiltered scroll (no query vector -- this is "what's there", not semantic search)
+    over the ``news_sentiment`` Qdrant collection, newest-first by ``published_at``. Shared by
+    ``news_ingestion`` and ``sentiment_analysis`` so both see exactly the same real data the
+    scheduled ``run_news_sentiment_cycle`` job wrote via ``ingest_news_sentiment``."""
+    from qdrant_client import QdrantClient
+
+    from src.core.config import get_settings
+
+    client = QdrantClient(url=get_settings().qdrant_url)
+    points, _ = client.scroll(collection_name="news_sentiment", limit=limit, with_payload=True)
+    rows = [p.payload for p in points if p.payload]
+    rows.sort(key=lambda r: r.get("published_at") or "", reverse=True)
+    return rows
+
+
+# Matches the "news" dataset's own documented freshness rule (freshness.KNOWN_DATASETS: "fresh if
+# updated within the last 2 hours") with slack for the digest to still show the last real cycle's
+# output rather than going empty the instant the cadence window closes; `reduced_coverage` (not
+# this window) is what tells a consumer the data is stale, per FR-044.
+_NEWS_RECENCY_WINDOW = timedelta(hours=6)
+
+
+def _recent_within_window(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = datetime.now(UTC)
+    recent = []
+    for row in rows:
+        published_at = row.get("published_at")
+        if published_at:
+            try:
+                ts = datetime.fromisoformat(published_at)
+            except ValueError:
+                recent.append(row)
+                continue
+            if now - ts > _NEWS_RECENCY_WINDOW:
+                continue
+        recent.append(row)
+    return recent
+
+
+def _news_ingestion_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """Real ``NewsDigest`` built from the ``news_sentiment`` Qdrant collection -- reads what the
+    scheduled ingestion cycle already wrote rather than re-running RSS ingestion synchronously
+    inside a task (FR-040)."""
+    recent = _recent_within_window(_recent_news_sentiment_points())
+    fresh = freshness.is_fresh(session, "news")
+    headlines = [
+        {"title": r.get("title", ""), "source": r.get("source", ""), "url": r.get("url", "")}
+        for r in recent[:20]
+    ]
+    symbols = sorted({s for r in recent for s in (r.get("symbols_mentioned") or [])})
+    sources = {r.get("source") for r in recent if r.get("source")}
+    payload = {
+        "headlines": headlines,
+        "affected_symbols": symbols,
+        "affected_sectors": [],
+        "urgency": "Routine",
+        "source_count": len(sources),
+        "reduced_coverage": (not fresh) or not recent,
+    }
+    return "NewsDigest", payload, {"tools_used": ["news_sentiment_qdrant_scroll"]}
+
+
+_SENTIMENT_SCORE = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
+
+
+def _sentiment_analysis_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """Real ``SentimentReport`` aggregated from the same scored ``news_sentiment`` points --
+    per-symbol mean of the Sentiment Agent's own bullish/neutral/bearish score, never a fabricated
+    number when no item mentions a symbol (that symbol is just absent from ``per_symbol``)."""
+    recent = _recent_within_window(_recent_news_sentiment_points())
+    per_symbol_scores: dict[str, list[float]] = {}
+    confidences: list[float] = []
+    for row in recent:
+        score = _SENTIMENT_SCORE.get(str(row.get("sentiment", "")).lower())
+        confidence = row.get("confidence")
+        if isinstance(confidence, int | float):
+            confidences.append(float(confidence))
+        if score is None:
+            continue
+        for symbol in row.get("symbols_mentioned") or []:
+            per_symbol_scores.setdefault(symbol, []).append(score)
+    per_symbol = {sym: sum(vals) / len(vals) for sym, vals in per_symbol_scores.items()}
+    payload = {
+        "per_symbol": per_symbol,
+        "per_sector": {},
+        "trending_topics": [],
+        "confidence": (sum(confidences) / len(confidences)) if confidences else 0.0,
+        "sample_size": len(recent),
+    }
+    return "SentimentReport", payload, {"tools_used": ["news_sentiment_qdrant_scroll"]}
+
+
+def _portfolio_read_handler(
+    session: Session, task: Task, upstream: list[ResultArtefact]
+) -> HandlerResult:
+    """Real ``PortfolioRiskReport`` snapshot from ``portfolio_positions`` for the seeded Paper
+    account -- the same table/lookup ``fetch_portfolio_status`` and the risk pipeline already use
+    (FR-043); no seeded account is a real, honest empty state, not a fabricated one."""
+    from src.engine.paper_trading.paper_account import get_paper_account
+    from src.models.trading import PortfolioPosition
+
+    try:
+        account = get_paper_account(session)
+    except RuntimeError as exc:
+        return (
+            "PortfolioRiskReport",
+            {"exposures": {}, "highest_risk_positions": [], "notes": str(exc)},
+            {"tools_used": ["portfolio_positions_query"]},
+        )
+
+    positions = list(
+        session.scalars(
+            select(PortfolioPosition).where(PortfolioPosition.account_id == account.id)
+        ).all()
+    )
+    exposures = {p.symbol: float(p.net_quantity) * float(p.avg_price or 0.0) for p in positions}
+    ranked = sorted(positions, key=lambda p: float(p.unrealized_pnl))[:5]
+    highest_risk: list[dict[str, Any]] = [
+        {
+            "symbol": p.symbol,
+            "net_quantity": p.net_quantity,
+            "unrealized_pnl": float(p.unrealized_pnl),
+        }
+        for p in ranked
+    ]
+    payload = {
+        "total_capital": None,
+        "used_capital": None,
+        "available_to_trade": None,
+        "exposures": exposures,
+        "highest_risk_positions": highest_risk,
+        "notes": f"{len(positions)} open position(s)" if positions else "no open positions",
+    }
+    return "PortfolioRiskReport", payload, {"tools_used": ["portfolio_positions_query"]}
 
 
 # --- context assembly (T054, FR-042/044) ---------------------------------------------------------
@@ -247,7 +406,7 @@ def _context_assembly_handler(
 
     payload: dict[str, Any] = {
         "market_regime": (market.payload.get("market_regime") if market is not None else None),
-        "sector_strengths": (market.payload.get("sector_strengths", {}) if market else {}),
+        "sector_rankings": (market.payload.get("sector_rankings", []) if market else []),
         "news_summary": (
             f"{len(news.payload.get('headlines', []))} headline(s)"
             if news is not None
@@ -280,6 +439,10 @@ CAPABILITY_HANDLERS: dict[str, Handler] = {
     "orchestrate": _synthesize_handler,
     "context_assembly": _context_assembly_handler,
     "adhoc_synthesis": _adhoc_synthesis_handler,
+    "market_analysis": _market_analysis_handler,
+    "news_ingestion": _news_ingestion_handler,
+    "sentiment_analysis": _sentiment_analysis_handler,
+    "portfolio_read": _portfolio_read_handler,
 }
 
 

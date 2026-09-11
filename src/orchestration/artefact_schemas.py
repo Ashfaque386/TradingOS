@@ -73,7 +73,11 @@ class ResearchContext(_Artefact):
     """Assembled organisational context handed to the research sub-graph (FR-042/044)."""
 
     market_regime: str | None = None
-    sector_strengths: dict[str, float] = {}
+    # Real Market Analyst output ranks sectors (list[str]), it doesn't score them numerically --
+    # this used to be typed `dict[str, float]` ("sector_strengths") and always read the wrong key
+    # off MarketContext (which has no such field), so it silently stayed `{}` for both the old
+    # placeholder and the real handler alike. Fixed alongside the real handler wiring (T113).
+    sector_rankings: list[str] = []
     news_summary: str = ""
     sentiment: dict[str, float] = {}
     portfolio_exposure: dict[str, float] = {}

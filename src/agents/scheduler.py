@@ -82,6 +82,7 @@ AUDIT_ARCHIVE_JOB_ID = "scheduler_audit_archive"
 AUDIT_CHAIN_VERIFICATION_JOB_ID = "scheduler_audit_chain_verification"
 DATA_LAKE_BACKUP_JOB_ID = "scheduler_data_lake_backup"
 DUCKDB_CATALOG_REFRESH_JOB_ID = "scheduler_duckdb_catalog_refresh"
+STALLED_RUN_SWEEP_JOB_ID = "scheduler_stalled_run_sweep"
 # REL-010 E10.7: no intraday-ingestion job is wired here -- Upstox's real historical-candle
 # endpoint 404s in sandbox mode (confirmed empirically, see
 # src/brokers/upstox_adapter.py::get_historical_candles's own docstring) and this dev
@@ -111,10 +112,18 @@ def run_daily_research_cycle() -> JobResult:
     """Business Rule 4 (Data Freshness) gate, then the real research-cycle trigger -- deferring
     rather than triggering a cycle against a stale or empty data lake, per the Scheduler Agent
     spec's "retry or defer triggers on upstream failure rather than launching a pipeline against
-    stale or incomplete data." Deferred import of `trigger_research` avoids a circular import
-    (src.api.main -> this module -> src.api.routers.agents, which itself is imported by
-    src.api.main when building the FastAPI app)."""
-    from src.api.routers.agents import trigger_research
+    stale or incomplete data."
+
+    T029/FR-001: now goes through `run_manager.create_run` (the CEO-led organisation path,
+    US1/US2), not `trigger_research()` directly -- deferred until the org task engine existed to
+    actually drive a plan to completion (US2), and until `strategy_research` had a real handler
+    behind it so the org path didn't silently stop at a plan (this closure lands as part of T113
+    below: `agent_invoker`'s real market/news/sentiment/portfolio handlers plus the still-honest
+    `strategy_research` placeholder mean this now produces genuinely CEO-delegated organisational
+    work, same as the manual `POST /organization/runs` path already exercised since US1).
+    `trigger_research` stays importable/tested for any caller that still wants the single-thread
+    graph run directly (e.g. the dev-only manual trigger endpoint)."""
+    from src.orchestration.run_manager import create_run
 
     lake = DataLake(get_settings().data_lake_root / "ohlcv_daily")
     symbols = lake.list_symbols()
@@ -127,9 +136,16 @@ def run_daily_research_cycle() -> JobResult:
         logger.warning("scheduler_daily_cycle_deferred", error=str(exc))
         return JobResult("Skipped", f"data not fresh: {exc}")
 
-    trigger_research()
-    logger.info("scheduler_daily_cycle_triggered", symbols=symbols)
-    return JobResult("Completed", f"research cycle triggered for {len(symbols)} symbol(s)")
+    with get_session() as session:
+        run = create_run(
+            session,
+            objective="prepare tomorrow's trading research",
+            source="schedule",
+        )
+        session.commit()
+        run_id = run.id
+    logger.info("scheduler_daily_cycle_triggered", symbols=symbols, run_id=str(run_id))
+    return JobResult("Completed", f"organisation run {run_id} created for {len(symbols)} symbol(s)")
 
 
 def run_corporate_actions_ingestion() -> JobResult:
@@ -248,7 +264,14 @@ def run_news_sentiment_cycle() -> JobResult:
 
     REL-019 E19.2 (ADR 11): News and Sentiment are two separately controllable agents (AGT-013/
     AGT-014) sharing one scheduled job, so each gets its own real control-state check rather than
-    one combined check that couldn't distinguish "skip ingestion" from "skip scoring"."""
+    one combined check that couldn't distinguish "skip ingestion" from "skip scoring".
+
+    T113: reports the real "news" dataset freshness (freshness.KNOWN_DATASETS) each cycle -- the
+    org task engine's `news_ingestion`/`sentiment_analysis` handlers ask `is_fresh(session,
+    "news")` before presenting this cycle's Qdrant data as current (FR-061/062). Both agents
+    disabled (nothing to ingest, by admin choice) is reported `unavailable`, not a fabricated
+    `fresh`; at least one item scored is the same real "produced real rows" signal T086 already
+    uses for `ohlcv_daily`."""
     try:
         with get_session() as session:
             news_enabled = is_agent_enabled(session, "news_agent")
@@ -272,9 +295,24 @@ def run_news_sentiment_cycle() -> JobResult:
             items_ingested=len(items),
             items_scored=len(point_ids),
         )
+        with get_session() as session:
+            freshness.record_ingestion_result(
+                session,
+                "news",
+                success=news_enabled and sentiment_enabled,
+                checksum_ok=True,
+                has_data=bool(point_ids),
+                detail=f"items_ingested={len(items)} items_scored={len(point_ids)}",
+            )
+            session.commit()
         return JobResult("Completed", f"items_ingested={len(items)} items_scored={len(point_ids)}")
     except Exception as exc:  # noqa: BLE001 - a failed cycle must not crash the app
         logger.warning("scheduler_news_sentiment_cycle_failed", error=str(exc))
+        with get_session() as session:
+            freshness.record_ingestion_result(
+                session, "news", success=False, checksum_ok=False, has_data=False, detail=str(exc)
+            )
+            session.commit()
         return JobResult("Failed", str(exc))
 
 
@@ -478,6 +516,25 @@ def run_duckdb_catalog_refresh_job() -> JobResult:
         return JobResult("Failed", str(exc))
 
 
+def run_stalled_run_sweep() -> JobResult:
+    """T108 (research R20): `run_scheduler_loop` is synchronous and returns as soon as nothing is
+    ready, so a `waiting` organisation run with no pending approval and nothing left to make it
+    ready again would otherwise sit unnoticed forever -- this periodic sweep is what actually
+    flags it `stalled` for the attention queue (`task_engine.check_stalled_runs`'s own
+    docstring has the full reasoning). Never auto-fails a run; a human decides what to do with a
+    stalled one."""
+    from src.orchestration.task_engine import check_stalled_runs
+
+    try:
+        flagged = check_stalled_runs()
+        if flagged:
+            logger.info("scheduler_stalled_run_sweep_flagged", count=flagged)
+        return JobResult("Completed", f"flagged={flagged}")
+    except Exception as exc:  # noqa: BLE001 - a failed sweep must not crash the app
+        logger.warning("scheduler_stalled_run_sweep_failed", error=str(exc))
+        return JobResult("Failed", str(exc))
+
+
 # --- REL-081: the real, editable schedule registry + execution tracking ------------------------
 
 
@@ -601,6 +658,16 @@ JOB_REGISTRY: dict[str, ScheduledJobSpec] = {
         "DuckDB client can query them directly without going through the DataLake Python class.",
         default_cron="30 23 * * *",
         func=run_duckdb_catalog_refresh_job,
+        is_async=False,
+    ),
+    STALLED_RUN_SWEEP_JOB_ID: ScheduledJobSpec(
+        job_id=STALLED_RUN_SWEEP_JOB_ID,
+        display_name="Stalled Organisation Run Sweep",
+        description="T108: flags a `waiting` organisation run `stalled` (attention queue, never "
+        "auto-failed) once it has gone ORG_RUN_STALL_SECONDS (default 900s) with no progress and "
+        "no pending approval.",
+        default_cron="*/5 * * * *",
+        func=run_stalled_run_sweep,
         is_async=False,
     ),
 }

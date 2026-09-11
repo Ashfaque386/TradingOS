@@ -81,7 +81,7 @@ def seed_run_with_tasks(
                 expected_output=str(spec.get("expected_output", "AdHocAnalysis")),
                 status="planned",
                 is_concurrency_safe=is_concurrency_safe(cap),
-                timeout_seconds=300,
+                timeout_seconds=int(spec.get("timeout_seconds") or 300),  # type: ignore[arg-type]
                 correlation_id=run.thread_id,
                 created_at=now,
             )

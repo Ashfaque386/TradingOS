@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import func, select, text
@@ -114,6 +114,7 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
             return
         task = session.get(Task, task_id)
         assert task is not None
+        timeout_seconds = task.timeout_seconds
         events.emit(
             session,
             run_id=run_id,
@@ -124,16 +125,63 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
         )
         session.commit()
 
-    # --- run ---
+    # --- run, with a real per-task timeout (T108, research R20) -----------------------------
+    # `agent_invoker.dispatch` runs in its own thread with its own DB session (never one shared
+    # across threads) so the calling thread can bound how long it waits without touching the
+    # dispatch thread's state. Python cannot forcibly kill a running thread, so a task that
+    # exceeds its timeout is declared `failed` here while its dispatch call is left to finish (or
+    # error) on its own; `_run_dispatch_and_complete`'s own conditional
+    # `UPDATE ... WHERE status='running'` is what stops that orphaned result from resurrecting a
+    # task already marked failed. A timeout skips the normal bounded-retry ladder (same reasoning
+    # as `DataStaleError`: a task that hangs once is likely to hang again, and retrying would race
+    # a still-running orphan). No `with` block here deliberately -- its `__exit__` would call
+    # `shutdown(wait=True)` and block on exactly the orphaned thread this is trying not to wait on.
+    one_shot = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = one_shot.submit(_run_dispatch_and_complete, run_id, task_id)
+    try:
+        future.result(timeout=timeout_seconds)
+        one_shot.shutdown(wait=False)
+    except concurrent.futures.TimeoutError:
+        logger.warning("org_task_timed_out", task_id=str(task_id), timeout_seconds=timeout_seconds)
+        _handle_task_timeout(run_id, task_id, timeout_seconds)
+        # Don't block this call on the orphaned thread -- it may still be inside a blocking
+        # LLM/network call for up to its own client-side timeout.
+        one_shot.shutdown(wait=False)
+
+
+def _run_dispatch_and_complete(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
+    """The actual dispatch + completion write, run inside `_execute_task`'s bounded-wait
+    executor. Its own session, never shared with the calling thread."""
     try:
         with get_session() as session:
             task = session.get(Task, task_id)
             assert task is not None
             agent_invoker.dispatch(session, task)
             now = datetime.now(UTC)
-            task.status = TaskStatus.COMPLETED.value
-            task.completed_at = now
             started = _as_utc(task.started_at)
+            duration = (now - started).total_seconds() if started else None
+            # Conditional on 'running': a timeout may have already declared this task failed
+            # while this call was still in flight -- that result wins, this one is discarded.
+            claimed = session.execute(
+                text(
+                    "UPDATE tasks SET status = :completed, completed_at = :now "
+                    "WHERE id = :id AND status = :running RETURNING id"
+                ),
+                {
+                    "completed": TaskStatus.COMPLETED.value,
+                    "running": TaskStatus.RUNNING.value,
+                    "now": now,
+                    "id": str(task_id),
+                },
+            ).first()
+            if claimed is None:
+                logger.warning(
+                    "org_task_result_discarded_after_timeout",
+                    task_id=str(task_id),
+                    reason="task was no longer 'running' (already timed out/failed)",
+                )
+                session.rollback()
+                return
             events.emit(
                 session,
                 run_id=run_id,
@@ -142,7 +190,7 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
                 subject_id=task_id,
                 payload={
                     "result_artefact_id": str(task.result_artefact_id),
-                    "duration_seconds": ((now - started).total_seconds() if started else None),
+                    "duration_seconds": duration,
                 },
             )
             dependency_resolver.evaluate_on_completion(session, task)
@@ -161,6 +209,40 @@ def _execute_task(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
             error_type=type(exc).__name__,
         )
         _handle_task_failure(run_id, task_id, exc)
+
+
+def _handle_task_timeout(run_id: uuid.UUID, task_id: uuid.UUID, timeout_seconds: int) -> None:
+    with get_session() as session:
+        claimed = session.execute(
+            text(
+                "UPDATE tasks SET status = :failed, completed_at = :now "
+                "WHERE id = :id AND status = :running RETURNING id"
+            ),
+            {
+                "failed": TaskStatus.FAILED.value,
+                "running": TaskStatus.RUNNING.value,
+                "now": datetime.now(UTC),
+                "id": str(task_id),
+            },
+        ).first()
+        if claimed is None:
+            # Already resolved (e.g. it happened to complete in the same instant) -- nothing to do.
+            session.commit()
+            return
+        task = session.get(Task, task_id)
+        assert task is not None
+        task.failure_reason = f"timed out after {timeout_seconds}s"
+        events.emit(
+            session,
+            run_id=run_id,
+            event_type="task.failed",
+            subject_type="task",
+            subject_id=task_id,
+            payload={"failure_reason": task.failure_reason, "reason": "timeout"},
+            audited=True,
+        )
+        dependency_resolver.mark_unsatisfiable(session, task, task.failure_reason)
+        session.commit()
 
 
 def _handle_data_stale(
@@ -461,3 +543,43 @@ def _record_timings(session: Session, tasks: list[Task]) -> None:
             if latest is not None:
                 t.dependency_wait_seconds = max(0, int((t.started_at - latest).total_seconds()))
     session.flush()
+
+
+def check_stalled_runs() -> int:
+    """T108 (research R20): a `waiting` run with no pending approval whose `updated_at` hasn't
+    moved in `ORG_RUN_STALL_SECONDS` gets flagged `stalled` -- an attention-queue entry
+    (`GET /organization/attention` already reads `RunStatus.STALLED`, T063/T088), never an
+    auto-fail (a human decides whether to cancel/replan/wait longer). `run_scheduler_loop` itself
+    can't notice this on its own: it's synchronous and returns as soon as nothing is ready, so a
+    run that will never become ready again just sits in `waiting` with nothing left to re-poll
+    it -- this is that periodic re-poll, meant to run on a schedule (`src.agents.scheduler`).
+
+    Returns the number of runs newly flagged."""
+    threshold = datetime.now(UTC) - timedelta(seconds=get_settings().org_run_stall_seconds)
+    flagged = 0
+    with get_session() as session:
+        candidates = session.scalars(
+            select(OrganizationRun).where(
+                OrganizationRun.status == RunStatus.WAITING.value,
+                OrganizationRun.updated_at < threshold,
+            )
+        ).all()
+        for run in candidates:
+            if _has_pending_approval(session, run.id):
+                # Legitimately waiting on a human, not stalled -- the approvals queue already
+                # surfaces it (FR-057: no timeout auto-resolves an approval either).
+                continue
+            run.status = RunStatus.STALLED.value
+            run.updated_at = datetime.now(UTC)
+            events.emit(
+                session,
+                run_id=run.id,
+                event_type="organization.run.stalled",
+                subject_type="run",
+                subject_id=run.id,
+                payload={"stall_seconds": get_settings().org_run_stall_seconds},
+                audited=True,
+            )
+            flagged += 1
+        session.commit()
+    return flagged
