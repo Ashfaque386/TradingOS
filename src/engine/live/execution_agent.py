@@ -20,6 +20,7 @@ agent's; blindly retrying a 5xx here would double up with, and race, that mechan
 """
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Callable
@@ -34,10 +35,41 @@ from sqlalchemy.orm import Session
 from src.agents.control import is_agent_enabled
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderResponse
 from src.core.audit import write_audit_entry
+from src.memory.redis_client import get_redis_client, publish_order_event
 from src.models.trading import Order as OrderModel
 from src.observability.tracing import get_tracer
 
 _tracer = get_tracer(__name__)
+
+
+def _publish_order_placed_event(order_row: OrderModel) -> None:
+    """T101/BUG-F: same real, best-effort publish `POST /orders` already makes for the manual
+    Live path (src/api/routers/orders.py::_publish_order_event, REL-061/API-093) -- relayed
+    verbatim by `GET /stream/orders`. A Redis hiccup must never fail an order that has already
+    been placed at the broker and persisted, so publish failures are swallowed, not raised."""
+    try:
+        client = get_redis_client()
+        try:
+            publish_order_event(
+                client,
+                json.dumps(
+                    {
+                        "account_scope": "Live",
+                        "order_id": str(order_row.id),
+                        "broker_order_id": order_row.broker_order_id,
+                        "symbol": order_row.symbol,
+                        "side": order_row.side,
+                        "quantity": order_row.quantity,
+                        "status": order_row.status,
+                        "ts": order_row.requested_at.isoformat(),
+                    }
+                ),
+            )
+        finally:
+            client.close()
+    except Exception:  # noqa: BLE001 -- a display-feed publish failure must never fail the order
+        pass
+
 
 TERMINAL_STATUSES = frozenset({"FILLED", "CANCELLED", "REJECTED"})
 DEFAULT_MAX_RETRIES = 3
@@ -204,6 +236,8 @@ class ExecutionAgent:
             },
         )
         session.commit()
+        session.refresh(order_row)
+        _publish_order_placed_event(order_row)
 
     @staticmethod
     def _update_order_row(session: Session, response: OrderResponse) -> None:

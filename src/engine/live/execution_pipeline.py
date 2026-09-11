@@ -27,14 +27,19 @@ without changing this class.
 """
 
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+
+from sqlalchemy.orm import Session
 
 from src.brokers.base import BrokerAdapter, OrderRequest, OrderResponse, OrderType, Side
 from src.core.audit import write_audit_entry
 from src.core.db import get_session
+from src.engine.live.execution_agent import ExecutionAgent
 from src.engine.risk.compliance_checker import evaluate_compliance
 from src.engine.risk.kill_switch import MaxDrawdownKillSwitch
 from src.engine.risk.naked_options_scanner import OptionLeg
@@ -103,10 +108,10 @@ def compliance_pre_trade_check(signal: TradeSignal) -> None:
 
     On `Block`, writes the real AuditLog entry itself, synchronously, before raising
     `RiskRejected` -- a Block here means no Order row will ever exist for this signal (it never
-    reaches `self.broker.place_order`), so this AuditLog entry is the *only* persisted record of
-    the rejection. Pass this function in `LiveExecutionPipeline(pre_trade_checks=[...])` to wire
-    it in; `_run_risk_checks` already runs every `pre_trade_checks` entry before an
-    `OrderRequest` is even constructed, so a Block structurally cannot reach the broker."""
+    reaches the broker), so this AuditLog entry is the *only* persisted record of the rejection.
+    Pass this function in `LiveExecutionPipeline(pre_trade_checks=[...])` to wire it in;
+    `_run_risk_checks` already runs every `pre_trade_checks` entry before an `OrderRequest` is
+    even constructed, so a Block structurally cannot reach the broker."""
     verdict = evaluate_compliance(
         symbol=signal.symbol,
         quantity=signal.quantity,
@@ -169,17 +174,33 @@ class LiveExecutionPipeline:
     kill_switch: MaxDrawdownKillSwitch
     latency_guard: WebSocketLatencyGuard | None = None
     pre_trade_checks: list[PreTradeCheck] = field(default_factory=list)
+    # T101/BUG-F: optional order persistence. When both are set, a placed order is persisted via
+    # `ExecutionAgent` (a real `Order` row + audit entry + REL-061 stream publish -- the exact
+    # same write path `POST /orders`'s manual Live branch uses, so live-path orders reconcile
+    # identically) and the Execution Agent's own `is_agent_enabled` gate (US9) applies here too.
+    # `None` (this class's pre-T101 behaviour) keeps `handle_tick` pure signal-routing with no DB
+    # dependency, matching `latency_guard`'s own established `| None = None` precedent -- for a
+    # caller/test that only cares about risk-check/signal-routing mechanics, not persistence.
+    account_id: uuid.UUID | None = None
+    strategy_id: uuid.UUID | None = None
+    session_factory: Callable[[], AbstractContextManager[Session]] = get_session
     _states: dict[str, SymbolState] = field(default_factory=dict, init=False)
+    _execution_agent: ExecutionAgent | None = field(default=None, init=False, repr=False)
 
     def state_for(self, symbol: str) -> SymbolState:
         if symbol not in self._states:
             self._states[symbol] = SymbolState(symbol=symbol)
         return self._states[symbol]
 
+    def _agent(self) -> ExecutionAgent:
+        if self._execution_agent is None:
+            self._execution_agent = ExecutionAgent(self.broker, self.session_factory)
+        return self._execution_agent
+
     async def handle_tick(self, tick: Tick) -> OrderResponse | None:
         """The full per-tick cycle: indicator update -> signal generation -> risk check ->
-        broker routing. Returns `None` when no signal fires (the common case -- most ticks
-        don't trigger a trade).
+        broker routing (+ persistence when `account_id`/`strategy_id` are configured). Returns
+        `None` when no signal fires (the common case -- most ticks don't trigger a trade).
 
         Wrapped in a span (Phase_8_DevOps_Architecture.md §5 distributed tracing): the broker
         call below goes through `httpx.AsyncClient`, which OpenTelemetry's httpx
@@ -209,6 +230,11 @@ class LiveExecutionPipeline:
             # place_order returns) -- the budget is dispatch latency, not the broker's own real
             # network round-trip time, which is separately reported (not asserted) elsewhere.
             ORDER_EXECUTION_LATENCY_SECONDS.observe(time.perf_counter() - dispatch_start)
+            if self.account_id is not None and self.strategy_id is not None:
+                result = await self._agent().execute_signal(
+                    order, account_id=self.account_id, strategy_id=self.strategy_id
+                )
+                return result.order_response
             return await self.broker.place_order(order)
 
     def _run_risk_checks(self, signal: TradeSignal) -> None:
