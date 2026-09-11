@@ -25,6 +25,7 @@ from src.agents.scheduler import (
     PAPER_TRADING_DAILY_CYCLE_JOB_ID,
     PAPER_TRADING_EQUITY_SNAPSHOT_JOB_ID,
     SHADOW_MODE_DAILY_CYCLE_JOB_ID,
+    STALLED_RUN_SWEEP_JOB_ID,
     WEEKEND_MEMORY_JOB_ID,
     build_scheduler,
     run_audit_archive_job,
@@ -108,15 +109,23 @@ def test_run_daily_research_cycle_defers_when_data_is_stale(tmp_path):
 
 
 def test_run_daily_research_cycle_triggers_when_data_is_fresh(tmp_path):
+    """T029: the daily cycle now goes through the CEO-led org path (run_manager.create_run)
+    rather than trigger_research() directly (unblocked once the org task engine + T113's real
+    handlers existed) -- trigger_research itself stays a separately-tested, still-real manual
+    path (POST /agents/trigger-research)."""
     _seed_fresh_symbol(tmp_path / "ohlcv_daily", "RELIANCE")
     fake_settings = type("S", (), {"data_lake_root": tmp_path})()
     with (
         patch("src.agents.scheduler.get_settings", return_value=fake_settings),
-        patch("src.api.routers.agents.trigger_research") as mock_trigger,
+        patch("src.orchestration.run_manager.create_run") as mock_create_run,
     ):
+        mock_create_run.return_value = type("R", (), {"id": "fake-run-id"})()
         run_daily_research_cycle()
 
-    mock_trigger.assert_called_once()
+    mock_create_run.assert_called_once()
+    _, kwargs = mock_create_run.call_args
+    assert kwargs["source"] == "schedule"
+    assert "objective" in kwargs
 
 
 def test_data_lake_list_symbols_matches_what_freshness_gate_checks(tmp_path):
@@ -131,14 +140,14 @@ def test_data_lake_list_symbols_matches_what_freshness_gate_checks(tmp_path):
 
 def test_build_scheduler_registers_every_real_cron_job():
     """REL-081: 11 real jobs (7 pre-existing + the 4 that used to be external Windows Scheduled
-    Tasks), + 1 more (DB-022's DuckDB catalog view refresh) = 12 total -- asserted against the
-    live JOB_REGISTRY itself, not a hand-copied count, so this can't silently under-count the way
-    the plan's own initial "10" draft did."""
+    Tasks), + 1 more (DB-022's DuckDB catalog view refresh), + 1 more (T108's stalled-run sweep)
+    = 13 total -- asserted against the live JOB_REGISTRY itself, not a hand-copied count, so this
+    can't silently under-count the way the plan's own initial "10" draft did."""
     scheduler = build_scheduler()
     job_ids = {job.id for job in scheduler.get_jobs()}
 
     assert job_ids == set(JOB_REGISTRY.keys())
-    assert len(job_ids) == 12
+    assert len(job_ids) == 13
 
     assert DAILY_CYCLE_JOB_ID in job_ids
     assert WEEKEND_MEMORY_JOB_ID in job_ids
@@ -151,6 +160,7 @@ def test_build_scheduler_registers_every_real_cron_job():
     assert AUDIT_ARCHIVE_JOB_ID in job_ids
     assert AUDIT_CHAIN_VERIFICATION_JOB_ID in job_ids
     assert DATA_LAKE_BACKUP_JOB_ID in job_ids
+    assert STALLED_RUN_SWEEP_JOB_ID in job_ids
 
 
 def test_build_scheduler_pauses_a_job_disabled_via_config():

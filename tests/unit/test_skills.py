@@ -2,7 +2,7 @@ import pytest
 
 from src.agents.tools.skills import (
     FormatPythonCodeSkill,
-    GlobalIndicesSkill,
+    MacroCalendarSkill,
     RunLinterSkill,
     SkillNotImplementedError,
     StaticSafetyCheckSkill,
@@ -129,5 +129,8 @@ s.position = 10
 
 
 def test_stub_skills_raise_not_implemented_rather_than_fabricate_data():
+    """T100: fetch_global_indices (formerly stubbed here) is real now -- GlobalIndicesSkill has
+    its own real-data integration test instead (tests/integration/test_market_data_skills.py).
+    query_macro_calendar is the one skill still honestly stubbed."""
     with pytest.raises(SkillNotImplementedError):
-        GlobalIndicesSkill().execute()
+        MacroCalendarSkill().execute()
