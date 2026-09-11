@@ -5,11 +5,11 @@ import { motion } from "framer-motion";
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import { useChatMessages } from "@/hooks/useChatMessages";
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-IN", { hour12: false });
+  return parseBackendTimestamp(iso).toLocaleTimeString("en-IN", { hour12: false });
 }
 
 export function ChatPanel() {

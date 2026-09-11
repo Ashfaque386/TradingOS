@@ -2,10 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { EquityCurveChart } from "@/components/strategies/equity-curve-chart";
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-IN", { hour12: false });
+  return parseBackendTimestamp(iso).toLocaleTimeString("en-IN", { hour12: false });
 }
 
 const VALIDATION_COLOR: Record<string, string> = {

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Gated } from "@/components/ui/gated";
@@ -125,7 +126,7 @@ export function OrganizationOverview() {
                   <Badge variant="outline">{r.status}</Badge>
                   <span className="truncate">{r.objective}</span>
                   <span className="ml-auto shrink-0 text-text-faint">
-                    {new Date(r.created_at).toLocaleString()}
+                    {parseBackendTimestamp(r.created_at).toLocaleString()}
                   </span>
                 </Link>
               </li>

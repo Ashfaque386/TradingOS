@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import type { AuditLogEntry } from "@/lib/api";
 
 // Real entity_type values a trade/order can carry (src/core/audit.py callers, grepped across
@@ -72,7 +73,7 @@ export function AuditEntryDetail({ entry }: { entry: AuditLogEntry }) {
               <div key={e.id} className="flex justify-between text-text-faint">
                 <span>{e.action}</span>
                 <span className="font-mono-tabular">
-                  {new Date(e.created_at).toLocaleTimeString("en-IN", { hour12: false })}
+                  {parseBackendTimestamp(e.created_at).toLocaleTimeString("en-IN", { hour12: false })}
                 </span>
               </div>
             ))}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -16,7 +16,7 @@ const ALL = "__all__";
 
 function formatTime(iso: string): string {
   try {
-    return new Date(iso).toLocaleTimeString("en-IN", { hour12: false });
+    return parseBackendTimestamp(iso).toLocaleTimeString("en-IN", { hour12: false });
   } catch {
     return iso;
   }

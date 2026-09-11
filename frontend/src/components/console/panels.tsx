@@ -10,6 +10,7 @@ import {
   type OrgPlannedTask,
   type OrgTask,
 } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Gated } from "@/components/ui/gated";
@@ -311,7 +312,7 @@ export function DataFreshnessPanel() {
               <span className="font-medium">{d.dataset_name}</span>
               <span className="ml-auto text-text-faint">
                 {d.last_successful_update
-                  ? new Date(d.last_successful_update).toLocaleString()
+                  ? parseBackendTimestamp(d.last_successful_update).toLocaleString()
                   : "never updated"}
               </span>
             </li>

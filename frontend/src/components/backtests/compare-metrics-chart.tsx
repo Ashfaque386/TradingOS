@@ -3,6 +3,7 @@
 import ReactECharts from "echarts-for-react";
 import { useThemeStore } from "@/lib/theme-store";
 import { getChartColors } from "@/lib/chart-theme";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { METRICS } from "./metric-grid";
 import type { BacktestCompareRow } from "@/lib/api";
 
@@ -43,7 +44,7 @@ export function CompareMetricsChart({ rows }: { rows: BacktestCompareRow[] }) {
   );
 
   const series = rows.map((row, ri) => ({
-    name: `${row.strategy_name} · ${new Date(row.created_at).toLocaleDateString("en-IN")}`,
+    name: `${row.strategy_name} · ${parseBackendTimestamp(row.created_at).toLocaleDateString("en-IN")}`,
     type: "bar",
     itemStyle: { color: SERIES_COLORS[ri % SERIES_COLORS.length] },
     data: rawValues[ri].map((v, mi) => Number(((v / perMetricMaxAbs[mi]) * 100).toFixed(1))),

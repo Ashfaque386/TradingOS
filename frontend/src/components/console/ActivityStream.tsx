@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { OrgEvent } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 
 /** FR-088/172: the ordered `OrganizationalEvent` feed for the selected run, filterable by
@@ -57,7 +58,7 @@ export function ActivityStream({ events }: { events: OrgEvent[] }) {
                 {e.subject_id ? ` ${String(e.subject_id).slice(0, 8)}` : ""}
               </span>
               <span className="ml-auto shrink-0 text-text-faint">
-                {new Date(e.occurred_at).toLocaleTimeString()}
+                {parseBackendTimestamp(e.occurred_at).toLocaleTimeString()}
               </span>
             </li>
           ))}

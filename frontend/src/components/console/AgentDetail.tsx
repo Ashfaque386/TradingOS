@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -54,12 +55,14 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           <dd className="text-right">{agent.capabilities.join(", ") || "—"}</dd>
           <dt className="text-text-muted">Last execution</dt>
           <dd className="text-right">
-            {agent.last_execution ? new Date(agent.last_execution).toLocaleString() : "never"}
+            {agent.last_execution
+              ? parseBackendTimestamp(agent.last_execution).toLocaleString()
+              : "never"}
           </dd>
           <dt className="text-text-muted">Next scheduled</dt>
           <dd className="text-right">
             {agent.next_scheduled_execution
-              ? new Date(agent.next_scheduled_execution).toLocaleString()
+              ? parseBackendTimestamp(agent.next_scheduled_execution).toLocaleString()
               : "event-driven"}
           </dd>
         </dl>
@@ -77,7 +80,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                     {r.status}
                   </Badge>
                   <span className="text-text-faint">
-                    {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
+                    {r.started_at ? parseBackendTimestamp(r.started_at).toLocaleString() : "—"}
                   </span>
                 </li>
               ))}
@@ -114,7 +117,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                 <Badge variant="outline">{a.artefact_type}</Badge>
                 {a.disposition && <span className="text-text-faint">{a.disposition}</span>}
                 <span className="ml-auto text-text-faint">
-                  {a.created_at ? new Date(a.created_at).toLocaleString() : "—"}
+                  {a.created_at ? parseBackendTimestamp(a.created_at).toLocaleString() : "—"}
                 </span>
               </li>
             ))}

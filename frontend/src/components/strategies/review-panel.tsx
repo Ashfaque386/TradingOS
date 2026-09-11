@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { VerdictPanel } from "@/components/backtests/verdict-panel";
 import { FullMetricGrid } from "@/components/backtests/metric-grid";
@@ -204,7 +204,7 @@ export function ReviewPanel({ strategyId }: { strategyId: string }) {
                       : "bg-bg text-text-faint hover:text-text-dim",
                   )}
                 >
-                  {new Date(b.created_at).toLocaleDateString("en-IN")}
+                  {parseBackendTimestamp(b.created_at).toLocaleDateString("en-IN")}
                 </button>
               ))}
             </div>

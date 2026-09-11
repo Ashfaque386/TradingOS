@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -46,7 +46,7 @@ export function OrdersTable({ orders }: { orders: LiveOrder[] }) {
           {orders.map((o) => (
             <TableRow key={o.id} className="border-card-edge align-top">
               <TableCell className="px-0 py-row-dense whitespace-nowrap font-mono-tabular text-text-faint">
-                {new Date(o.requested_at).toLocaleString("en-IN", {
+                {parseBackendTimestamp(o.requested_at).toLocaleString("en-IN", {
                   timeZone: "Asia/Kolkata",
                   day: "2-digit",
                   month: "short",

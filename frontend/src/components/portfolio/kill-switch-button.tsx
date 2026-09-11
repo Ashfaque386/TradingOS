@@ -6,6 +6,7 @@ import { AlertTriangle, ChevronsRight, RotateCcw } from "lucide-react";
 import { useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { KILL_SWITCH_ROLES, useAuth } from "@/lib/auth";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { scaleIn } from "@/lib/motion";
 
@@ -53,7 +54,7 @@ export function KillSwitchButton() {
               <p className="mt-0.5 text-xs text-down/70">
                 Tripped at{" "}
                 {status.tripped_at
-                  ? new Date(status.tripped_at).toLocaleTimeString("en-IN", { hour12: false })
+                  ? parseBackendTimestamp(status.tripped_at).toLocaleTimeString("en-IN", { hour12: false })
                   : "—"}
               </p>
             </div>

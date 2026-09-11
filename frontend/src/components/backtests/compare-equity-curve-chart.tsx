@@ -3,6 +3,7 @@
 import ReactECharts from "echarts-for-react";
 import { useThemeStore } from "@/lib/theme-store";
 import { getChartColors } from "@/lib/chart-theme";
+import { parseBackendTimestamp } from "@/lib/utils";
 import type { BacktestCompareRow } from "@/lib/api";
 
 const SERIES_COLORS = ["#ff5c7a", "#c94bff", "#10b981", "#f59e0b", "#38bdf8", "#f472b6"];
@@ -35,7 +36,7 @@ export function CompareEquityCurveChart({ rows }: { rows: BacktestCompareRow[] }
   const series = withCurves.map((row, i) => {
     const base = row.equity_curve[0].equity;
     return {
-      name: `${row.strategy_name} · ${new Date(row.created_at).toLocaleDateString("en-IN")}`,
+      name: `${row.strategy_name} · ${parseBackendTimestamp(row.created_at).toLocaleDateString("en-IN")}`,
       type: "line",
       showSymbol: false,
       lineStyle: { color: SERIES_COLORS[i % SERIES_COLORS.length], width: 2 },

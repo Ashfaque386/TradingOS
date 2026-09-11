@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -38,7 +38,7 @@ export function TradesTable({ trades }: { trades: LiveTrade[] }) {
           {trades.map((t) => (
             <TableRow key={t.id} className="border-card-edge">
               <TableCell className="px-0 py-row-dense font-mono-tabular text-text-faint">
-                {new Date(t.executed_at).toLocaleString("en-IN", {
+                {parseBackendTimestamp(t.executed_at).toLocaleString("en-IN", {
                   timeZone: "Asia/Kolkata",
                   day: "2-digit",
                   month: "short",

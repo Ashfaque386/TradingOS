@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import type { AuditLogEntry } from "@/lib/api";
 
 export function AuditLogTable({
@@ -38,7 +38,7 @@ export function AuditLogTable({
               )}
             >
               <td className="py-2 pr-3 font-mono-tabular text-text-dim">
-                {new Date(entry.created_at).toLocaleString("en-IN", { hour12: false })}
+                {parseBackendTimestamp(entry.created_at).toLocaleString("en-IN", { hour12: false })}
               </td>
               <td className="py-2 pr-3 text-text-dim">
                 <span className="rounded-full bg-bg px-1.5 py-0.5 text-[9px] text-text-faint">

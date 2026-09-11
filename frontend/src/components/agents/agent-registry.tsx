@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Ban, CircleCheck, Info, ShieldAlert } from "lucide-react";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, parseBackendTimestamp } from "@/lib/utils";
 import { Gated } from "@/components/ui/gated";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -312,7 +312,7 @@ export function AgentRegistry() {
                 {detailAgent.updated_at && (
                   <DetailRow
                     label="Last changed at"
-                    value={new Date(detailAgent.updated_at).toLocaleString("en-IN", {
+                    value={parseBackendTimestamp(detailAgent.updated_at).toLocaleString("en-IN", {
                       timeZone: "Asia/Kolkata",
                     })}
                     mono

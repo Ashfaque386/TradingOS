@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { BacktestComparisonTable } from "./comparison-table";
 import { CompareEquityCurveChart } from "./compare-equity-curve-chart";
@@ -39,7 +40,7 @@ export function CompareWorkspace({ ids }: { ids: string[] }) {
       <BacktestComparisonTable
         rows={rows.map((r) => ({
           id: r.id,
-          label: `${r.strategy_name} · ${new Date(r.created_at).toLocaleDateString("en-IN")}`,
+          label: `${r.strategy_name} · ${parseBackendTimestamp(r.created_at).toLocaleDateString("en-IN")}`,
           backtest: r,
         }))}
       />

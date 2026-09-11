@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo } from "react";
 import { api } from "@/lib/api";
+import { parseBackendTimestamp } from "@/lib/utils";
 import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -171,7 +172,7 @@ function BacktestsPageInner() {
                         : "rounded-full bg-bg px-2.5 py-1 text-[10px] font-medium text-text-faint hover:text-text-dim"
                     }
                   >
-                    {new Date(b.created_at).toLocaleDateString("en-IN")}
+                    {parseBackendTimestamp(b.created_at).toLocaleDateString("en-IN")}
                   </button>
                 ))}
               </div>
@@ -270,5 +271,5 @@ function BacktestsPageInner() {
 }
 
 function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-IN");
+  return parseBackendTimestamp(iso).toLocaleDateString("en-IN");
 }
