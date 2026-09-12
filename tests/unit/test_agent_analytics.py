@@ -4,7 +4,12 @@ tests/integration/test_agents_router_api.py (GET /agents/analytics/summary and .
 
 from datetime import UTC, date, datetime
 
-from src.agents.analytics import bucket_by_day, group_by_agent, summarize_runs
+from src.agents.analytics import (
+    aggregate_retry_escalation,
+    bucket_by_day,
+    group_by_agent,
+    summarize_runs,
+)
 
 
 def _dt(day: int, hour: int = 0) -> datetime:
@@ -62,6 +67,29 @@ def test_group_by_agent_splits_rows_by_real_agent_name():
     assert set(grouped) == {"ceo_agent", "compliance"}
     assert len(grouped["ceo_agent"]) == 2
     assert len(grouped["compliance"]) == 1
+
+
+def test_aggregate_retry_escalation_sums_retries_and_counts_escalated_per_agent():
+    """spec 002 US11 (T051/T054): retry_count sums real Task.retry_count (a task that never
+    retried contributes 0); escalated_count only counts the real `escalated` status (US7),
+    never conflated with `failed`."""
+    rows = [
+        ("market_analyst", 2, "completed"),
+        ("market_analyst", 0, "failed"),
+        ("market_analyst", 1, "escalated"),
+        ("compliance", 3, "escalated"),
+        ("compliance", 0, "completed"),
+    ]
+    stats = aggregate_retry_escalation(rows)
+    assert stats["market_analyst"].retry_count == 3
+    assert stats["market_analyst"].escalated_count == 1
+    assert stats["compliance"].retry_count == 3
+    assert stats["compliance"].escalated_count == 1
+
+
+def test_aggregate_retry_escalation_never_conflates_failed_with_escalated():
+    stats = aggregate_retry_escalation([("risk_manager", 2, "failed")])
+    assert stats["risk_manager"].escalated_count == 0
 
 
 def test_bucket_by_day_only_returns_real_days_with_at_least_one_run():

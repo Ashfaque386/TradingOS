@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -14,8 +14,10 @@ import {
   DecisionHistory,
   DependencyPanel,
   DepartmentView,
+  HandoffPanel,
   OrgTaskGraph,
   RunReplay,
+  TaskBoard,
   taskStateExplainer,
 } from "@/components/console";
 
@@ -23,6 +25,7 @@ export default function RunWorkspace({ params }: { params: Promise<{ runId: stri
   const { runId } = use(params);
   const { connected, events: live } = useOrganizationStream([runId]);
   usePageStatus("Run workspace", connected);
+  const [taskView, setTaskView] = useState<"list" | "board">("board");
 
   const runQuery = useQuery({ queryKey: ["org-run", runId], queryFn: () => api.orgRun(runId) });
   const tasksQuery = useQuery({ queryKey: ["org-tasks", runId], queryFn: () => api.orgTasks(runId) });
@@ -95,8 +98,40 @@ export default function RunWorkspace({ params }: { params: Promise<{ runId: stri
         <DepartmentView tasks={tasks} />
       </div>
 
-      <Card eyebrow="Tasks" title="Task detail" density="dense">
-        {tasks.length === 0 ? (
+      <Card
+        eyebrow="Tasks"
+        title="Task board"
+        density="dense"
+        action={
+          <div className="flex gap-1 text-[10px]">
+            <button
+              type="button"
+              onClick={() => setTaskView("board")}
+              className={
+                taskView === "board"
+                  ? "rounded-full bg-panel px-2 py-1 font-medium text-text"
+                  : "rounded-full px-2 py-1 text-text-faint hover:text-text"
+              }
+            >
+              Board
+            </button>
+            <button
+              type="button"
+              onClick={() => setTaskView("list")}
+              className={
+                taskView === "list"
+                  ? "rounded-full bg-panel px-2 py-1 font-medium text-text"
+                  : "rounded-full px-2 py-1 text-text-faint hover:text-text"
+              }
+            >
+              List
+            </button>
+          </div>
+        }
+      >
+        {taskView === "board" ? (
+          <TaskBoard runId={runId} />
+        ) : tasks.length === 0 ? (
           <p className="text-[11px] italic text-text-faint">No tasks yet.</p>
         ) : (
           <ul className="flex flex-col gap-1.5">
@@ -107,7 +142,7 @@ export default function RunWorkspace({ params }: { params: Promise<{ runId: stri
                   <div className="flex items-center gap-2">
                     <Badge variant="outline">{t.status}</Badge>
                     <Link
-                      href={`/console/agents/${t.assigned_agent}`}
+                      href={`/console/agents/${t.assigned_agent}?runId=${runId}&taskId=${t.task_id}`}
                       className="font-medium hover:underline"
                     >
                       {t.assigned_agent}
@@ -130,8 +165,10 @@ export default function RunWorkspace({ params }: { params: Promise<{ runId: stri
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ArtefactList artefacts={artefactsQuery.data ?? []} />
-        {terminal && <RunReplay runId={runId} />}
+        <HandoffPanel runId={runId} />
       </div>
+
+      {terminal && <RunReplay runId={runId} />}
     </main>
   );
 }

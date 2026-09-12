@@ -29,7 +29,7 @@ from src.models.orchestration import (
     TaskDependency,
 )
 from src.models.user import User
-from src.orchestration import run_manager
+from src.orchestration import handoffs, run_manager
 from src.orchestration.enums import RunSource, RunStatus, TaskStatus
 
 router = APIRouter(prefix="/api/v1/organization", tags=["organization"])
@@ -169,10 +169,19 @@ def create_run(body: CreateRunRequest, _user: User = Depends(_can_create_run)) -
 def list_runs(
     status: str | None = None,
     limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
     _user: User = Depends(get_current_user),
 ) -> list[RunSummary]:
+    """spec 002 US10: `offset` lets an operator page past the default cap instead of only ever
+    seeing the most recent `limit` runs; `status` filtering (already real) composes with it
+    server-side so the frontend never has to truncate client-side to fake a filtered page."""
     with get_session() as session:
-        stmt = select(OrganizationRun).order_by(OrganizationRun.created_at.desc()).limit(limit)
+        stmt = (
+            select(OrganizationRun)
+            .order_by(OrganizationRun.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         if status:
             stmt = stmt.where(OrganizationRun.status == status)
         return [
@@ -325,6 +334,40 @@ def get_events(
                 occurred_at=e.occurred_at.isoformat(),
             )
             for e in rows
+        ]
+
+
+class HandoffOut(BaseModel):
+    """spec 002 US3: a first-class, inspectable agent-to-agent artefact handoff -- sender,
+    receiver, what was delivered, and (for a partially-satisfied consumer) what was expected
+    but missing. Derived from real `ResultArtefact`/`Task` state, not a new stored entity."""
+
+    from_task_id: uuid.UUID
+    from_agent: str | None
+    to_task_id: uuid.UUID
+    to_agent: str | None
+    artefact_id: uuid.UUID
+    artefact_type: str
+    delivered_at: str
+    requested_but_missing: list[str]
+
+
+@router.get("/runs/{run_id}/handoffs", response_model=list[HandoffOut])
+def get_handoffs(run_id: uuid.UUID, _user: User = Depends(get_current_user)) -> list[HandoffOut]:
+    with get_session() as session:
+        rows = handoffs.list_handoffs(session, run_id)
+        return [
+            HandoffOut(
+                from_task_id=uuid.UUID(h["from_task_id"]),
+                from_agent=h["from_agent"],
+                to_task_id=uuid.UUID(h["to_task_id"]),
+                to_agent=h["to_agent"],
+                artefact_id=uuid.UUID(h["artefact_id"]),
+                artefact_type=h["artefact_type"],
+                delivered_at=h["delivered_at"],
+                requested_but_missing=h["requested_but_missing"],
+            )
+            for h in rows
         ]
 
 

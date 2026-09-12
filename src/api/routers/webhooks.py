@@ -36,7 +36,7 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from src.agents.control import is_agent_enabled
-from src.agents.tools.registry import get_skill_registry
+from src.agents.tools.registry import SkillNotGrantedError, get_skill_registry
 from src.agents.tools.skills import SkillNotImplementedError
 from src.core import vault
 from src.core.config import get_settings
@@ -176,9 +176,13 @@ def _record_event_and_route(
                 # the reply stays real and persisted (above), it just isn't sent out.
                 return
         try:
-            get_skill_registry().execute("notify_omni_channel", text=reply, **notify_kwargs)
+            get_skill_registry().execute(
+                "notify_omni_channel", agent_name="notification_agent", text=reply, **notify_kwargs
+            )
         except SkillNotImplementedError:
             return  # real, documented gap (e.g. no bot token configured) -- not a bug to raise on
+        except SkillNotGrantedError:
+            return  # spec 002 US8: no AgentSkillMap grant -- same non-fatal degrade as above
         except Exception:  # noqa: BLE001 -- a delivery failure must never crash this thread
             return
         _mark_event_response_sent(event_id, reply)

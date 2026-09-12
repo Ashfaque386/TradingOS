@@ -64,6 +64,7 @@ def _score_one(item: NewsItem) -> _SentimentResult:
     )
     response = complete(
         "sentiment",
+        agent_name="sentiment_agent",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

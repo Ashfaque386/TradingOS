@@ -170,15 +170,24 @@ def record_decision(
     )
     session.add(row)
     session.flush()
-    events.emit(
+    event_row = events.emit(
         session,
         run_id=run.id,
         event_type="ceo.decision.created",
         subject_type="decision",
         subject_id=row.id,
-        payload={"decision_type": decision_type.value, "summary": summary},
+        # spec 002 US6: `reason` alongside `summary`/`next_step` under the uniform key the
+        # Activity Stream reads for every event type.
+        payload={
+            "decision_type": decision_type.value,
+            "summary": summary,
+            "reason": reason if not next_step else f"{reason} Next: {next_step}",
+        },
         audited=True,
     )
+    # spec 002 US11 (T050): thread the real AuditLog id this decision's own audited event just
+    # created onto its `audit_reference` FK, in the same transaction.
+    row.audit_reference = event_row._audit_log_id  # type: ignore[attr-defined]
     return row
 
 
@@ -198,6 +207,7 @@ def resolve_conflict(
             "description": conflict.description,
             "severity": conflict.severity,
             "artefact_ids": conflict.artefact_ids,
+            "reason": conflict.description,
         },
         audited=True,
     )

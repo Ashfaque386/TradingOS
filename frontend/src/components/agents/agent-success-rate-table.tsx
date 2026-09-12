@@ -13,13 +13,21 @@ import {
 } from "@/components/ui/table";
 import type { AgentAnalyticsSummaryRow } from "@/lib/api";
 
-type SortKey = "total_runs" | "success_rate" | "avg_duration_seconds" | "p95_duration_seconds";
+type SortKey =
+  | "total_runs"
+  | "success_rate"
+  | "avg_duration_seconds"
+  | "p95_duration_seconds"
+  | "retry_count"
+  | "escalated_count";
 
 const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "total_runs", label: "Runs" },
   { key: "success_rate", label: "Success Rate" },
   { key: "avg_duration_seconds", label: "Avg Duration" },
   { key: "p95_duration_seconds", label: "P95 Duration" },
+  { key: "retry_count", label: "Retries" },
+  { key: "escalated_count", label: "Escalated" },
 ];
 
 function formatDuration(seconds: number | null): string {
@@ -133,6 +141,22 @@ export function AgentSuccessRateTable({ rows }: { rows: AgentAnalyticsSummaryRow
                 )}
               >
                 {formatDuration(row.p95_duration_seconds)}
+              </TableCell>
+              <TableCell
+                className={cn(
+                  "px-0 py-1.5 pr-3 text-right font-mono-tabular",
+                  sortKey === "retry_count" ? "text-text-dim" : "text-text-faint",
+                )}
+              >
+                {row.retry_count}
+              </TableCell>
+              <TableCell
+                className={cn(
+                  "px-0 py-1.5 pr-3 text-right font-mono-tabular",
+                  row.escalated_count > 0 ? "font-semibold text-warn" : "text-text-faint",
+                )}
+              >
+                {row.escalated_count}
               </TableCell>
             </TableRow>
           ))}

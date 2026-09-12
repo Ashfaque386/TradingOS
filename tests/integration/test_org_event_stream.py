@@ -76,3 +76,44 @@ def test_emit_writes_gapfree_rows_and_an_audit_entry_when_audited():
             assert len(audits) >= 1
     finally:
         cleanup_run(run_id)
+
+
+def test_approval_requested_event_is_observable_via_get_events():
+    """spec 002 US1 (AC4): `approval.requested` joins `approval.approved`/`rejected` on the event
+    bus. This exercises `events.emit()` directly for this event type (the same call
+    `src/api/routers/agents.py::_open_paper_approval_request` now makes when
+    `ApprovalRequest.run_id is not None`) rather than through that legacy code path itself --
+    today, every `ApprovalRequest` that path creates has `run_id=None` (it has no
+    `OrganizationRun` to attach to), so the guarded `events.emit()` call added there cannot
+    fire in production yet, exactly mirroring the pre-existing identical limitation on
+    `approval.approved`/`approval.rejected` in `src/orchestration/approvals.py`. That is a
+    real, separate gap (threading a real `OrganizationRun` id into the legacy persistence path)
+    outside spec 002 US1's scope; this test proves the event-bus half of AC4 is correct once a
+    real `run_id` is available, which is the part US1 actually changed."""
+    with get_session() as session:
+        run_id = _make_run(session)
+        approval_id = uuid.uuid4()
+        events.emit(
+            session,
+            run_id=run_id,
+            event_type="approval.requested",
+            subject_type="approval",
+            subject_id=approval_id,
+            payload={"strategy_id": str(uuid.uuid4()), "rationale": "test"},
+            audited=False,
+        )
+        session.commit()
+
+    try:
+        with get_session() as session:
+            rows = (
+                session.query(OrganizationalEvent)
+                .filter(OrganizationalEvent.run_id == run_id)
+                .filter(OrganizationalEvent.event_type == "approval.requested")
+                .all()
+            )
+            assert len(rows) == 1
+            assert rows[0].subject_type == "approval"
+            assert rows[0].subject_id == approval_id
+    finally:
+        cleanup_run(run_id)

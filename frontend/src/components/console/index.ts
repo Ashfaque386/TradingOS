@@ -3,6 +3,9 @@ export { OrganizationOverview } from "./OrganizationOverview";
 export { OrgTaskGraph } from "./OrgTaskGraph";
 export { ActivityStream } from "./ActivityStream";
 export { AgentDetail, taskStateExplainer } from "./AgentDetail";
+export { AgentFleet } from "./AgentFleet";
+export { HandoffPanel } from "./HandoffPanel";
+export { TaskBoard } from "./TaskBoard";
 export { RunReplay } from "./RunReplay";
 export {
   DependencyPanel,

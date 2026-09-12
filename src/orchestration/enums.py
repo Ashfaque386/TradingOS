@@ -27,7 +27,10 @@ class RunStatus(StrEnum):
 
 
 class TaskStatus(StrEnum):
-    """`Task.status` (data-model.md §3, FR-011). 15 values."""
+    """`Task.status` (data-model.md §3, FR-011). 12 values -- every one of them is actually
+    assigned by real code somewhere (spec 002 US7); `AWAITING_APPROVAL`, `WAITING_FOR_AGENT`,
+    and `SUPERSEDED` were removed here because no code path ever produced them (a
+    lifecycle/reality mismatch, the same defect class as the original audit's C-5 finding)."""
 
     CREATED = "created"
     PLANNED = "planned"
@@ -35,15 +38,12 @@ class TaskStatus(StrEnum):
     READY = "ready"
     RUNNING = "running"
     WAITING_FOR_DEPENDENCY = "waiting_for_dependency"
-    WAITING_FOR_AGENT = "waiting_for_agent"
     BLOCKED = "blocked"
-    AWAITING_APPROVAL = "awaiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     RETRYING = "retrying"
     ESCALATED = "escalated"
     CANCELLED = "cancelled"
-    SUPERSEDED = "superseded"
 
 
 class AgentStatus(StrEnum):

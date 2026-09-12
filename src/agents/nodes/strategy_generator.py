@@ -40,7 +40,10 @@ def strategy_generator_node(state: TradingOSGraphState) -> dict[str, object]:
         else "general Indian equity strategy"
     )
     past_strategies = get_skill_registry().execute(
-        "query_qdrant_strategy_memory", query=query_text, top_k=5
+        "query_qdrant_strategy_memory",
+        agent_name="strategy_generator",
+        query=query_text,
+        top_k=5,
     )
 
     directive_json = (
@@ -79,6 +82,7 @@ def strategy_generator_node(state: TradingOSGraphState) -> dict[str, object]:
 
     response = complete(
         "coding",
+        agent_name="strategy_generator",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

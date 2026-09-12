@@ -66,6 +66,7 @@ def generate_lessons_learned_summary(collection_name: str = "trading_strategies"
     user_prompt = get_active_prompt(TASK_PROMPT_SLUG).format(count=len(payloads), payloads=payloads)
     response = complete(
         "research",
+        agent_name="memory_agent",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

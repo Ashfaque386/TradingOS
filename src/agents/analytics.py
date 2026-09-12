@@ -82,6 +82,37 @@ class DailyRunBucket:
     failed: int
 
 
+@dataclass(frozen=True)
+class RetryEscalationStats:
+    retry_count: int
+    escalated_count: int
+
+
+def aggregate_retry_escalation(
+    rows: list[tuple[str, int, str]],
+) -> dict[str, RetryEscalationStats]:
+    """spec 002 US11 (T051): per-agent retry/escalation aggregates over the organisation Task
+    ledger (not AgentRun -- retry/escalation are Task-level concepts, US7), summed over whatever
+    window the caller already scoped its query to (same convention as `group_by_agent`/
+    `summarize_runs`'s AgentRun-side metrics). `rows` are (assigned_agent, retry_count, status)
+    tuples: `retry_count` sums real `Task.retry_count` (>0 only for a task that actually needed
+    at least one retry); `escalated_count` counts tasks whose real status is `ESCALATED` (US7) --
+    never inferred from `FAILED`, which `ESCALATED` is now a genuinely distinct terminal state
+    from.
+    """
+    by_agent: dict[str, list[tuple[int, str]]] = {}
+    for agent_name, retry_count, status in rows:
+        by_agent.setdefault(agent_name, []).append((retry_count, status))
+
+    return {
+        agent_name: RetryEscalationStats(
+            retry_count=sum(rc for rc, _ in entries),
+            escalated_count=sum(1 for _, status in entries if status == "escalated"),
+        )
+        for agent_name, entries in by_agent.items()
+    }
+
+
 def bucket_by_day(rows: list[tuple[str, datetime]]) -> list[DailyRunBucket]:
     """`rows` are (status, started_at) tuples. Only real days with at least 1 real run are
     returned, sorted ascending -- never a zero-filled synthetic day standing in for a real gap in

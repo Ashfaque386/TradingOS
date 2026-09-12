@@ -62,4 +62,30 @@ describe("Agent Settings", () => {
     cy.contains("there is no model to configure").should("exist");
     cy.contains("label", "CUSTOM").should("not.exist");
   });
+
+  it("spec 002 US9/C-4: activation is gated behind actually viewing the diff, and requires a second confirm", () => {
+    login();
+    cy.visit("/settings/agents/strategy_generator_agent");
+    // v1 is seeded inactive, v2 is the seeded active version (per the test above).
+    cy.contains("li", "v1").within(() => {
+      cy.contains("button", "Activate").should("be.disabled");
+    });
+    // Opening the diff for both v1 and v2 is what unlocks activation for either.
+    cy.contains("li", "v1").within(() => cy.contains("button", "diff L").click());
+    cy.contains("li", "v2").within(() => cy.contains("button", "diff R").click());
+    cy.contains("v1 → v2").should("be.visible");
+    // Activation still requires a second explicit confirm click, not a single click.
+    cy.contains("li", "v1").within(() => {
+      cy.contains("button", "Activate").should("not.be.disabled").click();
+      cy.contains("Activate v1?").should("be.visible");
+      cy.contains("button", "Confirm").click();
+    });
+    cy.contains("li", "v1").within(() => cy.contains("active").should("be.visible"));
+    // Restore the original active version (v2 was already diffed above, so this is unlocked too).
+    cy.contains("li", "v2").within(() => {
+      cy.contains("button", "Activate").should("not.be.disabled").click();
+      cy.contains("button", "Confirm").click();
+    });
+    cy.contains("li", "v2").within(() => cy.contains("active").should("be.visible"));
+  });
 });

@@ -62,7 +62,9 @@ def test_strategy_research_reads_back_the_graphs_real_final_output():
     run_id, task = _seed_task()
     try:
 
-        def fake_execute_graph_run(*, thread_id, root_run_id, resume=False, research_context=None):
+        def fake_execute_graph_run(
+            *, thread_id, root_run_id, resume=False, research_context=None, org_run_id=None
+        ):
             now = datetime.now(UTC)
             with get_session() as session:
                 root = session.get(AgentRun, root_run_id)
@@ -120,7 +122,9 @@ def test_strategy_research_threads_the_research_context_into_the_graph():
         )
         captured: dict = {}
 
-        def fake_execute_graph_run(*, thread_id, root_run_id, resume=False, research_context=None):
+        def fake_execute_graph_run(
+            *, thread_id, root_run_id, resume=False, research_context=None, org_run_id=None
+        ):
             captured["research_context"] = research_context
             with get_session() as session:
                 root = session.get(AgentRun, root_run_id)
@@ -145,7 +149,9 @@ def test_strategy_research_degrades_honestly_when_nothing_recognizable_was_produ
     run_id, task = _seed_task()
     try:
 
-        def fake_execute_graph_run(*, thread_id, root_run_id, resume=False, research_context=None):
+        def fake_execute_graph_run(
+            *, thread_id, root_run_id, resume=False, research_context=None, org_run_id=None
+        ):
             # Simulates a halt/failure before any node produced a typed output.
             with get_session() as session:
                 root = session.get(AgentRun, root_run_id)
@@ -174,7 +180,9 @@ def test_strategy_research_degrades_honestly_on_a_schema_mismatch():
     run_id, task = _seed_task()
     try:
 
-        def fake_execute_graph_run(*, thread_id, root_run_id, resume=False, research_context=None):
+        def fake_execute_graph_run(
+            *, thread_id, root_run_id, resume=False, research_context=None, org_run_id=None
+        ):
             now = datetime.now(UTC)
             with get_session() as session:
                 root = session.get(AgentRun, root_run_id)

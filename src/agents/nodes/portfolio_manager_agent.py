@@ -80,6 +80,7 @@ async def generate_allocation_recommendation(
     try:
         response = complete(
             "orchestration",
+            agent_name="portfolio_manager_agent",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

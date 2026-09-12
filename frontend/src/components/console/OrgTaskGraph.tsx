@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { OrgDependency, OrgTask } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 
@@ -8,6 +8,9 @@ const COL_W = 190;
 const ROW_H = 64;
 const NODE_W = 168;
 const NODE_H = 44;
+const MIN_SCALE = 0.4;
+const MAX_SCALE = 3;
+const ACTIVATION_FLASH_MS = 1400;
 
 function layer(tasks: OrgTask[], deps: OrgDependency[]): Map<string, number> {
   const prereqs = new Map<string, string[]>();
@@ -37,9 +40,19 @@ function nodeColor(status: string): { fill: string; stroke: string } {
   return { fill: "var(--color-bg)", stroke: "var(--color-card-edge)" };
 }
 
-/** FR-081: a layered task DAG driven entirely by real task status + real dependency `state` --
- * no simulated motion. A running node pulses and a satisfied dependency edge is drawn solid;
- * everything else is static. Honours `prefers-reduced-motion` (FR-170) by disabling the pulse. */
+function depKey(d: OrgDependency): string {
+  return `${d.prerequisite_task_id}->${d.dependent_task_id}`;
+}
+
+/** FR-081 + spec 002 US14: a layered task DAG driven entirely by real task status + real
+ * dependency `state` -- no simulated motion or replay. A running node pulses; a satisfied
+ * dependency edge is drawn solid and, at the moment it *transitions* from unsatisfied to
+ * satisfied (driven by the real `dependency.satisfied` event already invalidating this run's
+ * `org-dependencies` query via `useOrganizationStream`), briefly flashes to make that live
+ * activation visible rather than silently snapping. Pan/zoom is a viewport transform only -- the
+ * underlying depth/position computation is untouched, so `GET .../dependencies` still matches
+ * every rendered node/edge exactly. Honours `prefers-reduced-motion` (FR-170) by disabling both
+ * the running-node pulse and the activation flash. */
 export function OrgTaskGraph({
   tasks,
   dependencies,
@@ -68,63 +81,146 @@ export function OrgTaskGraph({
 
   const label = new Map(tasks.map((t) => [t.task_id, t]));
 
+  // --- US14 (T085): flag edges that just flipped to `satisfied` since the last render, so they
+  // get a brief activation flash instead of an instant, unremarkable color swap. ---
+  const prevSatisfiedRef = useRef<Set<string>>(new Set());
+  const [justActivated, setJustActivated] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const currentSatisfied = new Set(dependencies.filter((d) => d.state === "satisfied").map(depKey));
+    const newlySatisfied = [...currentSatisfied].filter((k) => !prevSatisfiedRef.current.has(k));
+    prevSatisfiedRef.current = currentSatisfied;
+    if (newlySatisfied.length === 0 || reduceMotion) return;
+    setJustActivated((prev) => new Set([...prev, ...newlySatisfied]));
+    const timer = setTimeout(() => {
+      setJustActivated((prev) => {
+        const next = new Set(prev);
+        for (const k of newlySatisfied) next.delete(k);
+        return next;
+      });
+    }, ACTIVATION_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [dependencies, reduceMotion]);
+
+  // --- US14 (T084): pan/zoom viewport transform, layered on top of the existing SVG -- the
+  // node/edge coordinates above are never recomputed for this, only the viewport's own
+  // translate/scale changes. ---
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(
+    null,
+  );
+
+  const onWheel = (e: React.WheelEvent<SVGSVGElement>) => {
+    e.preventDefault();
+    const delta = -e.deltaY * 0.0015;
+    setView((v) => ({ ...v, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale + delta)) }));
+  };
+  const onMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: view.x, origY: view.y };
+  };
+  const onMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    setView((v) => ({ ...v, x: dragRef.current!.origX + dx, y: dragRef.current!.origY + dy }));
+  };
+  const endDrag = () => {
+    dragRef.current = null;
+  };
+  const resetView = () => setView({ x: 0, y: 0, scale: 1 });
+
   return (
-    <Card eyebrow="Plan" title="Task graph">
+    <Card
+      eyebrow="Plan"
+      title="Task graph"
+      action={
+        tasks.length > 0 ? (
+          <button
+            type="button"
+            onClick={resetView}
+            className="rounded-md border border-card-edge px-1.5 py-0.5 text-[11px] text-text-faint hover:text-text-dim"
+          >
+            Reset view
+          </button>
+        ) : undefined
+      }
+    >
       {tasks.length === 0 ? (
         <p className="text-[11px] italic text-text-faint">No plan yet for this run.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <svg width={width} height={height} className="min-w-full" role="img" aria-label="Organisation task graph">
+        <div className="overflow-hidden rounded-md border border-card-edge/50">
+          <svg
+            width="100%"
+            height={Math.min(height, 420)}
+            viewBox={`0 0 ${width} ${height}`}
+            className="min-w-full cursor-grab active:cursor-grabbing"
+            role="img"
+            aria-label="Organisation task graph (scroll to zoom, drag to pan)"
+            onWheel={onWheel}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={endDrag}
+            onMouseLeave={endDrag}
+          >
             {reduceMotion ? null : (
-              <style>{`@keyframes org-pulse{0%,100%{opacity:1}50%{opacity:.45}}`}</style>
+              <style>{`
+                @keyframes org-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+                @keyframes org-edge-activate{0%{stroke-width:5;opacity:1}100%{stroke-width:2;opacity:1}}
+              `}</style>
             )}
-            {dependencies.map((d, i) => {
-              const a = positions.get(d.prerequisite_task_id);
-              const b = positions.get(d.dependent_task_id);
-              if (!a || !b) return null;
-              const satisfied = d.state === "satisfied";
-              return (
-                <line
-                  key={i}
-                  x1={a.x + NODE_W}
-                  y1={a.y + NODE_H / 2}
-                  x2={b.x}
-                  y2={b.y + NODE_H / 2}
-                  stroke={satisfied ? "rgb(16 185 129)" : "var(--color-card-edge)"}
-                  strokeWidth={satisfied ? 2 : 1}
-                  strokeDasharray={satisfied ? undefined : "4 3"}
-                />
-              );
-            })}
-            {tasks.map((t) => {
-              const p = positions.get(t.task_id);
-              if (!p) return null;
-              const c = nodeColor(t.status);
-              const pulsing = !reduceMotion && t.status === "running";
-              return (
-                <g key={t.task_id} transform={`translate(${p.x} ${p.y})`}>
-                  <rect
-                    width={NODE_W}
-                    height={NODE_H}
-                    rx={10}
-                    fill={c.fill}
-                    stroke={c.stroke}
-                    strokeWidth={1.5}
-                    style={pulsing ? { animation: "org-pulse 1.6s ease-in-out infinite" } : undefined}
+            <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
+              {dependencies.map((d, i) => {
+                const a = positions.get(d.prerequisite_task_id);
+                const b = positions.get(d.dependent_task_id);
+                if (!a || !b) return null;
+                const satisfied = d.state === "satisfied";
+                const activating = justActivated.has(depKey(d));
+                return (
+                  <line
+                    key={i}
+                    x1={a.x + NODE_W}
+                    y1={a.y + NODE_H / 2}
+                    x2={b.x}
+                    y2={b.y + NODE_H / 2}
+                    stroke={satisfied ? "rgb(16 185 129)" : "var(--color-card-edge)"}
+                    strokeWidth={satisfied ? 2 : 1}
+                    strokeDasharray={satisfied ? undefined : "4 3"}
+                    style={{
+                      transition: "stroke 400ms ease-out, stroke-width 400ms ease-out",
+                      animation: activating ? "org-edge-activate 1.4s ease-out" : undefined,
+                    }}
                   />
-                  <text x={10} y={17} fontSize={10} fontWeight={600} fill="var(--color-text)">
-                    {(label.get(t.task_id)?.capability ?? "").slice(0, 22)}
-                  </text>
-                  <text x={10} y={31} fontSize={9} fill="var(--color-text-muted)">
-                    {t.assigned_agent.slice(0, 20)}
-                  </text>
-                  <text x={10} y={41} fontSize={8} fill="var(--color-text-faint)">
-                    {t.status}
-                    {t.ran_concurrently ? " · ∥" : ""}
-                  </text>
-                </g>
-              );
-            })}
+                );
+              })}
+              {tasks.map((t) => {
+                const p = positions.get(t.task_id);
+                if (!p) return null;
+                const c = nodeColor(t.status);
+                const pulsing = !reduceMotion && t.status === "running";
+                return (
+                  <g key={t.task_id} transform={`translate(${p.x} ${p.y})`}>
+                    <rect
+                      width={NODE_W}
+                      height={NODE_H}
+                      rx={10}
+                      fill={c.fill}
+                      stroke={c.stroke}
+                      strokeWidth={1.5}
+                      style={pulsing ? { animation: "org-pulse 1.6s ease-in-out infinite" } : undefined}
+                    />
+                    <text x={10} y={17} fontSize={10} fontWeight={600} fill="var(--color-text)">
+                      {(label.get(t.task_id)?.capability ?? "").slice(0, 22)}
+                    </text>
+                    <text x={10} y={31} fontSize={9} fill="var(--color-text-muted)">
+                      {t.assigned_agent.slice(0, 20)}
+                    </text>
+                    <text x={10} y={41} fontSize={8} fill="var(--color-text-faint)">
+                      {t.status}
+                      {t.ran_concurrently ? " · ∥" : ""}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
           </svg>
         </div>
       )}

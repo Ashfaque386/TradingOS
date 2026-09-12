@@ -76,6 +76,7 @@ def classify_message(text: str) -> _Classification:
         system_prompt = get_active_prompt(CLASSIFIER_PROMPT_SLUG)
         response = complete(
             "orchestration",
+            agent_name="ceo_agent_chat",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},

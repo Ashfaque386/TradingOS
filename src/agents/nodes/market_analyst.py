@@ -14,7 +14,7 @@ from src.agents.llm_router import complete
 from src.agents.nodes.common import extract_json
 from src.agents.prompt_registry import get_active_prompt
 from src.agents.state import MarketContext, TradingOSGraphState
-from src.agents.tools.registry import get_skill_registry
+from src.agents.tools.registry import SkillDisabledError, SkillNotGrantedError, get_skill_registry
 from src.agents.tools.skills import SkillNotImplementedError
 
 PROMPT_SLUG = "market_analyst_agent"
@@ -24,9 +24,13 @@ logger = structlog.get_logger(__name__)
 
 
 def _try_skill(name: str, **kwargs: object) -> Any | None:
+    # spec 002 US8: agent_name= makes the per-agent AgentSkillMap grant a real gate, not just a
+    # catalog entry -- SkillNotGrantedError/SkillDisabledError degrade the same way
+    # SkillNotImplementedError already does (this node explicitly notes reduced coverage rather
+    # than fabricating figures; it never needed the skill to *always* succeed).
     try:
-        return get_skill_registry().execute(name, **kwargs)
-    except SkillNotImplementedError:
+        return get_skill_registry().execute(name, agent_name="market_analyst", **kwargs)
+    except (SkillNotImplementedError, SkillNotGrantedError, SkillDisabledError):
         return None
 
 
@@ -61,6 +65,7 @@ def market_analyst_node(state: TradingOSGraphState) -> dict[str, MarketContext]:
         try:
             response = complete(
                 "research",
+                agent_name="market_analyst",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

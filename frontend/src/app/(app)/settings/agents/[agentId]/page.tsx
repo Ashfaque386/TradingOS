@@ -12,6 +12,7 @@ import {
   PromptVersionHistory,
   ProviderHealth,
   ProviderModelPanel,
+  SkillGrantPanel,
   TestPanel,
 } from "@/components/agent-settings";
 
@@ -30,6 +31,14 @@ export default function AgentSettingsPage({
     queryKey: ["agent-config", slug],
     queryFn: () => api.agentConfig(slug),
   });
+  // spec 002 US8: AgentSkillMap keys by the real KNOWN_AGENTS name (e.g. "market_analyst"),
+  // which isn't always identical to this page's own prompt-registry slug (e.g.
+  // "market_analyst_agent") -- resolve it once against the real Agent Registry rather than
+  // guessing a suffix rule, honestly falling back to the slug itself if no match is found.
+  const { data: registry } = useQuery({ queryKey: ["agent-registry"], queryFn: api.agentRegistry });
+  const resolvedAgentName =
+    registry?.find((a) => a.agent_name === slug || a.agent_name === slug.replace(/_agent$/, ""))
+      ?.agent_name ?? slug;
 
   return (
     <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col gap-4 p-6 sm:p-8">
@@ -73,6 +82,7 @@ export default function AgentSettingsPage({
             <PromptEditor slug={slug} />
             <TestPanel slug={slug} isLlmBacked={config.is_llm_backed} />
           </div>
+          <SkillGrantPanel agentName={resolvedAgentName} />
         </>
       )}
     </main>

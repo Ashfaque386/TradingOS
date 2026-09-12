@@ -175,8 +175,11 @@ def settle_run_after_approval(session: Session, run_id: uuid.UUID) -> None:
                     TaskStatus.COMPLETED.value,
                     TaskStatus.FAILED.value,
                     TaskStatus.BLOCKED.value,
+                    # spec 002 US7: treated the same as BLOCKED here for consistency -- both are
+                    # task-level outcomes this check already considers "not open work", not a
+                    # reason alone to keep a run waiting once its approval is decided.
+                    TaskStatus.ESCALATED.value,
                     TaskStatus.CANCELLED.value,
-                    TaskStatus.SUPERSEDED.value,
                 )
             ),
         )

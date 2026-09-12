@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAgentLogStream } from "@/hooks/useAgentLogStream";
 import { usePageStatus } from "@/hooks/usePageStatus";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { OrganizationOverview } from "@/components/console";
+import { OrganizationOverview, AgentFleet } from "@/components/console";
 import { GraphFlowchart } from "@/components/agents/graph-flowchart";
 import { ThoughtStream } from "@/components/agents/thought-stream";
 import { RunControls } from "@/components/agents/run-controls";
@@ -22,6 +23,7 @@ import { AgentAnalyticsPanel } from "@/components/agents/agent-analytics-panel";
  * Console" and "Organization"), which read as two competing, similarly-named consoles rather
  * than one. `/agents` now redirects here (next.config.ts). */
 export default function ConsoleHome() {
+  const router = useRouter();
   const { logs, connected } = useAgentLogStream();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
@@ -56,8 +58,16 @@ export default function ConsoleHome() {
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="organization" className="mt-4">
+        <TabsContent value="organization" className="mt-4 flex flex-col gap-4">
           <OrganizationOverview />
+          <Card eyebrow="Roster" title="Agent Fleet">
+            <p className="mb-3 text-[11px] text-text-faint">
+              Every currently-registered agent, grouped by department, with real live status —
+              additive to the admin enable/disable table in the &ldquo;Agents &amp; Legacy
+              Graph&rdquo; tab, not a replacement for it.
+            </p>
+            <AgentFleet onSelect={(agentId) => router.push(`/console/agents/${agentId}`)} />
+          </Card>
         </TabsContent>
 
         <TabsContent value="agents" className="mt-4 flex flex-col gap-4">

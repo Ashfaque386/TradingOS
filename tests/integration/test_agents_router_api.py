@@ -414,3 +414,66 @@ def test_agent_activity_feed_returns_runs_tasks_and_outputs():
 
 def test_agent_activity_feed_404s_for_an_unknown_agent_id():
     assert client.get("/api/v1/agents/not-a-real-agent-id/activity").status_code == 404
+
+
+def test_agent_activity_selected_task_enriches_with_dependencies_and_consumers():
+    """spec 002 US4 (T017): run_id+task_id scope the response to one task -- dependencies,
+    downstream consumers, granted skills, and the real (possibly-null) audit reference."""
+    from tests.orchestration_helpers import cleanup_run, seed_run_with_tasks
+
+    run_id, task_ids = seed_run_with_tasks(
+        [
+            {"key": "news", "capability": "news_ingestion", "assigned_agent": "news_agent"},
+            {
+                "key": "sentiment",
+                "capability": "sentiment_analysis",
+                "assigned_agent": "sentiment_agent",
+                "depends_on": ["news"],
+            },
+        ]
+    )
+    try:
+        resp = client.get(
+            "/api/v1/agents/AGT-014/activity",
+            params={"run_id": str(run_id), "task_id": str(task_ids["sentiment"])},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        selected = body["selected_task"]
+        assert selected is not None
+        assert selected["task_id"] == str(task_ids["sentiment"])
+        assert selected["run_id"] == str(run_id)
+        assert len(selected["dependencies"]) == 1
+        assert selected["dependencies"][0]["prerequisite_task_id"] == str(task_ids["news"])
+        assert selected["dependencies"][0]["prerequisite_agent"] == "news_agent"
+        assert selected["audit_reference"] is None  # honest -- US11 hasn't populated it yet
+        assert isinstance(selected["granted_skills"], list)
+
+        # The upstream news task's own view shows sentiment as its downstream consumer.
+        resp2 = client.get(
+            "/api/v1/agents/AGT-013/activity",
+            params={"run_id": str(run_id), "task_id": str(task_ids["news"])},
+        )
+        news_selected = resp2.json()["selected_task"]
+        assert len(news_selected["downstream_consumers"]) == 1
+        assert news_selected["downstream_consumers"][0]["task_id"] == str(task_ids["sentiment"])
+    finally:
+        cleanup_run(run_id)
+
+
+def test_agent_activity_selected_task_is_null_when_task_belongs_to_a_different_agent():
+    from tests.orchestration_helpers import cleanup_run, seed_run_with_tasks
+
+    run_id, task_ids = seed_run_with_tasks(
+        [{"key": "news", "capability": "news_ingestion", "assigned_agent": "news_agent"}]
+    )
+    try:
+        # AGT-014 is sentiment_agent, not news_agent -- this task isn't assigned to it.
+        resp = client.get(
+            "/api/v1/agents/AGT-014/activity",
+            params={"run_id": str(run_id), "task_id": str(task_ids["news"])},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["selected_task"] is None
+    finally:
+        cleanup_run(run_id)

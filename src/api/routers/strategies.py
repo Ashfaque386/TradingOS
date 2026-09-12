@@ -72,6 +72,7 @@ from src.engine.sandbox.backtest_runner import (
 )
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
+from src.orchestration.approvals import has_approved_paper_request
 
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 
@@ -1086,6 +1087,19 @@ def promote_strategy(
             )
         if strategy.current_version_id is None:
             raise HTTPException(status_code=409, detail="Strategy has no code version yet")
+        if body.to_status == "PaperTrading" and not has_approved_paper_request(
+            session, strategy.id
+        ):
+            # spec 002 US1: this generic Kanban-move endpoint must not be a back door around
+            # the real approval gate (src/orchestration/approvals.py) -- only an *approved*
+            # ApprovalRequest may authorise entering Paper Trading, through any endpoint.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Strategy cannot enter Paper Trading without an approved ApprovalRequest -- "
+                    "no approval on record, or the most recent decision was a rejection"
+                ),
+            )
         old_status = strategy.status
         strategy.status = body.to_status
         write_audit_entry(

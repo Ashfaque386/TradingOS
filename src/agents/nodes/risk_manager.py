@@ -241,6 +241,7 @@ def _generate_narrative(
         )
         response = complete(
             "research",
+            agent_name="risk_manager",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

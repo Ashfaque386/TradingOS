@@ -30,6 +30,14 @@ class SkillDisabledError(RuntimeError):
     pass
 
 
+class SkillNotGrantedError(RuntimeError):
+    """spec 002 US8: `agent_name` was supplied to `execute()` but that agent has no
+    `AgentSkillMap` grant for this skill -- a per-agent restriction, additive to (never a
+    substitute for) the global enable/disable switch above."""
+
+    pass
+
+
 class SkillRegistry:
     def __init__(self) -> None:
         self._skills: dict[str, BaseSkill] = {}
@@ -68,8 +76,38 @@ class SkillRegistry:
             raise SkillDisabledError(f"skill '{name}' is disabled")
         return self._skills[name]
 
-    def execute(self, name: str, **kwargs: Any) -> Any:
-        return self.get(name).execute(**kwargs)
+    def execute(self, name: str, *, agent_name: str | None = None, **kwargs: Any) -> Any:
+        """spec 002 US8: when `agent_name` is supplied, this agent must hold a real
+        `AgentSkillMap` grant for `name`, in addition to the skill being globally enabled
+        (`get()` above). `agent_name=None` (the default -- every call site not yet updated to
+        pass it) preserves today's behaviour exactly: no per-agent check, matching the
+        already-existing global enable/disable gate only."""
+        skill = self.get(name)
+        if agent_name is not None and not self._has_grant(agent_name, name):
+            raise SkillNotGrantedError(f"agent '{agent_name}' is not granted skill '{name}'")
+        return skill.execute(**kwargs)
+
+    def _has_grant(self, agent_name: str, skill_name: str) -> bool:
+        from sqlalchemy import select
+
+        from src.core.db import get_session
+        from src.models.skill import AgentSkillMap
+        from src.models.skill import Skill as SkillModel
+
+        with get_session() as session:
+            skill_row = session.scalar(select(SkillModel).where(SkillModel.name == skill_name))
+            if skill_row is None:
+                # No DB-015 catalog row for this skill (e.g. a test-only in-memory skill never
+                # synced to the DB) -- nothing to grant against, so there is nothing to deny
+                # either; the global enabled/disabled check above remains the only real gate.
+                return True
+            grant = session.scalar(
+                select(AgentSkillMap).where(
+                    AgentSkillMap.agent_name == agent_name,
+                    AgentSkillMap.skill_id == skill_row.id,
+                )
+            )
+            return grant is not None
 
     def _require_registered(self, name: str) -> None:
         if name not in self._skills:

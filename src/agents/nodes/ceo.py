@@ -36,6 +36,7 @@ def ceo_agent_node(state: TradingOSGraphState) -> dict[str, object]:
     try:
         response = complete(
             "orchestration",
+            agent_name="ceo_agent",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

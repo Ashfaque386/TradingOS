@@ -59,7 +59,14 @@ def emit(
 ) -> OrganizationalEvent:
     """Insert the event row + publish to Redis (+ optional audit). The caller owns the
     transaction; this ``flush()``es but does not ``commit()`` so the event and the caller's own
-    state change land together (data-model.md section 8)."""
+    state change land together (data-model.md section 8).
+
+    spec 002 US11 (T049): when ``audited=True``, the created ``AuditLog`` row's id is attached
+    to the returned ``OrganizationalEvent`` as ``_audit_log_id`` (not a mapped column -- a plain
+    instance attribute) so a caller that also owns a domain row's ``audit_reference`` FK
+    (``OrganizationalDecision``, ``ResultArtefact``, ``Task``) can set it in the same
+    transaction, closing the "data exists, last write missing" gap the original audit found.
+    """
     now = datetime.now(UTC)
     sequence = _next_sequence(session, run_id)
     row = OrganizationalEvent(
@@ -74,8 +81,9 @@ def emit(
     session.add(row)
     session.flush()
 
+    audit_log_id: int | None = None
     if audited:
-        write_audit_entry(
+        audit_row = write_audit_entry(
             session,
             actor_type=(
                 "AI Agent" if event_type.startswith(("ceo.", "task.", "agent.")) else "System"
@@ -86,6 +94,8 @@ def emit(
             entity_id=subject_id,
             after_state=payload or {},
         )
+        audit_log_id = audit_row.id
+    row._audit_log_id = audit_log_id  # type: ignore[attr-defined]
 
     envelope = json.dumps(
         {

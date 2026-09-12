@@ -2,8 +2,11 @@
 SC-013).
 
 - disabling the sole agent for a required capability -> the CEO records a real escalation
-  decision, blocks the task (never dispatches the disabled agent), and independent tasks are
-  unaffected;
+  decision, the task itself reaches a real, distinct `ESCALATED` status (spec 002 US7/C-5 --
+  this exact branch previously collapsed into the generic `BLOCKED` status, indistinguishable
+  from a task blocked only because a dependency never satisfied; the escalated task's own
+  *dependents* still become `BLOCKED` via `mark_unsatisfiable`, which is the distinction US7
+  makes observable), never dispatches the disabled agent, and independent tasks are unaffected;
 - re-enabling it -> a freshly-dispatched task using that capability succeeds again;
 - when an *enabled* fallback agent exists for the same capability, the CEO reassigns to it
   instead of blocking (unit-level: no two real agents share a capability today, so the fallback
@@ -35,7 +38,7 @@ def _cleanup_control_row(agent_name: str) -> None:
         session.commit()
 
 
-def test_disabling_the_sole_agent_blocks_the_task_and_records_an_escalation():
+def test_disabling_the_sole_agent_escalates_the_task_and_records_an_escalation() -> None:
     admin_id, _token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
     run_id, keys = seed_run_with_tasks(
         [
@@ -72,10 +75,10 @@ def test_disabling_the_sole_agent_blocks_the_task_and_records_an_escalation():
             }
             # Independent work is unaffected by the disabled agent.
             assert tasks["sentiment_analysis"].status == TaskStatus.COMPLETED.value
-            blocked = tasks["market_analysis"]
-            assert blocked.status == TaskStatus.BLOCKED.value
-            assert "agent unavailable" in (blocked.blocked_reason or "")
-            assert blocked.result_artefact_id is None
+            escalated = tasks["market_analysis"]
+            assert escalated.status == TaskStatus.ESCALATED.value
+            assert "agent unavailable" in (escalated.blocked_reason or "")
+            assert escalated.result_artefact_id is None
 
             decisions = session.scalars(
                 select(OrganizationalDecision).where(
@@ -90,7 +93,7 @@ def test_disabling_the_sole_agent_blocks_the_task_and_records_an_escalation():
                 select(OrganizationalEvent).where(OrganizationalEvent.run_id == run_id)
             ).all()
             assert any(
-                e.event_type == "task.blocked" and e.payload.get("agent") == "market_analyst"
+                e.event_type == "task.escalated" and e.payload.get("agent") == "market_analyst"
                 for e in events
             )
     finally:
@@ -99,7 +102,7 @@ def test_disabling_the_sole_agent_blocks_the_task_and_records_an_escalation():
         cleanup_user(admin_id)
 
 
-def test_re_enabling_lets_a_fresh_dispatch_of_that_capability_succeed():
+def test_re_enabling_lets_a_fresh_dispatch_of_that_capability_succeed() -> None:
     admin_id, _token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
     with get_session() as session:
         set_agent_enabled(
@@ -138,7 +141,7 @@ def test_re_enabling_lets_a_fresh_dispatch_of_that_capability_succeed():
         cleanup_user(admin_id)
 
 
-def test_when_a_fallback_agent_exists_the_ceo_reassigns_instead_of_blocking():
+def test_when_a_fallback_agent_exists_the_ceo_reassigns_instead_of_blocking() -> None:
     """No two real agents currently declare the same capability -- `find_by_capability` is
     patched here to exercise the real `reassign` branch of the same policy code the previous
     test exercised the `escalate` branch of."""
@@ -198,7 +201,7 @@ def test_when_a_fallback_agent_exists_the_ceo_reassigns_instead_of_blocking():
         cleanup_user(admin_id)
 
 
-def test_audit_agent_cannot_be_disabled_at_the_service_layer():
+def test_audit_agent_cannot_be_disabled_at_the_service_layer() -> None:
     admin_id, _token = create_authenticated_user(ROLE_SYSTEM_ADMINISTRATOR)
     try:
         with get_session() as session:

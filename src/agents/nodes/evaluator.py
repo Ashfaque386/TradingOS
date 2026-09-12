@@ -40,6 +40,7 @@ def _generate_feedback(hypothesis: str, metrics_json: str, failure_reasons: list
         )
         response = complete(
             "research",
+            agent_name="evaluator",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

@@ -19,6 +19,7 @@ import uuid
 from datetime import UTC, datetime
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.audit import write_audit_entry
@@ -44,6 +45,26 @@ class ApprovalAlreadyDecidedError(RuntimeError):
 
 class RejectionReasonRequiredError(ValueError):
     """FR-053: a rejection must carry a human-written reason."""
+
+
+def has_approved_paper_request(session: Session, strategy_id: uuid.UUID) -> bool:
+    """spec 002 US1 (closes the `/strategies/{id}/promote` bypass): the single enforcement
+    point for whether a strategy may move to ``PaperTrading`` through *any* code path, not
+    just the dedicated `approve()` above.
+
+    True only when the most-recently-created `ApprovalRequest` for this strategy is
+    ``approved``. A strategy with no request at all, one still `pending`, or whose latest
+    request was `rejected`, all correctly return False -- a later rejection is never
+    overridable by re-promoting through a different endpoint (spec 002 US1 AC1/AC2); an
+    earlier approval still authorises promotion even after an unrelated status change
+    elsewhere (AC3)."""
+    latest = session.execute(
+        select(ApprovalRequest)
+        .where(ApprovalRequest.strategy_id == strategy_id)
+        .order_by(ApprovalRequest.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return latest is not None and latest.status == ApprovalStatus.APPROVED.value
 
 
 def _load_pending(session: Session, request_id: uuid.UUID) -> ApprovalRequest:
@@ -91,7 +112,11 @@ def approve(session: Session, *, request_id: uuid.UUID, actor_id: str) -> Approv
             event_type="approval.approved",
             subject_type="approval",
             subject_id=request_id,
-            payload={"strategy_id": str(request.strategy_id), "decided_by": actor_id},
+            payload={
+                "strategy_id": str(request.strategy_id),
+                "decided_by": actor_id,
+                "reason": f"Approved by {actor_id}",
+            },
         )
     session.flush()
     if request.run_id is not None:
@@ -145,7 +170,7 @@ def reject(
             payload={
                 "strategy_id": str(request.strategy_id),
                 "decided_by": actor_id,
-                "reason": request.reason,
+                "reason": f"Rejected by {actor_id}: {request.reason}",
             },
         )
     session.flush()

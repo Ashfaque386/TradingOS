@@ -130,6 +130,7 @@ def generate_options_strategy(
         try:
             response = complete(
                 "research",
+                agent_name="options_strategy_agent",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

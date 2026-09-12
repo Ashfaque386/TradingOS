@@ -40,7 +40,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.agents import prompt_registry
-from src.agents.analytics import bucket_by_day, group_by_agent, summarize_runs
+from src.agents.analytics import (
+    aggregate_retry_escalation,
+    bucket_by_day,
+    group_by_agent,
+    summarize_runs,
+)
 from src.agents.checkpointer import runtime_checkpoint_dsn
 from src.agents.control import (
     KNOWN_AGENTS,
@@ -78,6 +83,7 @@ from src.models.agent import AgentControlState, AgentLog, AgentRun
 from src.models.approval import ApprovalRequest
 from src.models.orchestration import ResultArtefact as OrgResultArtefact
 from src.models.orchestration import Task as OrgTask
+from src.models.orchestration import TaskDependency as OrgTaskDependency
 from src.models.skill import AgentSkillMap, Skill
 from src.models.strategy import BacktestResult, Strategy, StrategySuggestion, StrategyVersion
 from src.models.user import User
@@ -384,19 +390,77 @@ class AgentActivityArtefact(BaseModel):
     created_at: datetime | None
 
 
+class AgentSelectedTaskDependency(BaseModel):
+    prerequisite_task_id: uuid.UUID
+    prerequisite_agent: str | None
+    required_artefact_type: str
+    state: str
+
+
+class AgentSelectedTaskConsumer(BaseModel):
+    task_id: uuid.UUID
+    agent: str | None
+    required_artefact_type: str
+    state: str
+
+
+class AgentSelectedTask(BaseModel):
+    """spec 002 US4 (T017): everything the Agent Workspace's "current task" panel needs for
+    one specific task -- dependencies, waiting reason (reuses the same `blocked_reason`/
+    `retry_count`/`failure_reason` the frontend's `taskStateExplainer` already renders for),
+    inputs/outputs, downstream consumers, tools/skills, and the real (possibly still-null)
+    audit reference. Present only when `run_id`+`task_id` are supplied and resolve to a real
+    task assigned to this agent."""
+
+    task_id: uuid.UUID
+    run_id: uuid.UUID
+    status: str
+    objective: str
+    capability: str
+    required_inputs: list[str]
+    received_inputs: list[dict[str, Any]]
+    dependencies: list[AgentSelectedTaskDependency]
+    downstream_consumers: list[AgentSelectedTaskConsumer]
+    blocked_reason: str | None
+    failure_reason: str | None
+    retry_count: int
+    max_retries: int
+    granted_skills: list[str]
+    audit_reference: int | None
+
+
 class AgentActivityResponse(BaseModel):
     agent_id: str
     agent_name: str
     recent_runs: list[AgentActivityRun]
     recent_tasks: list[AgentActivityTask]
     recent_outputs: list[AgentActivityArtefact]
+    # spec 002 US2/T008: the actually-resolved provider/model from this agent's most recent
+    # ResultArtefact.provenance -- real, not the static "AUTO (routing.yaml)" label -- so a
+    # CUSTOM override (or its absence) is visible, not just configured. `None` when this agent
+    # is not LLM-backed or has no recorded org-task output yet (frontend falls back to the
+    # static deterministic/no-runs-yet label in that case).
+    resolved_provider: str | None = None
+    resolved_model: str | None = None
+    # spec 002 US4 (T017): populated only when the caller passes run_id+task_id.
+    selected_task: AgentSelectedTask | None = None
 
 
 @router.get("/{agent_id}/activity", response_model=AgentActivityResponse)
-def get_agent_activity(agent_id: str, limit: int = 20) -> AgentActivityResponse:
+def get_agent_activity(
+    agent_id: str,
+    limit: int = 20,
+    run_id: uuid.UUID | None = None,
+    task_id: uuid.UUID | None = None,
+) -> AgentActivityResponse:
     """Recent execution history for one agent -- runs, delegated organisation tasks, and result
     artefacts. `agent_id` is the SRS identifier (e.g. "AGT-013"), matching `GET /{agent_id}`.
-    Closes the console's blind spot for scheduled / non-graph agents (BUG-C)."""
+    Closes the console's blind spot for scheduled / non-graph agents (BUG-C).
+
+    spec 002 US4 (T017): optional `run_id`/`task_id` scope the response to one specific task
+    (via `selected_task`) -- dependencies, waiting reason, inputs, downstream consumers,
+    granted skills, and the real audit reference -- for the Agent Workspace opened from a run's
+    task list, rather than only this agent's generic recent activity."""
     matches = [a for a in KNOWN_AGENTS if a.agent_id == agent_id]
     if not matches:
         raise HTTPException(status_code=404, detail=f"Unknown agent id '{agent_id}'")
@@ -426,6 +490,91 @@ def get_agent_activity(agent_id: str, limit: int = 20) -> AgentActivityResponse:
             if artefact_ids
             else []
         )
+        resolved_provider: str | None = None
+        resolved_model: str | None = None
+        for artefact in outputs:  # already ordered by created_at desc -- first hit is most recent
+            provenance = artefact.provenance or {}
+            if provenance.get("model_used"):
+                resolved_provider = provenance.get("provider_used")
+                resolved_model = provenance.get("model_used")
+                break
+
+        selected_task: AgentSelectedTask | None = None
+        if run_id is not None and task_id is not None:
+            task_row = session.get(OrgTask, task_id)
+            if (
+                task_row is not None
+                and task_row.run_id == run_id
+                and task_row.assigned_agent in names
+            ):
+                dep_rows = session.scalars(
+                    select(OrgTaskDependency).where(OrgTaskDependency.dependent_task_id == task_id)
+                ).all()
+                consumer_rows = session.scalars(
+                    select(OrgTaskDependency).where(
+                        OrgTaskDependency.prerequisite_task_id == task_id
+                    )
+                ).all()
+                related_ids = {d.prerequisite_task_id for d in dep_rows} | {
+                    c.dependent_task_id for c in consumer_rows
+                }
+                related_tasks = (
+                    {
+                        t.id: t
+                        for t in session.scalars(
+                            select(OrgTask).where(OrgTask.id.in_(related_ids))
+                        ).all()
+                    }
+                    if related_ids
+                    else {}
+                )
+                granted = session.scalars(
+                    select(Skill.name)
+                    .join(AgentSkillMap, AgentSkillMap.skill_id == Skill.id)
+                    .where(AgentSkillMap.agent_name == task_row.assigned_agent)
+                ).all()
+                selected_task = AgentSelectedTask(
+                    task_id=task_row.id,
+                    run_id=task_row.run_id,
+                    status=task_row.status,
+                    objective=task_row.objective,
+                    capability=task_row.capability,
+                    required_inputs=list(task_row.required_inputs),
+                    received_inputs=list(task_row.received_inputs),
+                    dependencies=[
+                        AgentSelectedTaskDependency(
+                            prerequisite_task_id=d.prerequisite_task_id,
+                            prerequisite_agent=(
+                                related_tasks[d.prerequisite_task_id].assigned_agent
+                                if d.prerequisite_task_id in related_tasks
+                                else None
+                            ),
+                            required_artefact_type=d.required_artefact_type,
+                            state=d.state,
+                        )
+                        for d in dep_rows
+                    ],
+                    downstream_consumers=[
+                        AgentSelectedTaskConsumer(
+                            task_id=c.dependent_task_id,
+                            agent=(
+                                related_tasks[c.dependent_task_id].assigned_agent
+                                if c.dependent_task_id in related_tasks
+                                else None
+                            ),
+                            required_artefact_type=c.required_artefact_type,
+                            state=c.state,
+                        )
+                        for c in consumer_rows
+                    ],
+                    blocked_reason=task_row.blocked_reason,
+                    failure_reason=task_row.failure_reason,
+                    retry_count=task_row.retry_count,
+                    max_retries=task_row.max_retries,
+                    granted_skills=list(granted),
+                    audit_reference=task_row.audit_reference,
+                )
+
         return AgentActivityResponse(
             agent_id=agent_id,
             agent_name=next(iter(names)),
@@ -458,6 +607,9 @@ def get_agent_activity(agent_id: str, limit: int = 20) -> AgentActivityResponse:
                 )
                 for a in outputs
             ],
+            resolved_provider=resolved_provider,
+            resolved_model=resolved_model,
+            selected_task=selected_task,
         )
 
 
@@ -577,6 +729,7 @@ def _persist_strategy_progress(
     output: dict[str, Any],
     tracking: _StrategyTracking,
     agent_run_id: uuid.UUID,
+    org_run_id: uuid.UUID | None = None,
 ) -> None:
     """Real persistence for DB-005/DB-006 (Strategy/StrategyVersion, src/models/strategy.py):
     before this, nothing in the codebase ever wrote a row to either table (confirmed by
@@ -813,6 +966,7 @@ def _persist_strategy_progress(
                         result_row.strategy_version_id if result_row is not None else None
                     ),
                     rationale=rec.rationale,
+                    run_id=org_run_id,
                 )
             else:
                 strategy_row.status = "Deprecated"
@@ -825,12 +979,16 @@ def _open_paper_approval_request(
     strategy: Strategy,
     strategy_version_id: uuid.UUID | None,
     rationale: str,
+    run_id: uuid.UUID | None = None,
 ) -> None:
     """US3 (T045): open the real pre-Paper-Trading human approval gate for a strategy the
-    research graph just recommended for Paper Trading. The legacy graph has no ``OrganizationRun``
-    so ``run_id`` is left null; the decision is made via ``POST
-    /api/v1/organization/approvals/{id}/approve|reject`` (SystemAdministrator / PortfolioManager
-    only). Idempotent: never opens a second pending request for the same strategy."""
+    research graph just recommended for Paper Trading. ``run_id`` is the real
+    ``OrganizationRun.id`` when this recommendation came from an org-run-driven task dispatch
+    (threaded from `_execute_graph_run`/`_persist_strategy_progress`, spec 002 follow-up); it is
+    left `None` for the legacy, manually-triggered graph run, which has no `OrganizationRun`.
+    The decision is made via ``POST /api/v1/organization/approvals/{id}/approve|reject``
+    (SystemAdministrator / PortfolioManager only). Idempotent: never opens a second pending
+    request for the same strategy."""
     existing = session.scalars(
         select(ApprovalRequest).where(
             ApprovalRequest.strategy_id == strategy.id,
@@ -840,7 +998,7 @@ def _open_paper_approval_request(
     if existing is not None:
         return
     request = ApprovalRequest(
-        run_id=None,
+        run_id=run_id,
         strategy_id=strategy.id,
         strategy_version_id=strategy_version_id,
         recommendation_artefact_id=None,
@@ -862,6 +1020,23 @@ def _open_paper_approval_request(
             "rationale": rationale,
         },
     )
+    # spec 002 US1 (AC4): approval.requested joins approval.approved/rejected on the event bus,
+    # mirroring the identical `if request.run_id is not None:` guard those two already use in
+    # src/orchestration/approvals.py -- `run_id` is null for a legacy (non-OrganizationRun)
+    # deployment, same as it is for those two, so this is not a new limitation, just parity.
+    if request.run_id is not None:
+        from src.orchestration import events
+
+        events.emit(
+            session,
+            run_id=request.run_id,
+            event_type="approval.requested",
+            subject_type="approval",
+            subject_id=request.id,
+            # spec 002 US6: `reason` under the uniform key the Activity Stream reads.
+            payload={"strategy_id": str(strategy.id), "rationale": rationale, "reason": rationale},
+            audited=False,  # already audited above via write_audit_entry
+        )
 
 
 def _fetch_account_capital() -> float | None:
@@ -962,6 +1137,7 @@ def _execute_graph_run(
     root_run_id: uuid.UUID,
     resume: bool = False,
     research_context: dict[str, Any] | None = None,
+    org_run_id: uuid.UUID | None = None,
 ) -> None:
     """Runs in a detached `threading.Thread` (dispatched after the trigger/resume endpoint
     already returned) -- or, for the org task engine's `strategy_research` capability (T113b),
@@ -975,6 +1151,14 @@ def _execute_graph_run(
     (T055) is actually populated at runtime for an org-driven run -- `None` (the manual
     `trigger_research` path's own shape, unchanged) leaves that node's prompt exactly as it was
     before this parameter existed.
+
+    `org_run_id` (spec 002 follow-up): the real `OrganizationRun.id` when this graph run is one
+    task's dispatch inside an org-led run (`_strategy_research_handler` passes `task.run_id`);
+    `None` for the manual `trigger_research`/`resume` paths, which have no `OrganizationRun`.
+    Threaded through to `_persist_strategy_progress` -> `_open_paper_approval_request` so a
+    deployment recommendation reached via an org-run task opens an `ApprovalRequest` with a real
+    `run_id` -- previously always `None` regardless of caller, which meant `approval.requested`/
+    `approval.approved`/`approval.rejected` could never actually reach the live event bus.
 
     REL-060: always runs with a real Postgres-backed checkpointer (`config={"configurable":
     {"thread_id": thread_id}}`) so a pause has somewhere real to resume from -- `resume=False`
@@ -1066,6 +1250,7 @@ def _execute_graph_run(
                             output=output,
                             tracking=tracking,
                             agent_run_id=child.id,
+                            org_run_id=org_run_id,
                         )
                         write_audit_entry(
                             session,
@@ -1904,6 +2089,8 @@ class AgentAnalyticsSummaryRow(BaseModel):
     avg_duration_seconds: float | None
     p50_duration_seconds: float | None
     p95_duration_seconds: float | None
+    retry_count: int
+    escalated_count: int
 
 
 @router.get("/analytics/summary", response_model=list[AgentAnalyticsSummaryRow])
@@ -1912,7 +2099,11 @@ def get_analytics_summary(days: int = 30) -> list[AgentAnalyticsSummaryRow]:
     graph run AND every per-node child run, not just the root-only rows GET /runs returns. The
     real aggregation math (success rate, Python-side duration percentiles matching
     `src.engine.optimization.monte_carlo`'s own established convention) lives in
-    `src.agents.analytics`, independently unit-tested against fixture data."""
+    `src.agents.analytics`, independently unit-tested against fixture data.
+
+    spec 002 US11 (T051/T052): `retry_count`/`escalated_count` are a second, independent
+    aggregate over the organisation `Task` ledger (not `AgentRun` -- retry/escalation are
+    Task-level, US7 concepts) in the same `days` window, merged in per agent name."""
     cutoff = datetime.now(UTC) - timedelta(days=days)
     display_names = {a.name: a.display_name for a in KNOWN_AGENTS}
 
@@ -1922,11 +2113,18 @@ def get_analytics_summary(days: int = 30) -> list[AgentAnalyticsSummaryRow]:
                 AgentRun.agent_name, AgentRun.status, AgentRun.started_at, AgentRun.ended_at
             ).where(AgentRun.started_at >= cutoff)
         ).all()
+        task_rows = session.execute(
+            select(OrgTask.assigned_agent, OrgTask.retry_count, OrgTask.status).where(
+                OrgTask.created_at >= cutoff
+            )
+        ).all()
 
     by_agent = group_by_agent([tuple(row) for row in rows])
+    retry_escalation = aggregate_retry_escalation([tuple(row) for row in task_rows])
     result: list[AgentAnalyticsSummaryRow] = []
     for agent_name, entries in sorted(by_agent.items()):
         stats = summarize_runs(entries)
+        re_stats = retry_escalation.get(agent_name)
         result.append(
             AgentAnalyticsSummaryRow(
                 agent_name=agent_name,
@@ -1939,6 +2137,8 @@ def get_analytics_summary(days: int = 30) -> list[AgentAnalyticsSummaryRow]:
                 avg_duration_seconds=stats.avg_duration_seconds,
                 p50_duration_seconds=stats.p50_duration_seconds,
                 p95_duration_seconds=stats.p95_duration_seconds,
+                retry_count=re_stats.retry_count if re_stats else 0,
+                escalated_count=re_stats.escalated_count if re_stats else 0,
             )
         )
     return result

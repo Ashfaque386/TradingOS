@@ -21,7 +21,10 @@ def python_code_generator_node(state: TradingOSGraphState) -> dict[str, object]:
 
     system_prompt = get_active_prompt(PROMPT_SLUG)
     templates = get_skill_registry().execute(
-        "search_code_templates", query=state.strategy_logic.hypothesis, top_k=3
+        "search_code_templates",
+        agent_name="python_code_generator",
+        query=state.strategy_logic.hypothesis,
+        top_k=3,
     )
 
     user_prompt = get_active_prompt(TASK_PROMPT_SLUG).format(
@@ -31,6 +34,7 @@ def python_code_generator_node(state: TradingOSGraphState) -> dict[str, object]:
 
     response = complete(
         "coding",
+        agent_name="python_code_generator",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -43,7 +47,9 @@ def python_code_generator_node(state: TradingOSGraphState) -> dict[str, object]:
             code = code[len("python") :]
         code = code.strip()
 
-    formatted = get_skill_registry().execute("format_python_code", code=code)
+    formatted = get_skill_registry().execute(
+        "format_python_code", agent_name="python_code_generator", code=code
+    )
     version_no = (state.python_code.version_no + 1) if state.python_code else 1
     return {
         "python_code": PythonCode(code=formatted, version_no=version_no),

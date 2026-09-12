@@ -36,6 +36,7 @@ def _generate_rationale(
         )
         response = complete(
             "research",
+            agent_name="deployment",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

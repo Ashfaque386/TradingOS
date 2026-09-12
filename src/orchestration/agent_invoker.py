@@ -114,6 +114,7 @@ def _synthesize_handler(
     try:
         response = complete(
             "orchestration",
+            agent_name="ceo_agent",
             messages=[
                 {
                     "role": "system",
@@ -162,6 +163,7 @@ def _adhoc_synthesis_handler(
     try:
         response = complete(
             "orchestration",
+            agent_name="ceo_agent",
             messages=[
                 {
                     "role": "system",
@@ -531,7 +533,10 @@ def _strategy_research_handler(
         root_run_id = root.id
 
     _execute_graph_run(
-        thread_id=thread_id, root_run_id=root_run_id, research_context=research_context
+        thread_id=thread_id,
+        root_run_id=root_run_id,
+        research_context=research_context,
+        org_run_id=task.run_id,
     )
 
     with get_session() as own_session:
@@ -641,5 +646,17 @@ def dispatch(session: Session, task: Task) -> ResultArtefact:
         disposition=ArtefactDisposition.INFORMATIONAL,
     )
     task.result_artefact_id = artefact.id
+    # spec 002 US11 (T050): an audited `result.created` event threads its own real AuditLog id
+    # onto the artefact's `audit_reference` FK, closing the "data exists, last write missing" gap.
+    result_event = events.emit(
+        session,
+        run_id=task.run_id,
+        event_type="result.created",
+        subject_type="artefact",
+        subject_id=artefact.id,
+        payload={"artefact_type": artefact_type, "task_id": str(task.id)},
+        audited=True,
+    )
+    artefact.audit_reference = result_event._audit_log_id  # type: ignore[attr-defined]
     session.flush()
     return artefact

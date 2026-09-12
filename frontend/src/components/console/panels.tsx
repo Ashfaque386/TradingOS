@@ -28,9 +28,7 @@ export function DependencyPanel({
   dependencies: OrgDependency[];
 }) {
   const label = new Map(tasks.map((t) => [t.task_id, `${t.capability} (${t.assigned_agent})`]));
-  const pending = tasks.filter(
-    (t) => !["completed", "cancelled", "superseded"].includes(t.status),
-  );
+  const pending = tasks.filter((t) => !["completed", "cancelled"].includes(t.status));
   return (
     <Card eyebrow="Dependencies" title="Ready when…" density="dense">
       {pending.length === 0 ? (

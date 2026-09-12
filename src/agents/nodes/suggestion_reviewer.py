@@ -44,6 +44,7 @@ def review_suggestion(
     )
     response = complete(
         "research",
+        agent_name="suggestion_reviewer_agent",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

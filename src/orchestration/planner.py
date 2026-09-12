@@ -31,7 +31,7 @@ from src.models.orchestration import (
     TaskDependency,
 )
 from src.orchestration import events
-from src.orchestration.capability_registry import is_concurrency_safe, snapshot
+from src.orchestration.capability_registry import AgentSnapshotRow, is_concurrency_safe, snapshot
 from src.orchestration.enums import DecisionType, DependencyState, RunStatus, TaskStatus
 
 logger = structlog.get_logger(__name__)
@@ -97,7 +97,24 @@ _CONTEXT_SCAFFOLD: tuple[tuple[str, str, str, str, tuple[str, ...]], ...] = (
 )
 
 
-def ensure_research_scaffold(plan: _GeneratedPlan) -> None:
+def _resolve_scaffold_agent(
+    registry: list[AgentSnapshotRow], capability: str, fallback: str
+) -> str:
+    """spec 002 US7: resolve a scaffold task's agent by real declared capability
+    (`capability_registry.snapshot()`, the same registry `generate_plan` already fetched for the
+    LLM-planned portion) rather than the historically hard-coded literal -- a second agent later
+    declaring the same capability is genuinely selectable, matching how the rest of the planner
+    already works. Falls back to `fallback` only if no enabled agent declares it (should not
+    happen given today's registrations; keeps behaviour identical when it doesn't)."""
+    candidates = [
+        row["name"] for row in registry if capability in row["capabilities"] and row["enabled"]
+    ]
+    if fallback in candidates:
+        return fallback
+    return candidates[0] if candidates else fallback
+
+
+def ensure_research_scaffold(plan: _GeneratedPlan, registry: list[AgentSnapshotRow]) -> None:
     """Deterministically guarantee the news/sentiment/portfolio/market/freshness + context
     assembly tasks around any strategy-generating plan, and make every strategy task depend on
     the assembled ``ResearchContext`` (T053). Idempotent: reuses a task the CEO already planned
@@ -119,7 +136,7 @@ def ensure_research_scaffold(plan: _GeneratedPlan) -> None:
                 key=key_for_cap[capability],
                 objective=f"Provide {capability.replace('_', ' ')} for this research objective.",
                 capability=capability,
-                assigned_agent=agent,
+                assigned_agent=_resolve_scaffold_agent(registry, capability, agent),
                 priority=3,
                 expected_output=expected,
                 depends_on=[key_for_cap[cap_for_scaffold_key[dk]] for dk in dep_scaffold_keys],
@@ -132,7 +149,7 @@ def ensure_research_scaffold(plan: _GeneratedPlan) -> None:
             t.depends_on.append(assembly_key)
 
 
-def ensure_adhoc_scaffold(plan: _GeneratedPlan) -> None:
+def ensure_adhoc_scaffold(plan: _GeneratedPlan, registry: list[AgentSnapshotRow]) -> None:
     """T093 (FR-130): a portfolio-analysis / risk-ranking / drawdown-explanation /
     strategy-failure-explanation / rerun-decision objective always gets a ``portfolio_read``
     task feeding a terminal ``adhoc_synthesis`` task (real data, real synthesis, an
@@ -149,7 +166,9 @@ def ensure_adhoc_scaffold(plan: _GeneratedPlan) -> None:
                 key="adhoc_portfolio",
                 objective="Read current portfolio state for this analysis.",
                 capability="portfolio_read",
-                assigned_agent="portfolio_manager_agent",
+                assigned_agent=_resolve_scaffold_agent(
+                    registry, "portfolio_read", "portfolio_manager_agent"
+                ),
                 priority=3,
                 expected_output="PortfolioRiskReport",
             )
@@ -162,7 +181,7 @@ def ensure_adhoc_scaffold(plan: _GeneratedPlan) -> None:
             key="adhoc_synthesis",
             objective=plan.tasks[0].objective if plan.tasks else "Answer the objective.",
             capability="adhoc_synthesis",
-            assigned_agent="ceo_agent",
+            assigned_agent=_resolve_scaffold_agent(registry, "adhoc_synthesis", "ceo_agent"),
             priority=1,
             expected_output="AdHocAnalysis",
             depends_on=[t.key for t in plan.tasks],
@@ -355,6 +374,7 @@ def generate_plan(session: Session, run: OrganizationRun) -> OrganizationalPlan 
         try:
             response = complete(
                 "orchestration",
+                agent_name="ceo_agent",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -376,8 +396,8 @@ def generate_plan(session: Session, run: OrganizationRun) -> OrganizationalPlan 
             return None
         try:
             _validate(plan, known)
-            ensure_research_scaffold(plan)  # T053: deterministic context coverage
-            ensure_adhoc_scaffold(plan)  # T093: deterministic ad-hoc analysis coverage
+            ensure_research_scaffold(plan, registry)  # T053: deterministic context coverage
+            ensure_adhoc_scaffold(plan, registry)  # T093: deterministic ad-hoc analysis coverage
             _validate(plan, known)  # the injected scaffold must satisfy the same invariants
         except PlanValidationError as exc:
             last_error = str(exc)

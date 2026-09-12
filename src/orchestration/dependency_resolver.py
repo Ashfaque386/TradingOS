@@ -28,8 +28,8 @@ _TERMINAL_TASK_STATUSES = frozenset(
         TaskStatus.COMPLETED.value,
         TaskStatus.FAILED.value,
         TaskStatus.BLOCKED.value,
+        TaskStatus.ESCALATED.value,
         TaskStatus.CANCELLED.value,
-        TaskStatus.SUPERSEDED.value,
     }
 )
 
@@ -57,6 +57,10 @@ def ready_tasks(session: Session, run_id: uuid.UUID) -> list[Task]:
                     TaskStatus.QUEUED.value,
                     TaskStatus.READY.value,
                     TaskStatus.WAITING_FOR_DEPENDENCY.value,
+                    # spec 002 US7: a task the engine put back for a retry attempt (its
+                    # dependencies were already satisfied the first time -- re-checking them is
+                    # harmless and keeps this one query the single place readiness is decided).
+                    TaskStatus.RETRYING.value,
                 )
             ),
         )
@@ -79,6 +83,11 @@ def ready_tasks(session: Session, run_id: uuid.UUID) -> list[Task]:
         elif task.status != TaskStatus.WAITING_FOR_DEPENDENCY.value:
             task.status = TaskStatus.WAITING_FOR_DEPENDENCY.value
             waiting_on = next((d for d in hard if d.state != DependencyState.SATISFIED.value), None)
+            reason = (
+                f"Waiting for {waiting_on.required_artefact_type}"
+                if waiting_on is not None
+                else "Waiting on an upstream dependency"
+            )
             events.emit(
                 session,
                 run_id=run_id,
@@ -88,6 +97,9 @@ def ready_tasks(session: Session, run_id: uuid.UUID) -> list[Task]:
                 payload={
                     "waiting_for": waiting_on.required_artefact_type if waiting_on else None,
                     "owner_task_id": (str(waiting_on.prerequisite_task_id) if waiting_on else None),
+                    # spec 002 US6: a plain-language reason alongside the raw fields above, so
+                    # the Activity Stream can render it without its own per-event-type logic.
+                    "reason": reason,
                 },
             )
     return out
@@ -114,6 +126,8 @@ def evaluate_on_completion(session: Session, completed_task: Task) -> None:
             payload={
                 "dependent_task_id": str(dep.dependent_task_id),
                 "required_artefact_type": dep.required_artefact_type,
+                # spec 002 US6.
+                "reason": f"{dep.required_artefact_type} is now available",
             },
         )
         dependent = session.get(Task, dep.dependent_task_id)
@@ -165,7 +179,12 @@ def mark_unsatisfiable(session: Session, prerequisite_task: Task, reason: str) -
             event_type="task.blocked",
             subject_type="task",
             subject_id=dependent.id,
-            payload={"blocked_reason": dependent.blocked_reason},
+            # spec 002 US6: `reason` mirrors `blocked_reason` under the same key every other
+            # event type uses, so the Activity Stream needs no per-event-type special case.
+            payload={
+                "blocked_reason": dependent.blocked_reason,
+                "reason": dependent.blocked_reason,
+            },
             audited=True,
         )
     session.flush()

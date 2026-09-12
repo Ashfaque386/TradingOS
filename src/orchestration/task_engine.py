@@ -65,7 +65,6 @@ _NONTERMINAL = (
     TaskStatus.READY.value,
     TaskStatus.RUNNING.value,
     TaskStatus.WAITING_FOR_DEPENDENCY.value,
-    TaskStatus.WAITING_FOR_AGENT.value,
     TaskStatus.RETRYING.value,
 )
 
@@ -204,7 +203,7 @@ def _run_dispatch_and_complete(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
                 )
                 session.rollback()
                 return
-            events.emit(
+            completed_event = events.emit(
                 session,
                 run_id=run_id,
                 event_type="task.completed",
@@ -214,7 +213,11 @@ def _run_dispatch_and_complete(run_id: uuid.UUID, task_id: uuid.UUID) -> None:
                     "result_artefact_id": str(task.result_artefact_id),
                     "duration_seconds": duration,
                 },
+                audited=True,
             )
+            # spec 002 US11 (T050): thread the real AuditLog id this completion's own audited
+            # event just created onto the task's `audit_reference` FK.
+            task.audit_reference = completed_event._audit_log_id  # type: ignore[attr-defined]
             dependency_resolver.evaluate_on_completion(session, task)
             session.commit()
     except agent_invoker.DataStaleError as exc:
@@ -339,16 +342,22 @@ def _handle_agent_unavailable(
             session.commit()
             return
 
-        task.status = TaskStatus.BLOCKED.value
+        # spec 002 US7: this is the genuine escalation branch -- a real ESCALATE_HUMAN decision
+        # is recorded right below. The task's own status is now ESCALATED (previously folded
+        # into BLOCKED, indistinguishable from a plain unsatisfiable-dependency block with no
+        # human decision behind it). Its *dependents* still become BLOCKED via
+        # mark_unsatisfiable below -- that distinction (this task escalated; downstream tasks
+        # are blocked *because* of it) is exactly what US7 makes observable.
+        task.status = TaskStatus.ESCALATED.value
         task.blocked_reason = f"agent unavailable: {exc}"
         task.completed_at = datetime.now(UTC)
         events.emit(
             session,
             run_id=run_id,
-            event_type="task.blocked",
+            event_type="task.escalated",
             subject_type="task",
             subject_id=task_id,
-            payload={"blocked_reason": task.blocked_reason, "agent": old_agent},
+            payload={"reason": task.blocked_reason, "agent": old_agent},
             audited=True,
         )
         decisions.record_decision(
@@ -372,7 +381,12 @@ def _handle_task_failure(run_id: uuid.UUID, task_id: uuid.UUID, exc: Exception) 
             return
         if task.retry_count < task.max_retries:
             task.retry_count += 1
-            task.status = TaskStatus.READY.value
+            # spec 002 US7: RETRYING is now a real, observable state between a failure and the
+            # next dispatch claim -- previously this went straight back to READY, indistinguishable
+            # from a fresh, never-failed task. dependency_resolver.ready_tasks() re-evaluates a
+            # RETRYING task's (already-satisfied) dependencies and flips it to READY, the same
+            # transition every other task goes through before _execute_task's claim query fires.
+            task.status = TaskStatus.RETRYING.value
             task.started_at = None
             events.emit(
                 session,
@@ -485,14 +499,18 @@ def _finalize(run_id: uuid.UUID) -> bool:
 
         failed = [t for t in tasks if t.status == TaskStatus.FAILED.value]
         blocked = [t for t in tasks if t.status == TaskStatus.BLOCKED.value]
+        # spec 002 US7: a task that escalated to a human (no available agent for its
+        # capability) must not let the run finalize as if nothing needed attention.
+        escalated = [t for t in tasks if t.status == TaskStatus.ESCALATED.value]
         undispositioned = artefact_store.undispositioned_count(session, run_id=run_id)
         now = datetime.now(UTC)
-        if failed or blocked:
+        if failed or blocked or escalated:
             run.status = RunStatus.FAILED.value
             run.ended_at = now
             run.result_summary = {
                 "failed_tasks": len(failed),
                 "blocked_tasks": len(blocked),
+                "escalated_tasks": len(escalated),
             }
             events.emit(
                 session,
@@ -503,7 +521,7 @@ def _finalize(run_id: uuid.UUID) -> bool:
                 payload=run.result_summary,
                 audited=True,
             )
-            _remember_failure(run, failed, blocked)
+            _remember_failure(run, failed, blocked + escalated)
         elif undispositioned:
             # Every artefact must be consumed or explicitly informational before a run can
             # complete (SC-004). MVP: artefacts are persisted as `informational`, so this is

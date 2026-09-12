@@ -191,6 +191,10 @@ export interface AgentAnalyticsSummaryRow {
   avg_duration_seconds: number | null;
   p50_duration_seconds: number | null;
   p95_duration_seconds: number | null;
+  // spec 002 US11: real Task-ledger aggregates (retry/escalation are Task-level, US7 concepts,
+  // computed over the same `days` window as the AgentRun-side metrics above).
+  retry_count: number;
+  escalated_count: number;
 }
 
 export interface AgentAnalyticsTrendPoint {
@@ -1189,6 +1193,20 @@ export interface OrgEvent {
   occurred_at: string;
 }
 
+/** spec 002 US3: a first-class agent-to-agent artefact handoff, derived from real
+ * ResultArtefact/Task state -- sender, receiver, what was delivered, and what a partially-
+ * satisfied consumer still expected but didn't get. */
+export interface OrgHandoff {
+  from_task_id: string;
+  from_agent: string | null;
+  to_task_id: string;
+  to_agent: string | null;
+  artefact_id: string;
+  artefact_type: string;
+  delivered_at: string;
+  requested_but_missing: string[];
+}
+
 export interface OrgAttention {
   stalled_runs: { run_id: string; objective: string; status: string; stall_flagged_at: string | null }[];
   blocked_tasks: {
@@ -1294,6 +1312,23 @@ export interface LlmProviderHealth {
   in_fallback: boolean;
 }
 
+/** spec 002 US8: real DB-016 per-agent skill grants (already-existing backend, `src/api/
+ * routers/skills.py` -- this is the first frontend surface to use it). */
+export interface SkillSummary {
+  name: string;
+  description: string | null;
+  version: string;
+  is_enabled: boolean;
+}
+
+export interface AgentSkillGrant {
+  id: string;
+  agent_name: string;
+  skill_name: string;
+  granted_by_user_id: string;
+  granted_at: string;
+}
+
 export interface AgentActivity {
   agent_id: string;
   agent_name: string;
@@ -1312,6 +1347,44 @@ export interface AgentActivity {
     disposition: string | null;
     created_at: string | null;
   }[];
+  // spec 002 US2/T008: the actually-resolved provider/model from this agent's most recent
+  // org-task output -- null until it has run at least once under the organisation layer.
+  resolved_provider: string | null;
+  resolved_model: string | null;
+  // spec 002 US4/T017: populated only when the request supplies run_id+task_id.
+  selected_task: AgentSelectedTask | null;
+}
+
+export interface AgentSelectedTaskDependency {
+  prerequisite_task_id: string;
+  prerequisite_agent: string | null;
+  required_artefact_type: string;
+  state: string;
+}
+
+export interface AgentSelectedTaskConsumer {
+  task_id: string;
+  agent: string | null;
+  required_artefact_type: string;
+  state: string;
+}
+
+export interface AgentSelectedTask {
+  task_id: string;
+  run_id: string;
+  status: string;
+  objective: string;
+  capability: string;
+  required_inputs: string[];
+  received_inputs: { artefact_id: string; type: string }[];
+  dependencies: AgentSelectedTaskDependency[];
+  downstream_consumers: AgentSelectedTaskConsumer[];
+  blocked_reason: string | null;
+  failure_reason: string | null;
+  retry_count: number;
+  max_retries: number;
+  granted_skills: string[];
+  audit_reference: number | null;
 }
 
 export const api = {
@@ -1548,8 +1621,10 @@ export const api = {
   // --- Organization Command Center (spec 001-ceo-led-trading-org, US5) --------------------
   orgCreateRun: (objective: string) =>
     post<OrgRunSummary>("/api/v1/organization/runs", { objective, source: "web" }),
-  orgRuns: (status?: string) =>
-    get<OrgRunSummary[]>(`/api/v1/organization/runs${toQuery({ status })}`),
+  orgRuns: (status?: string, opts?: { limit?: number; offset?: number }) =>
+    get<OrgRunSummary[]>(
+      `/api/v1/organization/runs${toQuery({ status, limit: opts?.limit, offset: opts?.offset })}`,
+    ),
   orgRun: (runId: string) => get<OrgRunDetail>(`/api/v1/organization/runs/${runId}`),
   orgPlan: (runId: string) => get<OrgPlan>(`/api/v1/organization/runs/${runId}/plan`),
   orgTasks: (runId: string) => get<OrgTask[]>(`/api/v1/organization/runs/${runId}/tasks`),
@@ -1563,6 +1638,8 @@ export const api = {
     get<OrgEvent[]>(
       `/api/v1/organization/runs/${runId}/events${toQuery({ after_sequence: afterSequence })}`,
     ),
+  orgHandoffs: (runId: string) =>
+    get<OrgHandoff[]>(`/api/v1/organization/runs/${runId}/handoffs`),
   orgAttention: () => get<OrgAttention>("/api/v1/organization/attention"),
   orgFreshness: () => get<OrgDatasetFreshness[]>("/api/v1/organization/freshness"),
   orgResolveDecision: (decisionId: string, note: string) =>
@@ -1575,12 +1652,24 @@ export const api = {
   orgReject: (id: string, reason: string) =>
     post<OrgApproval>(`/api/v1/organization/approvals/${id}/reject`, { reason }),
   agentRegistry: () => get<AgentRegistryEntry[]>("/api/v1/agents"),
-  agentActivity: (agentId: string) =>
-    get<AgentActivity>(`/api/v1/agents/${agentId}/activity`),
+  agentActivity: (agentId: string, opts?: { runId?: string; taskId?: string }) =>
+    get<AgentActivity>(
+      `/api/v1/agents/${agentId}/activity${toQuery({ run_id: opts?.runId, task_id: opts?.taskId })}`,
+    ),
 
   // --- Per-agent Settings (spec 001-ceo-led-trading-org, US6) -----------------------------
   agentConfig: (slug: string) =>
     get<AgentConfigView>(`/api/v1/agents/${slug}/config`),
+  // --- Skills / per-agent grants (spec 002 US8) -------------------------------------------
+  skills: () => get<SkillSummary[]>("/api/v1/skills"),
+  agentSkillMap: () => get<AgentSkillGrant[]>("/api/v1/skills/agent-map"),
+  grantSkillToAgent: (agentName: string, skillName: string) =>
+    post<AgentSkillGrant>("/api/v1/skills/agent-map", {
+      agent_name: agentName,
+      skill_name: skillName,
+    }),
+  revokeSkillGrant: (grantId: string) => del(`/api/v1/skills/agent-map/${grantId}`),
+
   agentPromptVersions: (slug: string) =>
     get<PromptVersionMeta[]>(`/api/v1/agents/${slug}/config/prompts`),
   agentPromptVersion: (slug: string, kind: string, version: number) =>

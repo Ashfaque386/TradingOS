@@ -5,3 +5,4 @@ export { PromptEditor } from "./PromptEditor";
 export { ProviderModelPanel } from "./ProviderModelPanel";
 export { ProviderHealth } from "./ProviderHealth";
 export { TestPanel } from "./TestPanel";
+export { SkillGrantPanel } from "./SkillGrantPanel";
